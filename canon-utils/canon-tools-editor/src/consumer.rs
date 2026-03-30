@@ -2,7 +2,7 @@ use crate::edit::ProjectEditor;
 use crate::structured::{EditOp, FieldMutation};
 use crate::symbol_index::SymbolIndex;
 use anyhow::{anyhow, Result};
-use canon_event::{RuntimeEvent, EditEvent, EventConsumer, EventFilter, EventId, EventOutcome};
+use canon_event::{EditEvent, EventConsumer, EventFilter, EventId, EventOutcome, RuntimeEvent};
 use canon_proc_macros::must_emit;
 use std::path::PathBuf;
 use std::sync::Arc;

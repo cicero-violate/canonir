@@ -1,9 +1,17 @@
+use crate::{
+    context::RouteContext,
+    decision::{decide_from_json, RouteDecision},
+    policy::{
+        apply_route_policy, evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_event_dispatch, evaluate_route_failure,
+        evaluate_route_recovery, evaluate_route_transition, evaluate_successor_consumption, DeterministicRouteDecision, RouteCacheRule, RouteCacheState, RouteDispatchState, RouteEmitRule,
+        RouteEmitState, RouteEventDispatchRule, RoutePolicyRule, RoutePolicyState,
+    },
+};
 use canon_decision::RouteKind;
 use canon_event::{new_error_occurred, CapabilityResult, Code, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RouteSelected, RuntimeEvent, ToolBatchSettled};
 use canon_invariant::{
-    decision_trace_payload, drain_persisted_store_events, invariant_violation_delta,
-    invariant_violation_state, meta_invariant_verifier_sequence_contract,
-    MetaInvariantVerifierSequenceStep, PersistedInvariantStoreEventKind,
+    decision_trace_payload, drain_persisted_store_events, invariant_violation_delta, invariant_violation_state, meta_invariant_verifier_sequence_contract, MetaInvariantVerifierSequenceStep,
+    PersistedInvariantStoreEventKind,
 };
 use canon_judgment::GuardConfig;
 use canon_proc_macros::must_emit;
@@ -11,18 +19,6 @@ use canon_runtime_supervisor::judgment_loop::RouteController;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use crate::{
-    context::RouteContext,
-    decision::{decide_from_json, RouteDecision},
-    policy::{
-        apply_route_policy, evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit,
-        evaluate_route_emit_effects, evaluate_route_event_dispatch, evaluate_route_failure,
-        evaluate_route_recovery, evaluate_route_transition, evaluate_successor_consumption,
-        DeterministicRouteDecision, RouteCacheRule, RouteCacheState, RouteDispatchState,
-        RouteEmitRule, RouteEmitState, RouteEventDispatchRule, RoutePolicyState,
-        RoutePolicyRule,
-    },
-};
 
 pub struct RouteExecutor {
     ctx: RouteContext,
@@ -68,15 +64,11 @@ impl RouteExecutor {
     fn try_dispatch_route(&mut self) {
         let dispatch_eval = evaluate_route_dispatch(
             &self.ctx,
-            RoutePolicyState {
-                last_control_kind: self.last_control_kind.as_deref(),
-                pending_required_successor: self.pending_required_successor.as_deref(),
-            },
+            RoutePolicyState { last_control_kind: self.last_control_kind.as_deref(), pending_required_successor: self.pending_required_successor.as_deref() },
             RouteDispatchState {
                 pending_request_id: self.pending_request_id.as_deref(),
                 awaiting_control_successor: self.awaiting_control_successor.as_deref(),
-                route_emitted_for_current_control:
-                    self.last_route_emitted_for_control_id.as_deref() == self.last_control_event_id.as_deref(),
+                route_emitted_for_current_control: self.last_route_emitted_for_control_id.as_deref() == self.last_control_event_id.as_deref(),
             },
         );
         if let Some(suppression) = dispatch_eval.suppression {
@@ -86,12 +78,7 @@ impl RouteExecutor {
                     RuntimeEvent::Debug(canon_event::DebugEvent {
                         source: "route_executor".to_string(),
                         kind: "route_suppressed".to_string(),
-                        payload: self.suppression_payload(
-                            suppression.reason,
-                            suppression.classification,
-                            suppression.recovery,
-                            suppression.extra,
-                        ),
+                        payload: self.suppression_payload(suppression.reason, suppression.classification, suppression.recovery, suppression.extra),
                     }),
                     parents.clone(),
                     file!(),
@@ -115,13 +102,7 @@ impl RouteExecutor {
             return;
         }
         let llm_semantic_context = self.ctx.llm_semantic_context();
-        let prompt = self.controller.build_prompt(
-            &self.ctx.mission_summary,
-            &self.ctx.snapshot_text(),
-            &llm_semantic_context.render_router_block(),
-            &self.ctx.recent_tool_results,
-            &self.ctx.journal,
-        );
+        let prompt = self.controller.build_prompt(&self.ctx.mission_summary, &self.ctx.snapshot_text(), &llm_semantic_context.render_router_block(), &self.ctx.recent_tool_results, &self.ctx.journal);
         let prompt_hash = hash_str(&prompt);
         let mut should_force_fresh_now = false;
         let emit_eval = evaluate_route_emit(RouteEmitState {
@@ -135,13 +116,9 @@ impl RouteExecutor {
             prompt_hash,
             pending_required_successor: self.pending_required_successor.as_deref(),
             last_route_prompt_hash: self.last_route_prompt_hash,
-            route_emitted_for_current_control:
-                self.last_route_emitted_for_control_id.as_deref() == self.last_control_event_id.as_deref(),
+            route_emitted_for_current_control: self.last_route_emitted_for_control_id.as_deref() == self.last_control_event_id.as_deref(),
             has_cached_route: self.last_route_selected.is_some(),
-            cached_route_is_observe: self
-                .last_route_selected
-                .as_ref()
-                .is_some_and(|route| route.approved_route == "observe"),
+            cached_route_is_observe: self.last_route_selected.as_ref().is_some_and(|route| route.approved_route == "observe"),
             can_emit_route_selected: emit_eval.allowed,
         });
         if !self.force_fresh_route_once && self.last_prompt_hash == Some(prompt_hash) {
@@ -150,52 +127,15 @@ impl RouteExecutor {
                     return;
                 }
             }
+            if matches!(cache_eval.rule, RouteCacheRule::InvalidateCachedObserveRoute) {
+                if self.invalidate_cached_observe_route(prompt_hash) {
+                    should_force_fresh_now = true;
+                }
+            }
             if let Some(emitter) = self.emitter.as_ref() {
                 match cache_eval.rule {
                     RouteCacheRule::ReplayCachedRoute => {}
-                    RouteCacheRule::InvalidateCachedObserveRoute => {
-                        emitter.emit_child(
-                            RuntimeEvent::Debug(canon_event::DebugEvent {
-                                source: "route_executor".to_string(),
-                                kind: "route_suppressed".to_string(),
-                                payload: self.suppression_payload(
-                                    "cached observe route cannot satisfy pending route_selected obligation safely",
-                                    "recoverable",
-                                    "trigger_fresh_route_request",
-                                    serde_json::json!({
-                                        "attempted_kind": "route_selected",
-                                        "cached_route": "observe",
-                                    }),
-                                ),
-                            }),
-                            self.current_trigger.iter().cloned().collect(),
-                            file!(),
-                            line!(),
-                        );
-                        emitter.emit_child(
-                            RuntimeEvent::Debug(canon_event::DebugEvent {
-                                source: "route_executor".to_string(),
-                                kind: "recovery_event".to_string(),
-                                payload: decision_trace_payload(
-                                    "invalidate cached route and request fresh routing",
-                                    serde_json::json!({
-                                        "expected_successor": "route_selected",
-                                        "recovery": "fresh_llm_route",
-                                        "last_control_event_id": self.last_control_event_id,
-                                        "last_control_kind": self.last_control_kind,
-                                        "prompt_hash": format!("{prompt_hash:016x}"),
-                                    }),
-                                ),
-                            }),
-                            self.current_trigger.iter().cloned().collect(),
-                            file!(),
-                            line!(),
-                        );
-                        self.last_route_selected = None;
-                        self.last_route_prompt_hash = None;
-                        self.force_fresh_route_once = true;
-                        should_force_fresh_now = true;
-                    }
+                    RouteCacheRule::InvalidateCachedObserveRoute => {}
                     RouteCacheRule::SuppressDuplicatePrompt => {}
                     RouteCacheRule::Proceed => {}
                 }
@@ -206,45 +146,14 @@ impl RouteExecutor {
                         self.last_control_event_id.as_deref().unwrap_or("unknown_event"),
                     );
                     emitter.emit_child(
-                        RuntimeEvent::Code(Code {
-                            delta: invariant_violation_delta(message),
-                            state: invariant_violation_state(),
-                        }),
+                        RuntimeEvent::Code(Code { delta: invariant_violation_delta(message), state: invariant_violation_state() }),
                         self.current_trigger.iter().cloned().collect(),
                         file!(),
                         line!(),
                     );
                 }
                 if !should_force_fresh_now && matches!(cache_eval.rule, RouteCacheRule::SuppressDuplicatePrompt) {
-                    let tid = self.current_trigger.clone().expect("route stall emit without current_trigger");
-                    emitter.emit_child(
-                        RuntimeEvent::Debug(canon_event::DebugEvent {
-                            source: "route_executor".to_string(),
-                            kind: "route_suppressed".to_string(),
-                            payload: self.suppression_payload(
-                                "duplicate route prompt for unchanged state",
-                                if self.pending_required_successor.as_deref() == Some("route_selected") {
-                                    "fatal"
-                                } else {
-                                    "recoverable"
-                                },
-                                if self.pending_required_successor.as_deref() == Some("route_selected") {
-                                    "emit_route_selected_override|reset_event|override_event"
-                                } else {
-                                    "await_pending_successor_or_state_change"
-                                },
-                                serde_json::json!({
-                                    "prompt_hash": format!("{prompt_hash:016x}"),
-                                }),
-                            ),
-                        }),
-                        vec![tid.clone()],
-                        file!(),
-                        line!(),
-                    );
-                    if self.pending_required_successor.as_deref() != Some("route_selected") {
-                        self.emit_route_stall(emitter, tid, "duplicate route prompt for unchanged state");
-                    }
+                    self.handle_suppress_duplicate_prompt(emitter, prompt_hash);
                 }
             }
             if !should_force_fresh_now && !matches!(cache_eval.rule, RouteCacheRule::Proceed) {
@@ -271,13 +180,7 @@ impl RouteExecutor {
             crate::policy::DeterministicRouteRule::InvalidPlanReplan
         } else if self.ctx.semantic_summary.validation_blocked_by_preconditions {
             crate::policy::DeterministicRouteRule::BlockedValidationPlan
-        } else if self
-            .ctx
-            .semantic_summary
-            .planning_preconditions
-            .iter()
-            .any(|line| line.contains("must_bootstrap_workspace=true"))
-        {
+        } else if self.ctx.semantic_summary.planning_preconditions.iter().any(|line| line.contains("must_bootstrap_workspace=true")) {
             crate::policy::DeterministicRouteRule::MissingTargetPlan
         } else {
             crate::policy::DeterministicRouteRule::NoActionableFailureObserve
@@ -287,9 +190,7 @@ impl RouteExecutor {
     fn router_disabled_fallback(&self, prompt_hash: u64) -> DeterministicRouteDecision {
         DeterministicRouteDecision {
             route: RouteKind::Plan,
-            rationale: format!(
-                "router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"
-            ),
+            rationale: format!("router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"),
             confidence: 0.90,
             prompt_tag: "deterministic:router_llm_disabled_plan",
             noop_reason: "route_executor_router_llm_disabled_plan",
@@ -307,21 +208,13 @@ impl RouteExecutor {
             pending_required_successor: self.pending_required_successor.as_deref(),
         });
         if !emit_eval.allowed {
-            let reason = emit_eval
-                .reason
-                .unwrap_or_else(|| "illegal control emit".to_string());
-            let kind = if matches!(
-                emit_eval.rule,
-                RouteEmitRule::DuplicateEmitBeforeSuccessor | RouteEmitRule::IllegalControlReentry
-            ) {
+            let reason = emit_eval.reason.unwrap_or_else(|| "illegal control emit".to_string());
+            let kind = if matches!(emit_eval.rule, RouteEmitRule::DuplicateEmitBeforeSuccessor | RouteEmitRule::IllegalControlReentry) {
                 "duplicate_route_emit_before_successor"
             } else {
                 "illegal_control_reentry"
             };
-            let tid = self
-                .current_trigger
-                .clone()
-                .expect("cached route emit without current_trigger");
+            let tid = self.current_trigger.clone().expect("cached route emit without current_trigger");
             if let Some(emitter) = self.emitter.as_ref() {
                 emitter.emit_child(
                     RuntimeEvent::Debug(canon_event::DebugEvent {
@@ -346,15 +239,86 @@ impl RouteExecutor {
             }
             return true;
         }
-        let tid = self
-            .current_trigger
-            .clone()
-            .expect("cached route emit without current_trigger");
+        let tid = self.current_trigger.clone().expect("cached route emit without current_trigger");
         if let Some(emitter) = self.emitter.as_ref() {
             emitter.emit_with_parents(RuntimeEvent::RouteSelected(route), vec![tid], file!(), line!());
         }
         self.last_route_emitted_for_control_id = self.last_control_event_id.clone();
         true
+    }
+
+    fn invalidate_cached_observe_route(&mut self, prompt_hash: u64) -> bool {
+        if let Some(emitter) = self.emitter.as_ref() {
+            emitter.emit_child(
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "route_executor".to_string(),
+                    kind: "route_suppressed".to_string(),
+                    payload: self.suppression_payload(
+                        "cached observe route cannot satisfy pending route_selected obligation safely",
+                        "recoverable",
+                        "trigger_fresh_route_request",
+                        serde_json::json!({
+                            "attempted_kind": "route_selected",
+                            "cached_route": "observe",
+                        }),
+                    ),
+                }),
+                self.current_trigger.iter().cloned().collect(),
+                file!(),
+                line!(),
+            );
+            emitter.emit_child(
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "route_executor".to_string(),
+                    kind: "recovery_event".to_string(),
+                    payload: decision_trace_payload(
+                        "invalidate cached route and request fresh routing",
+                        serde_json::json!({
+                            "expected_successor": "route_selected",
+                            "recovery": "fresh_llm_route",
+                            "last_control_event_id": self.last_control_event_id,
+                            "last_control_kind": self.last_control_kind,
+                            "prompt_hash": format!("{prompt_hash:016x}"),
+                        }),
+                    ),
+                }),
+                self.current_trigger.iter().cloned().collect(),
+                file!(),
+                line!(),
+            );
+        }
+        self.last_route_selected = None;
+        self.last_route_prompt_hash = None;
+        self.force_fresh_route_once = true;
+        true
+    }
+
+    fn handle_suppress_duplicate_prompt(&self, emitter: &EventEmitterHandle, prompt_hash: u64) {
+        let tid = self.current_trigger.clone().expect("route stall emit without current_trigger");
+        emitter.emit_child(
+            RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "route_executor".to_string(),
+                kind: "route_suppressed".to_string(),
+                payload: self.suppression_payload(
+                    "duplicate route prompt for unchanged state",
+                    if self.pending_required_successor.as_deref() == Some("route_selected") { "fatal" } else { "recoverable" },
+                    if self.pending_required_successor.as_deref() == Some("route_selected") {
+                        "emit_route_selected_override|reset_event|override_event"
+                    } else {
+                        "await_pending_successor_or_state_change"
+                    },
+                    serde_json::json!({
+                        "prompt_hash": format!("{prompt_hash:016x}"),
+                    }),
+                ),
+            }),
+            vec![tid.clone()],
+            file!(),
+            line!(),
+        );
+        if self.pending_required_successor.as_deref() != Some("route_selected") {
+            self.emit_route_stall(emitter, tid, "duplicate route prompt for unchanged state");
+        }
     }
 
     fn emit_persisted_invariant_store_events(&self) {
@@ -367,12 +331,8 @@ impl RouteExecutor {
                 RuntimeEvent::Debug(canon_event::DebugEvent {
                     source: "invariant_store".to_string(),
                     kind: match event.kind {
-                        PersistedInvariantStoreEventKind::Loaded => {
-                            "persisted_invariants_loaded".to_string()
-                        }
-                        PersistedInvariantStoreEventKind::Updated => {
-                            "persisted_invariants_updated".to_string()
-                        }
+                        PersistedInvariantStoreEventKind::Loaded => "persisted_invariants_loaded".to_string(),
+                        PersistedInvariantStoreEventKind::Updated => "persisted_invariants_updated".to_string(),
                     },
                     payload: serde_json::json!({
                         "path": event.path,
@@ -438,22 +398,12 @@ impl RouteExecutor {
         );
     }
 
-    fn emit_invariant_violation(
-        &self,
-        trigger_id: &EventId,
-        feature: &str,
-        reason: &str,
-        context: serde_json::Value,
-    ) {
+    fn emit_invariant_violation(&self, trigger_id: &EventId, feature: &str, reason: &str, context: serde_json::Value) {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
         emitter.emit_child(
-            RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
-                feature: feature.to_string(),
-                confidence: 1.0,
-                support: 1,
-            }),
+            RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered { feature: feature.to_string(), confidence: 1.0, support: 1 }),
             vec![trigger_id.clone()],
             file!(),
             line!(),
@@ -477,24 +427,14 @@ impl RouteExecutor {
         );
     }
 
-    fn should_reject_verifier_sequence(
-        &self,
-        event: &RuntimeEvent,
-    ) -> Option<(&'static str, String, serde_json::Value)> {
+    fn should_reject_verifier_sequence(&self, event: &RuntimeEvent) -> Option<(&'static str, String, serde_json::Value)> {
         let step = match event {
             RuntimeEvent::LoopVerified(_) => Some(MetaInvariantVerifierSequenceStep::LoopVerified),
-            RuntimeEvent::VerifierPolicyUpdated(_) => {
-                Some(MetaInvariantVerifierSequenceStep::VerifierPolicyUpdated)
-            }
+            RuntimeEvent::VerifierPolicyUpdated(_) => Some(MetaInvariantVerifierSequenceStep::VerifierPolicyUpdated),
             RuntimeEvent::LoopRewarded(_) => Some(MetaInvariantVerifierSequenceStep::LoopRewarded),
             _ => None,
         }?;
-        let Some(reason) = meta_invariant_verifier_sequence_contract(
-            step,
-            self.last_control_kind.as_deref(),
-            self.pending_required_successor.as_deref(),
-            self.ctx.verify_seen,
-        ) else {
+        let Some(reason) = meta_invariant_verifier_sequence_contract(step, self.last_control_kind.as_deref(), self.pending_required_successor.as_deref(), self.ctx.verify_seen) else {
             return None;
         };
         Some((
@@ -515,13 +455,10 @@ impl RouteExecutor {
 #[cfg(test)]
 mod tests {
     use super::RouteExecutor;
-    use crate::policy::{DeterministicRouteDecision, DeterministicRouteRule};
     use crate::decision::RouteDecision;
+    use crate::policy::{DeterministicRouteDecision, DeterministicRouteRule};
     use canon_decision::RouteKind;
-    use canon_event::{
-        events::VerifierPolicyUpdated, EventConsumer, EventId, EventOutcome, LoopRewarded,
-        RouteSelected, RuntimeEvent,
-    };
+    use canon_event::{events::VerifierPolicyUpdated, EventConsumer, EventId, EventOutcome, LoopRewarded, RouteSelected, RuntimeEvent};
     use std::path::PathBuf;
 
     fn route_selected(route: &str) -> RuntimeEvent {
@@ -576,10 +513,7 @@ mod tests {
         let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
         let _ = executor.on_event(&route_selected("verify"), EventId::new("route-selected"));
         let outcome = executor.on_event(&loop_rewarded(), EventId::new("loop-rewarded"));
-        assert!(matches!(
-            outcome,
-            EventOutcome::NoOp("verifier_sequence_invariant_violation")
-        ));
+        assert!(matches!(outcome, EventOutcome::NoOp("verifier_sequence_invariant_violation")));
     }
 
     #[test]
@@ -587,41 +521,24 @@ mod tests {
         let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
         let _ = executor.on_event(&route_selected("conclude"), EventId::new("route-selected"));
         let outcome = executor.on_event(&loop_rewarded(), EventId::new("loop-rewarded"));
-        assert!(!matches!(
-            outcome,
-            EventOutcome::NoOp("verifier_sequence_invariant_violation")
-        ));
+        assert!(!matches!(outcome, EventOutcome::NoOp("verifier_sequence_invariant_violation")));
     }
 
     #[test]
     fn rejects_verifier_policy_updated_before_loop_verified() {
         let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
         let _ = executor.on_event(&route_selected("verify"), EventId::new("route-selected"));
-        let outcome =
-            executor.on_event(&verifier_policy_updated(), EventId::new("verifier-policy-updated"));
-        assert!(matches!(
-            outcome,
-            EventOutcome::NoOp("verifier_sequence_invariant_violation")
-        ));
+        let outcome = executor.on_event(&verifier_policy_updated(), EventId::new("verifier-policy-updated"));
+        assert!(matches!(outcome, EventOutcome::NoOp("verifier_sequence_invariant_violation")));
     }
 
     fn deterministic_decision(rule: DeterministicRouteRule, route: RouteKind) -> DeterministicRouteDecision {
-        DeterministicRouteDecision {
-            route,
-            rationale: format!("{rule:?}"),
-            confidence: 0.99,
-            prompt_tag: "deterministic:test",
-            noop_reason: "test",
-            rule,
-        }
+        DeterministicRouteDecision { route, rationale: format!("{rule:?}"), confidence: 0.99, prompt_tag: "deterministic:test", noop_reason: "test", rule }
     }
 
     #[test]
     fn deterministic_bootstrap_refresh_observe_is_authoritative() {
-        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(
-            DeterministicRouteRule::BootstrapRefreshObserve,
-            RouteKind::Observe,
-        ));
+        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(DeterministicRouteRule::BootstrapRefreshObserve, RouteKind::Observe));
         assert_eq!(decision.lane, RouteKind::Observe);
         assert_eq!(decision.suggested_route, RouteKind::Observe);
         assert!(!decision.changed);
@@ -629,10 +546,7 @@ mod tests {
 
     #[test]
     fn deterministic_no_semantic_progress_plan_is_authoritative() {
-        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(
-            DeterministicRouteRule::NoSemanticProgressPlan,
-            RouteKind::Plan,
-        ));
+        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(DeterministicRouteRule::NoSemanticProgressPlan, RouteKind::Plan));
         assert_eq!(decision.lane, RouteKind::Plan);
         assert_eq!(decision.suggested_route, RouteKind::Plan);
         assert!(!decision.changed);
@@ -640,10 +554,7 @@ mod tests {
 
     #[test]
     fn deterministic_invalid_plan_replan_is_authoritative() {
-        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(
-            DeterministicRouteRule::InvalidPlanReplan,
-            RouteKind::Plan,
-        ));
+        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(DeterministicRouteRule::InvalidPlanReplan, RouteKind::Plan));
         assert_eq!(decision.lane, RouteKind::Plan);
         assert_eq!(decision.suggested_route, RouteKind::Plan);
         assert!(!decision.changed);
@@ -680,8 +591,7 @@ impl EventConsumer for RouteExecutor {
             self.emit_invariant_violation(&trigger_id, feature, &reason, context);
             return EventOutcome::NoOp("verifier_sequence_invariant_violation");
         }
-        let successor_eval =
-            evaluate_successor_consumption(event, self.awaiting_control_successor.as_deref());
+        let successor_eval = evaluate_successor_consumption(event, self.awaiting_control_successor.as_deref());
         if successor_eval.clear_awaiting_control_successor {
             self.awaiting_control_successor = None;
         }
@@ -690,18 +600,15 @@ impl EventConsumer for RouteExecutor {
 
         if let Some((result_count, any_failed)) = self.ctx.batch_settled.take() {
             if let Some(emitter) = self.emitter.as_ref() {
-                emitter.emit_with_parents(canon_event::RuntimeEvent::ToolBatchSettled(ToolBatchSettled {
-                    tick: self.ctx.scheduler_tick,
-                    result_count,
-                    any_failed,
-                }), vec![trigger_id.clone()], file!(), line!());
+                emitter.emit_with_parents(
+                    canon_event::RuntimeEvent::ToolBatchSettled(ToolBatchSettled { tick: self.ctx.scheduler_tick, result_count, any_failed }),
+                    vec![trigger_id.clone()],
+                    file!(),
+                    line!(),
+                );
             }
             let eval = evaluate_route_event_dispatch(
-                &RuntimeEvent::ToolBatchSettled(ToolBatchSettled {
-                    tick: self.ctx.scheduler_tick,
-                    result_count,
-                    any_failed,
-                }),
+                &RuntimeEvent::ToolBatchSettled(ToolBatchSettled { tick: self.ctx.scheduler_tick, result_count, any_failed }),
                 self.ctx.planned_pending,
                 self.ctx.pending_tool_result_ids.is_empty(),
             );
@@ -713,10 +620,7 @@ impl EventConsumer for RouteExecutor {
 
         if let Some(fast_path) = evaluate_route_transition(
             &self.ctx,
-            RoutePolicyState {
-                last_control_kind: self.last_control_kind.as_deref(),
-                pending_required_successor: self.pending_required_successor.as_deref(),
-            },
+            RoutePolicyState { last_control_kind: self.last_control_kind.as_deref(), pending_required_successor: self.pending_required_successor.as_deref() },
             Some(event),
             None,
         )
@@ -738,12 +642,9 @@ impl EventConsumer for RouteExecutor {
             return EventOutcome::NoOp(fast_path.noop_reason);
         }
 
-        let event_dispatch_eval =
-            evaluate_route_event_dispatch(event, self.ctx.planned_pending, self.ctx.pending_tool_result_ids.is_empty());
+        let event_dispatch_eval = evaluate_route_event_dispatch(event, self.ctx.planned_pending, self.ctx.pending_tool_result_ids.is_empty());
         if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::IdleDispatch) {
-            if self.pending_request_id.as_deref() == Some("deterministic")
-                && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_))
-            {
+            if self.pending_request_id.as_deref() == Some("deterministic") && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_)) {
                 self.pending_request_id = None;
             }
             self.try_dispatch_route();
@@ -896,11 +797,7 @@ impl RouteExecutor {
         }
     }
 
-    fn emit_deterministic_decision(
-        &mut self,
-        deterministic: &DeterministicRouteDecision,
-        model_json: &str,
-    ) {
+    fn emit_deterministic_decision(&mut self, deterministic: &DeterministicRouteDecision, model_json: &str) {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
@@ -919,14 +816,8 @@ impl RouteExecutor {
             pending_required_successor: self.pending_required_successor.as_deref(),
         });
         if !emit_eval.allowed {
-            let reason = emit_eval
-                .reason
-                .unwrap_or_else(|| "illegal control emit".to_string());
-            let kind = if matches!(
-                emit_eval.rule,
-                RouteEmitRule::DuplicateEmitBeforeSuccessor
-                    | RouteEmitRule::IllegalControlReentry
-            ) {
+            let reason = emit_eval.reason.unwrap_or_else(|| "illegal control emit".to_string());
+            let kind = if matches!(emit_eval.rule, RouteEmitRule::DuplicateEmitBeforeSuccessor | RouteEmitRule::IllegalControlReentry) {
                 "duplicate_route_emit_before_successor"
             } else {
                 "illegal_control_reentry"
@@ -941,20 +832,8 @@ impl RouteExecutor {
                     "deterministic_rule": deterministic.prompt_tag,
                 }),
             );
-            let tid = self
-                .current_trigger
-                .clone()
-                .expect("emit_deterministic_decision called without current_trigger set");
-            emitter.emit_child(
-                RuntimeEvent::Debug(canon_event::DebugEvent {
-                    source: "route_executor".to_string(),
-                    kind: kind.to_string(),
-                    payload,
-                }),
-                vec![tid.clone()],
-                file!(),
-                line!(),
-            );
+            let tid = self.current_trigger.clone().expect("emit_deterministic_decision called without current_trigger set");
+            emitter.emit_child(RuntimeEvent::Debug(canon_event::DebugEvent { source: "route_executor".to_string(), kind: kind.to_string(), payload }), vec![tid.clone()], file!(), line!());
             self.emit_recovery_for_expected_successor(emitter, tid);
             return;
         }
@@ -976,13 +855,7 @@ impl RouteExecutor {
         }
     }
 
-    fn suppression_payload(
-        &self,
-        reason: &str,
-        classification: &str,
-        recovery: &str,
-        extra: serde_json::Value,
-    ) -> serde_json::Value {
+    fn suppression_payload(&self, reason: &str, classification: &str, recovery: &str, extra: serde_json::Value) -> serde_json::Value {
         let mut context = serde_json::Map::new();
         context.insert("snapshot".to_string(), serde_json::Value::String(self.ctx.snapshot_text()));
         if let Some(id) = &self.last_control_event_id {
@@ -1028,13 +901,7 @@ impl RouteExecutor {
             _ => None,
         };
         if let Some(expected) = next {
-            eprintln!(
-                "[route_executor][ctrl] event={} trigger={} prev_pending={:?} -> new_pending={}",
-                canon_event::event_kind_str(event),
-                trigger_id,
-                self.pending_required_successor,
-                expected,
-            );
+            eprintln!("[route_executor][ctrl] event={} trigger={} prev_pending={:?} -> new_pending={}", canon_event::event_kind_str(event), trigger_id, self.pending_required_successor, expected,);
             self.last_control_event_id = Some(trigger_id.to_string());
             self.last_control_kind = Some(canon_event::event_kind_str(event).to_string());
             self.pending_required_successor = Some(expected.to_string());
@@ -1066,16 +933,7 @@ impl RouteExecutor {
                 }),
             );
             let tid = self.current_trigger.clone().expect("emit_decision called without current_trigger set");
-            emitter.emit_child(
-                RuntimeEvent::Debug(canon_event::DebugEvent {
-                    source: "route_executor".to_string(),
-                    kind: kind.to_string(),
-                    payload,
-                }),
-                vec![tid.clone()],
-                file!(),
-                line!(),
-            );
+            emitter.emit_child(RuntimeEvent::Debug(canon_event::DebugEvent { source: "route_executor".to_string(), kind: kind.to_string(), payload }), vec![tid.clone()], file!(), line!());
             self.emit_recovery_for_expected_successor(emitter, tid);
             return;
         }
@@ -1092,10 +950,7 @@ impl RouteExecutor {
         });
         let rules = apply_route_policy(
             &self.ctx,
-            RoutePolicyState {
-                last_control_kind: self.last_control_kind.as_deref(),
-                pending_required_successor: self.pending_required_successor.as_deref(),
-            },
+            RoutePolicyState { last_control_kind: self.last_control_kind.as_deref(), pending_required_successor: self.pending_required_successor.as_deref() },
             &mut decision,
         );
         self.emit_persisted_invariant_store_events();

@@ -44,19 +44,27 @@ fn spawn_analysis_worker() -> mpsc::Sender<AnalysisWork> {
                                     runner::RunOutcome::Ran(root) => ("complete", root),
                                     runner::RunOutcome::Skipped(root) => ("skipped", root),
                                 };
-                                let _ = emit_analysis_event(&canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")), "analysis.completed", json!({
-                                    "crate": crate_name,
-                                    "status": status,
-                                    "crate_root": crate_root.display().to_string(),
-                                    "batch_id": batch_id,
-                                }));
+                                let _ = emit_analysis_event(
+                                    &canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")),
+                                    "analysis.completed",
+                                    json!({
+                                        "crate": crate_name,
+                                        "status": status,
+                                        "crate_root": crate_root.display().to_string(),
+                                        "batch_id": batch_id,
+                                    }),
+                                );
                             }
                             Err(err) => {
-                                let _ = emit_analysis_event(&canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")), "analysis.failed", json!({
-                                    "crate": crate_name,
-                                    "error": err.to_string(),
-                                    "batch_id": batch_id,
-                                }));
+                                let _ = emit_analysis_event(
+                                    &canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")),
+                                    "analysis.failed",
+                                    json!({
+                                        "crate": crate_name,
+                                        "error": err.to_string(),
+                                        "batch_id": batch_id,
+                                    }),
+                                );
                             }
                         }
                     }
@@ -66,15 +74,23 @@ fn spawn_analysis_worker() -> mpsc::Sender<AnalysisWork> {
                                 runner::RunOutcome::Ran(root) => ("complete", root),
                                 runner::RunOutcome::Skipped(root) => ("skipped", root),
                             };
-                            let _ = emit_analysis_event(&canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")), "workspace.completed", json!({
-                                "status": status,
-                                "workspace_dir": workspace_dir.display().to_string(),
-                            }));
+                            let _ = emit_analysis_event(
+                                &canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")),
+                                "workspace.completed",
+                                json!({
+                                    "status": status,
+                                    "workspace_dir": workspace_dir.display().to_string(),
+                                }),
+                            );
                         }
                         Err(err) => {
-                            let _ = emit_analysis_event(&canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")), "workspace.failed", json!({
-                                "error": err.to_string(),
-                            }));
+                            let _ = emit_analysis_event(
+                                &canon_event::resolve_tlog_path(None, Some("CANON_REPORTS_TLOG")),
+                                "workspace.failed",
+                                json!({
+                                    "error": err.to_string(),
+                                }),
+                            );
                         }
                     },
                 }

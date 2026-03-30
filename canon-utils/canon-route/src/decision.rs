@@ -18,17 +18,14 @@ pub struct RouteDecision {
 
 pub fn decide_from_json(ctx: &RouteContext, model_json: &str, prompt: String, controller: &mut RouteController) -> Result<RouteDecision> {
     let signals = ctx.signals();
-    let (selection, gate) = controller.evaluate_model_output(model_json, &signals)
+    let (selection, gate) = controller
+        .evaluate_model_output(model_json, &signals)
         .or_else(|_| {
             let fallback_json = heuristic_route_json(ctx);
             controller.evaluate_model_output(&fallback_json, &signals)
         })
         .map_err(|e| anyhow::anyhow!("routing gatekeeper failed: {e}"))?;
-    let gate_rules_fired = gate.note
-        .split("; ")
-        .filter(|s| !s.is_empty() && *s != "accepted")
-        .map(String::from)
-        .collect();
+    let gate_rules_fired = gate.note.split("; ").filter(|s| !s.is_empty() && *s != "accepted").map(String::from).collect();
     Ok(RouteDecision {
         lane: gate.lane,
         suggested_route: selection.route,

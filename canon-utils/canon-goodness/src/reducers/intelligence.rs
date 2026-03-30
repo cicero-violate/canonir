@@ -34,4 +34,3 @@ impl Reducer for Intelligence {
         *self = Self::default();
     }
 }
-

@@ -39,11 +39,7 @@ impl Reducer for Performance {
         let throughput = successes / window; // successes per action slot
         let target_throughput = 0.6_f32; // heuristic
 
-        let avg_latency = if self.durations.is_empty() {
-            30_000.0
-        } else {
-            self.durations.iter().sum::<u64>() as f32 / self.durations.len() as f32
-        };
+        let avg_latency = if self.durations.is_empty() { 30_000.0 } else { self.durations.iter().sum::<u64>() as f32 / self.durations.len() as f32 };
         let target_latency = 30_000.0_f32;
         let latency_factor = (target_latency / avg_latency.max(1.0)).clamp(0.0, 1.0);
         let throughput_factor = (throughput / target_throughput).clamp(0.0, 1.0);
@@ -54,4 +50,3 @@ impl Reducer for Performance {
         *self = Self::default();
     }
 }
-

@@ -1,19 +1,11 @@
 use crate::compiler_hints::extract_compiler_hints;
 use crate::env_model::{select_bootstrap_command, BootstrapCommandChoice, EntrypointKind, WorkspaceModel};
 use canon_invariant::{
-    evaluate_constraint_context,
-    meta_invariant_classify_planned_action_class as classify_plan_action_class,
-    meta_invariant_failure_scope_is_sufficient,
-    meta_invariant_high_invalid_plan_requires_simple_batch,
-    meta_invariant_no_progress_forces_change,
-    meta_invariant_tool_selection_correctness,
-    ConstraintAction, ConstraintContext, ConstraintDecision, ConstraintRoute, ConstraintState,
-    PlannedActionClass,
+    evaluate_constraint_context, meta_invariant_classify_planned_action_class as classify_plan_action_class, meta_invariant_failure_scope_is_sufficient,
+    meta_invariant_high_invalid_plan_requires_simple_batch, meta_invariant_no_progress_forces_change, meta_invariant_tool_selection_correctness, ConstraintAction, ConstraintContext,
+    ConstraintDecision, ConstraintRoute, ConstraintState, PlannedActionClass,
 };
-use canon_semantic_state::{
-    primary_development_strategy_kind, CompilerHintKind, DevelopmentStrategyKind, ObjectiveTrendState,
-    SelfDevelopmentObjectiveState, SemanticStateSummary,
-};
+use canon_semantic_state::{primary_development_strategy_kind, CompilerHintKind, DevelopmentStrategyKind, ObjectiveTrendState, SelfDevelopmentObjectiveState, SemanticStateSummary};
 use canon_tools_patch::parse_patch;
 use std::path::{Path, PathBuf};
 
@@ -58,10 +50,7 @@ enum ActionIntent {
     FixTraitBoundFailure(PathBuf),
 }
 
-pub fn derive_preconditions(
-    workspace_model: Option<&WorkspaceModel>,
-    compiler_errors: &[serde_json::Value],
-) -> Vec<PlanningPrecondition> {
+pub fn derive_preconditions(workspace_model: Option<&WorkspaceModel>, compiler_errors: &[serde_json::Value]) -> Vec<PlanningPrecondition> {
     let mut out = Vec::new();
     if let Some(model) = workspace_model {
         if !model.path_exists {
@@ -83,25 +72,15 @@ pub fn derive_preconditions(
         let Some(kind) = hint.kind_enum() else {
             continue;
         };
-        if kind == CompilerHintKind::DeadCodeForbidConflict
-            && !out.contains(&PlanningPrecondition::MustFixDeadCodeForbidConflict)
-        {
+        if kind == CompilerHintKind::DeadCodeForbidConflict && !out.contains(&PlanningPrecondition::MustFixDeadCodeForbidConflict) {
             out.push(PlanningPrecondition::MustFixDeadCodeForbidConflict);
-        } else if kind == CompilerHintKind::UnresolvedImport
-            && !out.contains(&PlanningPrecondition::MustFixUnresolvedImport)
-        {
+        } else if kind == CompilerHintKind::UnresolvedImport && !out.contains(&PlanningPrecondition::MustFixUnresolvedImport) {
             out.push(PlanningPrecondition::MustFixUnresolvedImport);
-        } else if kind == CompilerHintKind::MissingSymbol
-            && !out.contains(&PlanningPrecondition::MustDefineMissingSymbol)
-        {
+        } else if kind == CompilerHintKind::MissingSymbol && !out.contains(&PlanningPrecondition::MustDefineMissingSymbol) {
             out.push(PlanningPrecondition::MustDefineMissingSymbol);
-        } else if kind == CompilerHintKind::DuplicateDefinition
-            && !out.contains(&PlanningPrecondition::MustResolveDuplicateDefinition)
-        {
+        } else if kind == CompilerHintKind::DuplicateDefinition && !out.contains(&PlanningPrecondition::MustResolveDuplicateDefinition) {
             out.push(PlanningPrecondition::MustResolveDuplicateDefinition);
-        } else if kind == CompilerHintKind::TraitBoundFailure
-            && !out.contains(&PlanningPrecondition::MustFixTraitBoundFailure)
-        {
+        } else if kind == CompilerHintKind::TraitBoundFailure && !out.contains(&PlanningPrecondition::MustFixTraitBoundFailure) {
             out.push(PlanningPrecondition::MustFixTraitBoundFailure);
         }
     }
@@ -112,41 +91,20 @@ pub fn planner_lines(preconditions: &[PlanningPrecondition]) -> Vec<String> {
     preconditions
         .iter()
         .map(|precondition| match precondition {
-            PlanningPrecondition::MustBootstrapWorkspace => {
-                "must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".to_string()
-            }
-            PlanningPrecondition::MustInitCargoProject => {
-                "must_init_cargo_project=true repair=prefer_cargo_init".to_string()
-            }
-            PlanningPrecondition::MustCreateEntrypoint => {
-                "must_create_entrypoint=true repair=create_src_main_or_lib_before_cargo_check".to_string()
-            }
-            PlanningPrecondition::MustCreateMissingModules => {
-                "must_create_missing_modules=true repair=create_declared_module_files_before_cargo_check".to_string()
-            }
-            PlanningPrecondition::MustFixDeadCodeForbidConflict => {
-                "must_fix_dead_code_forbid_conflict=true repair=remove_allow_dead_code_or_make_code_used".to_string()
-            }
-            PlanningPrecondition::MustFixUnresolvedImport => {
-                "must_fix_unresolved_import=true repair=edit_import_or_define_missing_import_target".to_string()
-            }
-            PlanningPrecondition::MustDefineMissingSymbol => {
-                "must_define_missing_symbol=true repair=define_or_import_missing_symbol".to_string()
-            }
-            PlanningPrecondition::MustResolveDuplicateDefinition => {
-                "must_resolve_duplicate_definition=true repair=semantic_rename_or_remove_duplicate_definition".to_string()
-            }
-            PlanningPrecondition::MustFixTraitBoundFailure => {
-                "must_fix_trait_bound_failure=true repair=edit_local_type_impl_or_callsite_for_trait_bound".to_string()
-            }
+            PlanningPrecondition::MustBootstrapWorkspace => "must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".to_string(),
+            PlanningPrecondition::MustInitCargoProject => "must_init_cargo_project=true repair=prefer_cargo_init".to_string(),
+            PlanningPrecondition::MustCreateEntrypoint => "must_create_entrypoint=true repair=create_src_main_or_lib_before_cargo_check".to_string(),
+            PlanningPrecondition::MustCreateMissingModules => "must_create_missing_modules=true repair=create_declared_module_files_before_cargo_check".to_string(),
+            PlanningPrecondition::MustFixDeadCodeForbidConflict => "must_fix_dead_code_forbid_conflict=true repair=remove_allow_dead_code_or_make_code_used".to_string(),
+            PlanningPrecondition::MustFixUnresolvedImport => "must_fix_unresolved_import=true repair=edit_import_or_define_missing_import_target".to_string(),
+            PlanningPrecondition::MustDefineMissingSymbol => "must_define_missing_symbol=true repair=define_or_import_missing_symbol".to_string(),
+            PlanningPrecondition::MustResolveDuplicateDefinition => "must_resolve_duplicate_definition=true repair=semantic_rename_or_remove_duplicate_definition".to_string(),
+            PlanningPrecondition::MustFixTraitBoundFailure => "must_fix_trait_bound_failure=true repair=edit_local_type_impl_or_callsite_for_trait_bound".to_string(),
         })
         .collect()
 }
 
-pub fn derive_repair_intents(
-    preconditions: &[PlanningPrecondition],
-    failure_scope: Option<&str>,
-) -> Vec<RepairIntent> {
+pub fn derive_repair_intents(preconditions: &[PlanningPrecondition], failure_scope: Option<&str>) -> Vec<RepairIntent> {
     let mut intents = Vec::new();
     for precondition in preconditions {
         let intent = match precondition {
@@ -173,10 +131,7 @@ pub fn derive_repair_intents(
 
 fn repair_intent_allowed_for_scope(intent: RepairIntent, failure_scope: Option<&str>) -> bool {
     match failure_scope {
-        Some("workspace") | Some("tooling") => matches!(
-            intent,
-            RepairIntent::BootstrapWorkspace | RepairIntent::InitCargoProject
-        ),
+        Some("workspace") | Some("tooling") => matches!(intent, RepairIntent::BootstrapWorkspace | RepairIntent::InitCargoProject),
         _ => true,
     }
 }
@@ -249,88 +204,47 @@ pub fn repair_intent_lines(intents: &[RepairIntent]) -> Vec<String> {
     intents
         .iter()
         .map(|intent| match intent {
-            RepairIntent::BootstrapWorkspace => {
-                "repair_intent=bootstrap_workspace priority=1 first_batch=create_or_init_workspace".to_string()
-            }
-            RepairIntent::InitCargoProject => {
-                "repair_intent=init_cargo_project priority=2 first_batch=run_cargo_init".to_string()
-            }
-            RepairIntent::CreateEntrypoint => {
-                "repair_intent=create_entrypoint priority=3 first_batch=create_src_main_or_lib".to_string()
-            }
-            RepairIntent::CreateMissingModules => {
-                "repair_intent=create_missing_modules priority=4 first_batch=create_declared_module_files".to_string()
-            }
-            RepairIntent::FixDeadCodeForbidConflict => {
-                "repair_intent=fix_dead_code_forbid_conflict priority=5 first_batch=edit_conflicting_allow_dead_code".to_string()
-            }
-            RepairIntent::FixUnresolvedImport => {
-                "repair_intent=fix_unresolved_import priority=6 first_batch=edit_import_or_define_target".to_string()
-            }
-            RepairIntent::DefineMissingSymbol => {
-                "repair_intent=define_missing_symbol priority=7 first_batch=define_or_import_symbol".to_string()
-            }
-            RepairIntent::ResolveDuplicateDefinition => {
-                "repair_intent=resolve_duplicate_definition priority=8 first_batch=semantic_rename_duplicate".to_string()
-            }
-            RepairIntent::FixTraitBoundFailure => {
-                "repair_intent=fix_trait_bound_failure priority=9 first_batch=edit_type_impl_or_callsite".to_string()
-            }
+            RepairIntent::BootstrapWorkspace => "repair_intent=bootstrap_workspace priority=1 first_batch=create_or_init_workspace".to_string(),
+            RepairIntent::InitCargoProject => "repair_intent=init_cargo_project priority=2 first_batch=run_cargo_init".to_string(),
+            RepairIntent::CreateEntrypoint => "repair_intent=create_entrypoint priority=3 first_batch=create_src_main_or_lib".to_string(),
+            RepairIntent::CreateMissingModules => "repair_intent=create_missing_modules priority=4 first_batch=create_declared_module_files".to_string(),
+            RepairIntent::FixDeadCodeForbidConflict => "repair_intent=fix_dead_code_forbid_conflict priority=5 first_batch=edit_conflicting_allow_dead_code".to_string(),
+            RepairIntent::FixUnresolvedImport => "repair_intent=fix_unresolved_import priority=6 first_batch=edit_import_or_define_target".to_string(),
+            RepairIntent::DefineMissingSymbol => "repair_intent=define_missing_symbol priority=7 first_batch=define_or_import_symbol".to_string(),
+            RepairIntent::ResolveDuplicateDefinition => "repair_intent=resolve_duplicate_definition priority=8 first_batch=semantic_rename_duplicate".to_string(),
+            RepairIntent::FixTraitBoundFailure => "repair_intent=fix_trait_bound_failure priority=9 first_batch=edit_type_impl_or_callsite".to_string(),
         })
         .collect()
 }
 
-pub fn validate_preconditions(
-    actions: &[canon_event::LoopPlanned],
-    target_root: &Path,
-    preconditions: &[PlanningPrecondition],
-    semantic_summary: &SemanticStateSummary,
-) -> Result<(), String> {
+pub fn validate_preconditions(actions: &[canon_event::LoopPlanned], target_root: &Path, preconditions: &[PlanningPrecondition], semantic_summary: &SemanticStateSummary) -> Result<(), String> {
     let intents = derive_repair_intents(preconditions, None);
     let action_intents = collect_action_intents(actions, target_root);
     if preconditions.contains(&PlanningPrecondition::MustBootstrapWorkspace) {
         match select_bootstrap_command(target_root) {
-            BootstrapCommandChoice::CargoNew
-                if !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoNew) =>
-            {
+            BootstrapCommandChoice::CargoNew if !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoNew) => {
                 return Err("target workspace is missing; first plan must create the workspace with cargo new".to_string());
             }
-            BootstrapCommandChoice::CargoInit
-                if !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoInit) =>
-            {
+            BootstrapCommandChoice::CargoInit if !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoInit) => {
                 return Err("target directory exists but is not a Cargo project; first plan must initialize it with cargo init".to_string());
             }
             BootstrapCommandChoice::NoBootstrapNeeded => {
-                return Err(
-                    "semantic state says bootstrap is required, but the target already contains Cargo.toml; refresh observation before planning bootstrap"
-                        .to_string(),
-                );
+                return Err("semantic state says bootstrap is required, but the target already contains Cargo.toml; refresh observation before planning bootstrap".to_string());
             }
             _ => {}
         }
     }
-    if preconditions.contains(&PlanningPrecondition::MustInitCargoProject)
-        && !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoInit)
-    {
+    if preconditions.contains(&PlanningPrecondition::MustInitCargoProject) && !contains_expected_bootstrap_action(actions, BootstrapCommandChoice::CargoInit) {
         return Err("target directory exists but is not a Cargo project; first plan must initialize Cargo".to_string());
     }
     validate_validation_action_constraints(actions, target_root, semantic_summary)?;
-    if preconditions.contains(&PlanningPrecondition::MustCreateEntrypoint)
-        && contains_cargo_check(actions)
-        && !contains_entrypoint_creation(actions, target_root)
-    {
+    if preconditions.contains(&PlanningPrecondition::MustCreateEntrypoint) && contains_cargo_check(actions) && !contains_entrypoint_creation(actions, target_root) {
         return Err("cargo check planned before creating src/main.rs or src/lib.rs".to_string());
     }
-    if preconditions.contains(&PlanningPrecondition::MustCreateMissingModules)
-        && contains_cargo_check(actions)
-        && !contains_module_creation(actions, target_root)
-    {
+    if preconditions.contains(&PlanningPrecondition::MustCreateMissingModules) && contains_cargo_check(actions) && !contains_module_creation(actions, target_root) {
         return Err("cargo check planned before creating missing declared module files".to_string());
     }
-    if preconditions.contains(&PlanningPrecondition::MustFixDeadCodeForbidConflict)
-        && contains_cargo_check(actions)
-        && !contains_dead_code_conflict_fix(actions, target_root)
-    {
+    if preconditions.contains(&PlanningPrecondition::MustFixDeadCodeForbidConflict) && contains_cargo_check(actions) && !contains_dead_code_conflict_fix(actions, target_root) {
         return Err("cargo check planned before fixing allow(dead_code) vs forbid(dead_code) conflict".to_string());
     }
     if preconditions.contains(&PlanningPrecondition::MustFixUnresolvedImport)
@@ -379,10 +293,7 @@ fn has_targeted_localized_hint(semantic_summary: &SemanticStateSummary) -> bool 
                     | canon_semantic_state::CompilerHintKind::DuplicateDefinition
                     | canon_semantic_state::CompilerHintKind::TraitBoundFailure
             )
-        }) && hint
-            .target_files
-            .iter()
-            .any(|path| !path.trim().is_empty() && path != "none")
+        }) && hint.target_files.iter().any(|path| !path.trim().is_empty() && path != "none")
     })
 }
 
@@ -391,30 +302,22 @@ fn effective_actionable_failure(semantic_summary: &SemanticStateSummary) -> bool
         || semantic_summary.compiler_repair_required
         || !semantic_summary.planning_preconditions.is_empty()
         || !semantic_summary.module_gaps.is_empty()
-        || matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
-            && semantic_summary.cargo_project
+        || matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None) && semantic_summary.cargo_project
         || semantic_summary.has_actionable_compiler_hints()
-        || semantic_summary
-            .primary_failure_class()
-            .as_deref()
-            .is_some_and(|class| class != "no_actionable_failure")
+        || semantic_summary.primary_failure_class().as_deref().is_some_and(|class| class != "no_actionable_failure")
 }
 
 fn effective_failure_scope_flags(semantic_summary: &SemanticStateSummary) -> (bool, bool, bool) {
     let localized = semantic_summary.failure_scope.as_deref() == Some("localized")
         || !semantic_summary.module_gaps.is_empty()
-        || (matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
-            && semantic_summary.cargo_project)
+        || (matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None) && semantic_summary.cargo_project)
         || has_targeted_localized_hint(semantic_summary);
     let workspace = semantic_summary.failure_scope.as_deref() == Some("workspace");
     let tooling = semantic_summary.failure_scope.as_deref() == Some("tooling");
     (localized, workspace, tooling)
 }
 
-fn planner_workspace_presence(
-    target_root: &Path,
-    semantic_summary: &SemanticStateSummary,
-) -> (bool, bool) {
+fn planner_workspace_presence(target_root: &Path, semantic_summary: &SemanticStateSummary) -> (bool, bool) {
     if target_root.exists() {
         (true, target_root.join("Cargo.toml").exists())
     } else {
@@ -422,18 +325,12 @@ fn planner_workspace_presence(
     }
 }
 
-fn validate_validation_action_constraints(
-    actions: &[canon_event::LoopPlanned],
-    target_root: &Path,
-    semantic_summary: &SemanticStateSummary,
-) -> Result<(), String> {
+fn validate_validation_action_constraints(actions: &[canon_event::LoopPlanned], target_root: &Path, semantic_summary: &SemanticStateSummary) -> Result<(), String> {
     if !contains_cargo_check(actions) {
         return Ok(());
     }
-    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
-        effective_failure_scope_flags(semantic_summary);
-    let (real_path_exists, real_cargo_project) =
-        planner_workspace_presence(target_root, semantic_summary);
+    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) = effective_failure_scope_flags(semantic_summary);
+    let (real_path_exists, real_cargo_project) = planner_workspace_presence(target_root, semantic_summary);
     match evaluate_constraint_context(&ConstraintContext {
         state: ConstraintState {
             semantic_path_exists: semantic_summary.path_exists,
@@ -442,8 +339,7 @@ fn validate_validation_action_constraints(
             real_cargo_project,
             actionable_failure: effective_actionable_failure(semantic_summary),
             validation_blocked: semantic_summary.validation_blocked_by_preconditions,
-            entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
-                && semantic_summary.cargo_project,
+            entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None) && semantic_summary.cargo_project,
             module_gaps_present: !semantic_summary.module_gaps.is_empty(),
             recent_no_semantic_progress: false,
             failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
@@ -456,19 +352,11 @@ fn validate_validation_action_constraints(
         action: Some(ConstraintAction::Validation),
         deterministic_route: None,
     }) {
-        ConstraintDecision::Forbid(reason)
-            if reason.contains("target workspace is missing") =>
-        {
-            Err("cargo check planned before bootstrapping the target workspace".to_string())
-        }
-        ConstraintDecision::Forbid(reason)
-            if reason.contains("required files are still missing") && semantic_summary.entrypoint_kind.as_deref() == Some("none") =>
-        {
+        ConstraintDecision::Forbid(reason) if reason.contains("target workspace is missing") => Err("cargo check planned before bootstrapping the target workspace".to_string()),
+        ConstraintDecision::Forbid(reason) if reason.contains("required files are still missing") && semantic_summary.entrypoint_kind.as_deref() == Some("none") => {
             Err("cargo check planned before creating src/main.rs or src/lib.rs".to_string())
         }
-        ConstraintDecision::Forbid(reason)
-            if reason.contains("required files are still missing") && !semantic_summary.module_gaps.is_empty() =>
-        {
+        ConstraintDecision::Forbid(reason) if reason.contains("required files are still missing") && !semantic_summary.module_gaps.is_empty() => {
             Err("cargo check planned before creating missing declared module files".to_string())
         }
         ConstraintDecision::Forbid(_) => Ok(()),
@@ -477,42 +365,24 @@ fn validate_validation_action_constraints(
 }
 
 pub fn validate_objective_route_plan_alignment(
-    actions: &[canon_event::LoopPlanned],
-    target_root: &Path,
-    route_choice: &str,
-    primary_objective: &str,
-    semantic_summary: &SemanticStateSummary,
+    actions: &[canon_event::LoopPlanned], target_root: &Path, route_choice: &str, primary_objective: &str, semantic_summary: &SemanticStateSummary,
 ) -> Result<(), String> {
     let action_intents = collect_action_intents(actions, target_root);
-    let has_validation_intent = action_intents
-        .iter()
-        .any(|intent| matches!(intent, ActionIntent::ValidateCargoCheck));
-    let has_repair_intent = action_intents.iter().any(|intent| {
-        !matches!(
-            intent,
-            ActionIntent::ValidateCargoCheck
-                | ActionIntent::BootstrapWorkspace
-                | ActionIntent::InitCargoProject
-        )
-    });
+    let has_validation_intent = action_intents.iter().any(|intent| matches!(intent, ActionIntent::ValidateCargoCheck));
+    let has_repair_intent = action_intents.iter().any(|intent| !matches!(intent, ActionIntent::ValidateCargoCheck | ActionIntent::BootstrapWorkspace | ActionIntent::InitCargoProject));
 
-    let objective_requires_repair =
-        effective_actionable_failure(semantic_summary)
-            || primary_objective.contains("remove validation blockers")
-            || primary_objective.contains("reduce compiler repair pressure")
-            || primary_objective.contains("break the stalled repair loop")
-            || primary_objective.contains("lower invalid-plan rate")
-            || primary_objective.contains("increase repair resolution rate");
+    let objective_requires_repair = effective_actionable_failure(semantic_summary)
+        || primary_objective.contains("remove validation blockers")
+        || primary_objective.contains("reduce compiler repair pressure")
+        || primary_objective.contains("break the stalled repair loop")
+        || primary_objective.contains("lower invalid-plan rate")
+        || primary_objective.contains("increase repair resolution rate");
 
     if route_choice == "plan" && objective_requires_repair && has_validation_intent && !has_repair_intent {
-        return Err(
-            "first planned batch contradicts the active repair objective; it validates without addressing the repair target"
-                .to_string(),
-        );
+        return Err("first planned batch contradicts the active repair objective; it validates without addressing the repair target".to_string());
     }
 
-    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
-        effective_failure_scope_flags(semantic_summary);
+    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) = effective_failure_scope_flags(semantic_summary);
 
     match evaluate_constraint_context(&ConstraintContext {
         state: ConstraintState {
@@ -522,8 +392,7 @@ pub fn validate_objective_route_plan_alignment(
             real_cargo_project: semantic_summary.cargo_project,
             actionable_failure: objective_requires_repair,
             validation_blocked: semantic_summary.validation_blocked_by_preconditions,
-            entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
-                && semantic_summary.cargo_project,
+            entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None) && semantic_summary.cargo_project,
             module_gaps_present: !semantic_summary.module_gaps.is_empty(),
             recent_no_semantic_progress: false,
             failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
@@ -553,9 +422,7 @@ pub fn validate_objective_route_plan_alignment(
             return Err("route choice contradicts the active repair objective; verification is premature".to_string());
         }
         ConstraintDecision::Forbid(reason) => return Err(reason.to_string()),
-        ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => {
-            return Err(reason.to_string())
-        }
+        ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => return Err(reason.to_string()),
         ConstraintDecision::Allow => {}
     }
 
@@ -563,127 +430,68 @@ pub fn validate_objective_route_plan_alignment(
 }
 
 pub fn validate_development_strategy_alignment(
-    actions: &[canon_event::LoopPlanned],
-    target_root: &Path,
-    semantic_summary: &SemanticStateSummary,
-    objective_state: &SelfDevelopmentObjectiveState,
-    objective_trend_state: &ObjectiveTrendState,
+    actions: &[canon_event::LoopPlanned], target_root: &Path, semantic_summary: &SemanticStateSummary, objective_state: &SelfDevelopmentObjectiveState, objective_trend_state: &ObjectiveTrendState,
     forced_strategy: Option<DevelopmentStrategyKind>,
 ) -> Result<(), String> {
     let action_intents = collect_action_intents(actions, target_root);
-    let strategy = forced_strategy.unwrap_or_else(|| {
-        primary_development_strategy_kind(objective_state, objective_trend_state, semantic_summary)
-    });
+    let strategy = forced_strategy.unwrap_or_else(|| primary_development_strategy_kind(objective_state, objective_trend_state, semantic_summary));
     match strategy {
         DevelopmentStrategyKind::FixConfigLintPolicy => {
-            let targets_config = actions.iter().any(|action| {
-                touches_any_path(
-                    action,
-                    target_root,
-                    &[
-                        target_root.join(".cargo/config.toml").as_path(),
-                        target_root.join("Cargo.toml").as_path(),
-                    ],
-                )
-            });
+            let targets_config = actions.iter().any(|action| touches_any_path(action, target_root, &[target_root.join(".cargo/config.toml").as_path(), target_root.join("Cargo.toml").as_path()]));
             if !targets_config {
-                return Err(
-                    "active development strategy requires a config-level lint/toolchain fix before more source edits"
-                        .to_string(),
-                );
+                return Err("active development strategy requires a config-level lint/toolchain fix before more source edits".to_string());
             }
         }
         DevelopmentStrategyKind::DiscoverTestSurface => {
-            let discovery_only = actions.iter().all(|action| {
-                matches!(
-                    action.action_kind.as_str(),
-                    "list_dir" | "read_file" | "search_files"
-                )
-            });
+            let discovery_only = actions.iter().all(|action| matches!(action.action_kind.as_str(), "list_dir" | "read_file" | "search_files"));
             if !discovery_only {
-                return Err(
-                    "active development strategy requires discovery-only work to map the existing test surface"
-                        .to_string(),
-                );
+                return Err("active development strategy requires discovery-only work to map the existing test surface".to_string());
             }
         }
         DevelopmentStrategyKind::AddRegressionTest => {
             let touches_tests = actions.iter().any(|action| touches_test_surface(action, target_root));
             if !touches_tests {
-                return Err(
-                    "active development strategy requires the first batch to touch the test surface"
-                        .to_string(),
-                );
+                return Err("active development strategy requires the first batch to touch the test surface".to_string());
             }
         }
         DevelopmentStrategyKind::SimplifyPlanBatch => {
             if actions.len() > 1 {
-                return Err(
-                    "active development strategy requires a simpler first batch; emit one action only"
-                        .to_string(),
-                );
+                return Err("active development strategy requires a simpler first batch; emit one action only".to_string());
             }
         }
         DevelopmentStrategyKind::CreateMissingModules => {
             if !contains_expected_module_target(&action_intents, semantic_summary, target_root) {
-                return Err(
-                    "active development strategy requires creating or wiring the missing module files first"
-                        .to_string(),
-                );
+                return Err("active development strategy requires creating or wiring the missing module files first".to_string());
             }
         }
         DevelopmentStrategyKind::RefreshContextBeforeRetry => {
-            let has_discovery = actions.iter().any(|action| {
-                matches!(
-                    action.action_kind.as_str(),
-                    "list_dir" | "read_file" | "search_files"
-                )
-            });
+            let has_discovery = actions.iter().any(|action| matches!(action.action_kind.as_str(), "list_dir" | "read_file" | "search_files"));
             if !has_discovery {
-                return Err(
-                    "active development strategy requires refreshing context before retrying another repair"
-                        .to_string(),
-                );
+                return Err("active development strategy requires refreshing context before retrying another repair".to_string());
             }
         }
         DevelopmentStrategyKind::PlanSymbolAwareRename => {
             let has_rename = actions.iter().any(|action| action.action_kind == "edit.rename_symbol");
             if !has_rename {
-                return Err(
-                    "active development strategy requires a semantic rename action driven by graph-backed symbol context"
-                        .to_string(),
-                );
+                return Err("active development strategy requires a semantic rename action driven by graph-backed symbol context".to_string());
             }
         }
         DevelopmentStrategyKind::RestructureModules => {
             let has_move = actions.iter().any(|action| action.action_kind == "edit.move_symbol");
             if !has_move {
-                return Err(
-                    "active development strategy requires a semantic module-restructure action driven by graph hotspots"
-                        .to_string(),
-                );
+                return Err("active development strategy requires a semantic module-restructure action driven by graph hotspots".to_string());
             }
         }
-        DevelopmentStrategyKind::ApplyTargetedCompilerRepair
-        | DevelopmentStrategyKind::RealignObjectiveFlow => {}
+        DevelopmentStrategyKind::ApplyTargetedCompilerRepair | DevelopmentStrategyKind::RealignObjectiveFlow => {}
     }
     Ok(())
 }
 
-fn validate_highest_priority_intent(
-    actions: &[canon_event::LoopPlanned],
-    target_root: &Path,
-    intent: &RepairIntent,
-    semantic_summary: &SemanticStateSummary,
-) -> Result<(), String> {
+fn validate_highest_priority_intent(actions: &[canon_event::LoopPlanned], target_root: &Path, intent: &RepairIntent, semantic_summary: &SemanticStateSummary) -> Result<(), String> {
     let action_intents = collect_action_intents(actions, target_root);
     let satisfied = match intent {
-        RepairIntent::BootstrapWorkspace => {
-            action_intents.iter().any(|intent| matches!(intent, ActionIntent::BootstrapWorkspace | ActionIntent::InitCargoProject))
-        }
-        RepairIntent::InitCargoProject => {
-            action_intents.iter().any(|intent| matches!(intent, ActionIntent::InitCargoProject))
-        }
+        RepairIntent::BootstrapWorkspace => action_intents.iter().any(|intent| matches!(intent, ActionIntent::BootstrapWorkspace | ActionIntent::InitCargoProject)),
+        RepairIntent::InitCargoProject => action_intents.iter().any(|intent| matches!(intent, ActionIntent::InitCargoProject)),
         RepairIntent::CreateEntrypoint => contains_expected_entrypoint_target(&action_intents, semantic_summary, target_root),
         RepairIntent::CreateMissingModules => contains_expected_module_target(&action_intents, semantic_summary, target_root),
         RepairIntent::FixDeadCodeForbidConflict => contains_expected_dead_code_target(&action_intents, semantic_summary, target_root),
@@ -700,9 +508,7 @@ fn validate_highest_priority_intent(
             RepairIntent::InitCargoProject => "first planned batch must initialize Cargo in the target directory".to_string(),
             RepairIntent::CreateEntrypoint => "first planned batch must create an entrypoint before validation".to_string(),
             RepairIntent::CreateMissingModules => "first planned batch must create missing declared module files".to_string(),
-            RepairIntent::FixDeadCodeForbidConflict => {
-                "first planned batch must address the allow(dead_code) vs forbid(dead_code) conflict".to_string()
-            }
+            RepairIntent::FixDeadCodeForbidConflict => "first planned batch must address the allow(dead_code) vs forbid(dead_code) conflict".to_string(),
             RepairIntent::FixUnresolvedImport => "first planned batch must target the unresolved import location".to_string(),
             RepairIntent::DefineMissingSymbol => "first planned batch must target the missing symbol location".to_string(),
             RepairIntent::ResolveDuplicateDefinition => "first planned batch must target the duplicate definition location".to_string(),
@@ -728,81 +534,44 @@ fn action_intent_key(intent: &ActionIntent) -> &'static str {
 }
 
 pub fn validate_trend_intent_alignment(
-    actions: &[canon_event::LoopPlanned],
-    target_root: &Path,
-    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
+    actions: &[canon_event::LoopPlanned], target_root: &Path, recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
     objective_trend_state: &canon_semantic_state::ObjectiveTrendState,
 ) -> Result<(), String> {
-    if meta_invariant_high_invalid_plan_requires_simple_batch(
-        objective_trend_state.invalid_plan_rate(),
-        objective_trend_state.planning_attempts,
-    ) && actions.len() > 1
-    {
-        return Err(
-            "high invalid-plan pressure requires a single-action first batch; simplify the next plan"
-                .to_string(),
-        );
+    if meta_invariant_high_invalid_plan_requires_simple_batch(objective_trend_state.invalid_plan_rate(), objective_trend_state.planning_attempts) && actions.len() > 1 {
+        return Err("high invalid-plan pressure requires a single-action first batch; simplify the next plan".to_string());
     }
 
     if objective_trend_state.current_no_progress_streak >= 2 {
         if let Some(first_class) = first_action_class(actions) {
-            if meta_invariant_no_progress_forces_change(
-                objective_trend_state.current_no_progress_streak,
-                first_class,
-            ) {
-                return Err(
-                    "stalled loop requires a state-changing first batch; passive discovery or validation cannot lead"
-                        .to_string(),
-                );
+            if meta_invariant_no_progress_forces_change(objective_trend_state.current_no_progress_streak, first_class) {
+                return Err("stalled loop requires a state-changing first batch; passive discovery or validation cannot lead".to_string());
             }
         }
     }
 
     if objective_trend_state.current_no_progress_streak > 0 {
-        if let (Some(previous_class), Some(next_class)) =
-            (last_attempted_action_class(recent_execution_results), first_action_class(actions))
-        {
-            if previous_class == next_class
-                && matches!(next_class, PlannedActionClass::PassiveDiscovery | PlannedActionClass::Verification)
-            {
-                return Err(
-                    "first planned batch repeats the same zero-progress passive action class; choose a state-changing action"
-                        .to_string(),
-                );
+        if let (Some(previous_class), Some(next_class)) = (last_attempted_action_class(recent_execution_results), first_action_class(actions)) {
+            if previous_class == next_class && matches!(next_class, PlannedActionClass::PassiveDiscovery | PlannedActionClass::Verification) {
+                return Err("first planned batch repeats the same zero-progress passive action class; choose a state-changing action".to_string());
             }
         }
     }
 
-    if objective_trend_state.current_no_progress_streak == 0
-        || objective_trend_state.repeated_stall_count == 0
-    {
+    if objective_trend_state.current_no_progress_streak == 0 || objective_trend_state.repeated_stall_count == 0 {
         return Ok(());
     }
-    let Some(last_attempted_kind) = recent_execution_results
-        .iter()
-        .rev()
-        .find_map(|result| result.attempted_kind.as_deref())
-    else {
+    let Some(last_attempted_kind) = recent_execution_results.iter().rev().find_map(|result| result.attempted_kind.as_deref()) else {
         return Ok(());
     };
     let action_intents = collect_action_intents(actions, target_root);
-    let repeats_stalled_intent = action_intents
-        .iter()
-        .any(|intent| action_intent_key(intent) == last_attempted_kind);
+    let repeats_stalled_intent = action_intents.iter().any(|intent| action_intent_key(intent) == last_attempted_kind);
     if repeats_stalled_intent {
-        return Err(
-            "first planned batch repeats the same stalled repair intent; choose a different repair strategy"
-                .to_string(),
-        );
+        return Err("first planned batch repeats the same stalled repair intent; choose a different repair strategy".to_string());
     }
     Ok(())
 }
 
-pub fn route_choice_contradicts_primary_objective(
-    route_choice: &str,
-    primary_objective: &str,
-    semantic_summary: &SemanticStateSummary,
-) -> bool {
+pub fn route_choice_contradicts_primary_objective(route_choice: &str, primary_objective: &str, semantic_summary: &SemanticStateSummary) -> bool {
     let objective_requires_repair = semantic_summary.validation_blocked_by_preconditions
         || semantic_summary.compiler_repair_required
         || !semantic_summary.planning_preconditions.is_empty()
@@ -831,11 +600,7 @@ pub fn goal_route_objective_drift(goal_objective: &str, route_objective: &str) -
     objective_focus_label(goal_objective) != objective_focus_label(route_objective)
 }
 
-fn contains_expected_entrypoint_target(
-    action_intents: &[ActionIntent],
-    semantic_summary: &SemanticStateSummary,
-    target_root: &Path,
-) -> bool {
+fn contains_expected_entrypoint_target(action_intents: &[ActionIntent], semantic_summary: &SemanticStateSummary, target_root: &Path) -> bool {
     let expected = expected_entrypoint_paths(semantic_summary, target_root);
     action_intents.iter().any(|intent| match intent {
         ActionIntent::CreateEntrypoint(path) => expected.is_empty() || expected.iter().any(|candidate| candidate == path),
@@ -843,11 +608,7 @@ fn contains_expected_entrypoint_target(
     })
 }
 
-fn contains_expected_module_target(
-    action_intents: &[ActionIntent],
-    semantic_summary: &SemanticStateSummary,
-    target_root: &Path,
-) -> bool {
+fn contains_expected_module_target(action_intents: &[ActionIntent], semantic_summary: &SemanticStateSummary, target_root: &Path) -> bool {
     let expected = expected_module_paths(semantic_summary, target_root);
     action_intents.iter().any(|intent| match intent {
         ActionIntent::CreateModuleFile(path) => expected.is_empty() || expected.iter().any(|candidate| candidate == path),
@@ -855,11 +616,7 @@ fn contains_expected_module_target(
     })
 }
 
-fn contains_expected_dead_code_target(
-    action_intents: &[ActionIntent],
-    semantic_summary: &SemanticStateSummary,
-    target_root: &Path,
-) -> bool {
+fn contains_expected_dead_code_target(action_intents: &[ActionIntent], semantic_summary: &SemanticStateSummary, target_root: &Path) -> bool {
     let expected = expected_dead_code_paths(semantic_summary, target_root);
     action_intents.iter().any(|intent| match intent {
         ActionIntent::FixDeadCodeConflict(path) => expected.is_empty() || expected.iter().any(|candidate| candidate == path),
@@ -867,21 +624,12 @@ fn contains_expected_dead_code_target(
     })
 }
 
-fn contains_expected_hint_target(
-    action_intents: &[ActionIntent],
-    semantic_summary: &SemanticStateSummary,
-    hint_kind: &str,
-    target_root: &Path,
-) -> bool {
+fn contains_expected_hint_target(action_intents: &[ActionIntent], semantic_summary: &SemanticStateSummary, hint_kind: &str, target_root: &Path) -> bool {
     let expected = expected_hint_paths(semantic_summary, hint_kind, target_root);
     action_intents.iter().any(|intent| match_action_intent(intent, hint_kind, &expected))
 }
 
-fn validate_no_actionable_failure(
-    _actions: &[canon_event::LoopPlanned],
-    action_intents: &[ActionIntent],
-    semantic_summary: &SemanticStateSummary,
-) -> Result<(), String> {
+fn validate_no_actionable_failure(_actions: &[canon_event::LoopPlanned], action_intents: &[ActionIntent], semantic_summary: &SemanticStateSummary) -> Result<(), String> {
     let has_repair_intent = action_intents.iter().any(|intent| {
         matches!(
             intent,
@@ -893,8 +641,7 @@ fn validate_no_actionable_failure(
         )
     });
     let actionable_failure = effective_actionable_failure(semantic_summary);
-    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
-        effective_failure_scope_flags(semantic_summary);
+    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) = effective_failure_scope_flags(semantic_summary);
     if has_repair_intent {
         match evaluate_constraint_context(&ConstraintContext {
             state: ConstraintState {
@@ -904,8 +651,7 @@ fn validate_no_actionable_failure(
                 real_cargo_project: semantic_summary.cargo_project,
                 actionable_failure,
                 validation_blocked: semantic_summary.validation_blocked_by_preconditions,
-                entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
-                    && semantic_summary.cargo_project,
+                entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None) && semantic_summary.cargo_project,
                 module_gaps_present: !semantic_summary.module_gaps.is_empty(),
                 recent_no_semantic_progress: false,
                 failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
@@ -919,11 +665,7 @@ fn validate_no_actionable_failure(
             deterministic_route: None,
         }) {
             ConstraintDecision::Allow => {}
-            ConstraintDecision::Forbid(reason)
-                if reason.contains("no actionable failure") =>
-            {
-                return Err(reason.to_string())
-            }
+            ConstraintDecision::Forbid(reason) if reason.contains("no actionable failure") => return Err(reason.to_string()),
             ConstraintDecision::Forbid(_) => {}
             ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => {
                 if reason.contains("no actionable failure") {
@@ -935,11 +677,7 @@ fn validate_no_actionable_failure(
     Ok(())
 }
 
-fn validate_failure_scope(
-    _actions: &[canon_event::LoopPlanned],
-    action_intents: &[ActionIntent],
-    semantic_summary: &SemanticStateSummary,
-) -> Result<(), String> {
+fn validate_failure_scope(_actions: &[canon_event::LoopPlanned], action_intents: &[ActionIntent], semantic_summary: &SemanticStateSummary) -> Result<(), String> {
     let has_localized_repair = action_intents.iter().any(|intent| {
         matches!(
             intent,
@@ -950,68 +688,42 @@ fn validate_failure_scope(
                 | ActionIntent::FixTraitBoundFailure(_)
         )
     });
-    if has_localized_repair
-        && !meta_invariant_failure_scope_is_sufficient(
-            semantic_summary.compiler_repair_required,
-            semantic_summary.compiler_hints.len(),
-            semantic_summary.failure_scope.as_deref(),
-        )
+    if has_localized_repair && !meta_invariant_failure_scope_is_sufficient(semantic_summary.compiler_repair_required, semantic_summary.compiler_hints.len(), semantic_summary.failure_scope.as_deref())
     {
-        return Err(
-            "compiler failure lacks scoped target information; refresh context or classify failure scope before targeted repair"
-                .to_string(),
-        );
+        return Err("compiler failure lacks scoped target information; refresh context or classify failure scope before targeted repair".to_string());
     }
     Ok(())
 }
 
 fn classify_constraint_action_for_plan(planned: &canon_event::LoopPlanned) -> Option<ConstraintAction> {
     match planned.action_kind.as_str() {
-        "run_command" => planned
-            .action_payload
-            .get("cmd")
-            .and_then(|v| v.as_str())
-            .map(|cmd| {
-                if cmd.contains("cargo init") {
-                    ConstraintAction::CargoInit
-                } else if cmd.contains("cargo new") {
-                    ConstraintAction::CargoNew
-                } else if cmd.contains("cargo check") || cmd.contains("cargo build") || cmd.contains("cargo test") {
-                    ConstraintAction::Validation
-                } else {
-                    ConstraintAction::RepairWorkspace
-                }
-            }),
+        "run_command" => planned.action_payload.get("cmd").and_then(|v| v.as_str()).map(|cmd| {
+            if cmd.contains("cargo init") {
+                ConstraintAction::CargoInit
+            } else if cmd.contains("cargo new") {
+                ConstraintAction::CargoNew
+            } else if cmd.contains("cargo check") || cmd.contains("cargo build") || cmd.contains("cargo test") {
+                ConstraintAction::Validation
+            } else {
+                ConstraintAction::RepairWorkspace
+            }
+        }),
         "apply_patch" | "patch_file" | "write_file" => {
             let path = planned.action_payload.get("path").and_then(|v| v.as_str()).unwrap_or_default();
-            if path.ends_with("Cargo.toml")
-                || path.ends_with(".cargo/config.toml")
-                || path.ends_with("rust-toolchain.toml")
-                || path.ends_with("rust-toolchain")
-            {
+            if path.ends_with("Cargo.toml") || path.ends_with(".cargo/config.toml") || path.ends_with("rust-toolchain.toml") || path.ends_with("rust-toolchain") {
                 Some(ConstraintAction::RepairWorkspace)
             } else {
                 Some(ConstraintAction::RepairLocalized)
             }
         }
-        "edit.rename_symbol"
-        | "edit.move_symbol"
-        | "edit.add_import"
-        | "edit.define_symbol_stub"
-        | "edit.create_module_file" => Some(ConstraintAction::RepairLocalized),
+        "edit.rename_symbol" | "edit.move_symbol" | "edit.add_import" | "edit.define_symbol_stub" | "edit.create_module_file" => Some(ConstraintAction::RepairLocalized),
         _ => None,
     }
 }
 
-fn validate_repair_action_legality(
-    actions: &[canon_event::LoopPlanned],
-    target_root: &Path,
-    semantic_summary: &SemanticStateSummary,
-) -> Result<(), String> {
-    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) =
-        effective_failure_scope_flags(semantic_summary);
-    let (real_path_exists, real_cargo_project) =
-        planner_workspace_presence(target_root, semantic_summary);
+fn validate_repair_action_legality(actions: &[canon_event::LoopPlanned], target_root: &Path, semantic_summary: &SemanticStateSummary) -> Result<(), String> {
+    let (failure_scope_localized, failure_scope_workspace, failure_scope_tooling) = effective_failure_scope_flags(semantic_summary);
+    let (real_path_exists, real_cargo_project) = planner_workspace_presence(target_root, semantic_summary);
     let state = ConstraintState {
         semantic_path_exists: semantic_summary.path_exists,
         semantic_cargo_project: semantic_summary.cargo_project,
@@ -1019,8 +731,7 @@ fn validate_repair_action_legality(
         real_cargo_project,
         actionable_failure: effective_actionable_failure(semantic_summary),
         validation_blocked: semantic_summary.validation_blocked_by_preconditions,
-        entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
-            && semantic_summary.cargo_project,
+        entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None) && semantic_summary.cargo_project,
         module_gaps_present: !semantic_summary.module_gaps.is_empty(),
         recent_no_semantic_progress: false,
         failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
@@ -1033,52 +744,27 @@ fn validate_repair_action_legality(
         let Some(action) = classify_constraint_action_for_plan(planned) else {
             continue;
         };
-        match evaluate_constraint_context(&ConstraintContext {
-            state,
-            route: None,
-            action: Some(action),
-            deterministic_route: None,
-        }) {
+        match evaluate_constraint_context(&ConstraintContext { state, route: None, action: Some(action), deterministic_route: None }) {
             ConstraintDecision::Allow => {}
             ConstraintDecision::Forbid(reason) => return Err(reason.to_string()),
-            ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => {
-                return Err(reason.to_string())
-            }
+            ConstraintDecision::RewriteAction(_, reason) | ConstraintDecision::RewriteRoute(_, reason) => return Err(reason.to_string()),
         }
     }
     Ok(())
 }
 
-fn contains_expected_bootstrap_action(
-    actions: &[canon_event::LoopPlanned],
-    expected_choice: BootstrapCommandChoice,
-) -> bool {
-    actions.iter().any(|action| {
-        meta_invariant_tool_selection_correctness(
-            expected_choice.as_str(),
-            &action.action_kind,
-            &action.action_payload,
-        )
-    })
+fn contains_expected_bootstrap_action(actions: &[canon_event::LoopPlanned], expected_choice: BootstrapCommandChoice) -> bool {
+    actions.iter().any(|action| meta_invariant_tool_selection_correctness(expected_choice.as_str(), &action.action_kind, &action.action_payload))
 }
 
 fn contains_cargo_check(actions: &[canon_event::LoopPlanned]) -> bool {
-    actions.iter().any(|action| {
-        action.action_kind == "run_command"
-            && action
-                .action_payload
-                .get("cmd")
-                .and_then(|v| v.as_str())
-                .is_some_and(|cmd| cmd.contains("cargo check"))
-    })
+    actions.iter().any(|action| action.action_kind == "run_command" && action.action_payload.get("cmd").and_then(|v| v.as_str()).is_some_and(|cmd| cmd.contains("cargo check")))
 }
 
 fn contains_entrypoint_creation(actions: &[canon_event::LoopPlanned], target_root: &Path) -> bool {
     let main = target_root.join("src/main.rs");
     let lib = target_root.join("src/lib.rs");
-    actions
-        .iter()
-        .any(|action| touches_any_path(action, target_root, &[main.as_path(), lib.as_path()]))
+    actions.iter().any(|action| touches_any_path(action, target_root, &[main.as_path(), lib.as_path()]))
 }
 
 fn collect_action_intents(actions: &[canon_event::LoopPlanned], target_root: &Path) -> Vec<ActionIntent> {
@@ -1089,11 +775,7 @@ fn collect_action_intents(actions: &[canon_event::LoopPlanned], target_root: &Pa
     out
 }
 
-fn classify_action_intents(
-    action: &canon_event::LoopPlanned,
-    target_root: &Path,
-    out: &mut Vec<ActionIntent>,
-) {
+fn classify_action_intents(action: &canon_event::LoopPlanned, target_root: &Path, out: &mut Vec<ActionIntent>) {
     if action.action_kind == "run_command" {
         if let Some(cmd) = action.action_payload.get("cmd").and_then(|v| v.as_str()) {
             if cmd.contains("cargo new") {
@@ -1109,12 +791,7 @@ fn classify_action_intents(
     }
 
     if action.action_kind == "edit.rename_symbol" {
-        if let Some(path) = action
-            .action_payload
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-        {
+        if let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from) {
             let normalized = if path.is_absolute() { path } else { target_root.join(path) };
             out.push(ActionIntent::ResolveDuplicateDefinition(normalized));
         }
@@ -1122,12 +799,7 @@ fn classify_action_intents(
     }
 
     if action.action_kind == "edit.move_symbol" {
-        if let Some(path) = action
-            .action_payload
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-        {
+        if let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from) {
             let normalized = if path.is_absolute() { path } else { target_root.join(path) };
             out.push(ActionIntent::RestructureModules(normalized));
         }
@@ -1135,12 +807,7 @@ fn classify_action_intents(
     }
 
     if action.action_kind == "edit.add_import" {
-        if let Some(path) = action
-            .action_payload
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-        {
+        if let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from) {
             let normalized = if path.is_absolute() { path } else { target_root.join(path) };
             out.push(ActionIntent::FixUnresolvedImport(normalized));
         }
@@ -1148,12 +815,7 @@ fn classify_action_intents(
     }
 
     if action.action_kind == "edit.define_symbol_stub" {
-        if let Some(path) = action
-            .action_payload
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-        {
+        if let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from) {
             let normalized = if path.is_absolute() { path } else { target_root.join(path) };
             out.push(ActionIntent::DefineMissingSymbol(normalized));
         }
@@ -1161,12 +823,7 @@ fn classify_action_intents(
     }
 
     if action.action_kind == "edit.create_module_file" {
-        if let Some(path) = action
-            .action_payload
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-        {
+        if let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from) {
             let normalized = if path.is_absolute() { path } else { target_root.join(path) };
             out.push(ActionIntent::CreateModuleFile(normalized));
         }
@@ -1175,11 +832,7 @@ fn classify_action_intents(
 
     let touched = normalized_touched_paths(action, target_root);
     let created = normalized_created_paths(action, target_root);
-    let patch = action
-        .action_payload
-        .get("patch")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let patch = action.action_payload.get("patch").and_then(|v| v.as_str()).unwrap_or("");
 
     for path in &created {
         let path_text = path.to_string_lossy();
@@ -1189,10 +842,7 @@ fn classify_action_intents(
     }
 
     for path in &touched {
-        if patch.contains("allow(dead_code)")
-            && (path.to_string_lossy().ends_with("src/lib.rs")
-                || path.to_string_lossy().ends_with("src/main.rs"))
-        {
+        if patch.contains("allow(dead_code)") && (path.to_string_lossy().ends_with("src/lib.rs") || path.to_string_lossy().ends_with("src/main.rs")) {
             out.push(ActionIntent::FixDeadCodeConflict(path.clone()));
         }
         if is_trait_bound_edit(patch) {
@@ -1205,14 +855,8 @@ fn first_action_class(actions: &[canon_event::LoopPlanned]) -> Option<PlannedAct
     actions.first().map(classify_planned_action_class)
 }
 
-fn last_attempted_action_class(
-    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
-) -> Option<PlannedActionClass> {
-    recent_execution_results
-        .iter()
-        .rev()
-        .find_map(|result| result.attempted_kind.as_deref())
-        .map(classify_attempted_kind_class)
+fn last_attempted_action_class(recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord]) -> Option<PlannedActionClass> {
+    recent_execution_results.iter().rev().find_map(|result| result.attempted_kind.as_deref()).map(classify_attempted_kind_class)
 }
 
 fn classify_attempted_kind_class(attempted_kind: &str) -> PlannedActionClass {
@@ -1228,9 +872,7 @@ fn classify_attempted_kind_class(attempted_kind: &str) -> PlannedActionClass {
         | "define_missing_symbol"
         | "resolve_duplicate_definition"
         | "fix_trait_bound_failure" => PlannedActionClass::Mutation,
-        "read_file" | "list_dir" | "search_files" | "observe_workspace" => {
-            PlannedActionClass::PassiveDiscovery
-        }
+        "read_file" | "list_dir" | "search_files" | "observe_workspace" => PlannedActionClass::PassiveDiscovery,
         _ => PlannedActionClass::Unknown,
     }
 }
@@ -1244,9 +886,7 @@ fn match_action_intent(intent: &ActionIntent, hint_kind: &str, expected: &[PathB
         ("unresolved_import", ActionIntent::FixUnresolvedImport(path))
         | ("missing_symbol", ActionIntent::DefineMissingSymbol(path))
         | ("duplicate_definition", ActionIntent::ResolveDuplicateDefinition(path))
-        | ("trait_bound_failure", ActionIntent::FixTraitBoundFailure(path)) => {
-            expected.is_empty() || expected.iter().any(|candidate| candidate == path)
-        }
+        | ("trait_bound_failure", ActionIntent::FixTraitBoundFailure(path)) => expected.is_empty() || expected.iter().any(|candidate| candidate == path),
         _ => false,
     }
 }
@@ -1260,48 +900,28 @@ fn contains_module_creation(actions: &[canon_event::LoopPlanned], target_root: &
                 .and_then(|v| v.as_str())
                 .map(PathBuf::from)
                 .map(|path| if path.is_absolute() { path } else { target_root.join(path) })
-                .is_some_and(|path| {
-                    path.starts_with(target_root.join("src"))
-                        && path.extension().and_then(|s| s.to_str()) == Some("rs")
-                })
+                .is_some_and(|path| path.starts_with(target_root.join("src")) && path.extension().and_then(|s| s.to_str()) == Some("rs"))
     })
 }
 
 fn contains_dead_code_conflict_fix(actions: &[canon_event::LoopPlanned], target_root: &Path) -> bool {
     actions.iter().any(|action| {
-        if !touches_any_path(
-            action,
-            target_root,
-            &[target_root.join("src/lib.rs").as_path(), target_root.join("src/main.rs").as_path()],
-        ) {
+        if !touches_any_path(action, target_root, &[target_root.join("src/lib.rs").as_path(), target_root.join("src/main.rs").as_path()]) {
             return false;
         }
         if action.action_kind == "apply_patch" {
-            return action
-                .action_payload
-                .get("patch")
-                .and_then(|v| v.as_str())
-                .is_some_and(|patch| patch.contains("allow(dead_code)"));
+            return action.action_payload.get("patch").and_then(|v| v.as_str()).is_some_and(|patch| patch.contains("allow(dead_code)"));
         }
         true
     })
 }
 
 fn touches_test_surface(action: &canon_event::LoopPlanned, target_root: &Path) -> bool {
-    touches_any_path(
-        action,
-        target_root,
-        &[
-            target_root.join("tests").as_path(),
-            target_root.join("src").as_path(),
-        ],
-    ) && touched_paths(action).into_iter().any(|path| {
-        let text = path.to_string_lossy();
-        text.contains("/tests/")
-            || text.starts_with("tests/")
-            || text.ends_with("_test.rs")
-            || text.ends_with("_tests.rs")
-    })
+    touches_any_path(action, target_root, &[target_root.join("tests").as_path(), target_root.join("src").as_path()])
+        && touched_paths(action).into_iter().any(|path| {
+            let text = path.to_string_lossy();
+            text.contains("/tests/") || text.starts_with("tests/") || text.ends_with("_test.rs") || text.ends_with("_tests.rs")
+        })
 }
 
 fn expected_entrypoint_paths(semantic_summary: &SemanticStateSummary, target_root: &Path) -> Vec<PathBuf> {
@@ -1346,11 +966,7 @@ fn expected_dead_code_paths(semantic_summary: &SemanticStateSummary, target_root
     out
 }
 
-fn expected_hint_paths(
-    semantic_summary: &SemanticStateSummary,
-    hint_kind: &str,
-    target_root: &Path,
-) -> Vec<PathBuf> {
+fn expected_hint_paths(semantic_summary: &SemanticStateSummary, hint_kind: &str, target_root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for hint in &semantic_summary.compiler_hints {
         if hint.kind != hint_kind {
@@ -1361,11 +977,7 @@ fn expected_hint_paths(
                 continue;
             }
             let candidate = PathBuf::from(target);
-            out.push(if candidate.is_absolute() {
-                candidate
-            } else {
-                target_root.join(target)
-            });
+            out.push(if candidate.is_absolute() { candidate } else { target_root.join(target) });
         }
     }
     out.sort();
@@ -1379,13 +991,7 @@ fn touches_any_path(action: &canon_event::LoopPlanned, target_root: &Path, expec
 }
 
 fn has_trait_bound_edit(patch: &str) -> bool {
-    patch.lines().any(|line| {
-        (line.starts_with('+') || line.starts_with('-'))
-            && (line.contains("impl ")
-                || line.contains("where ")
-                || line.contains("derive(")
-                || line.contains(": "))
-    })
+    patch.lines().any(|line| (line.starts_with('+') || line.starts_with('-')) && (line.contains("impl ") || line.contains("where ") || line.contains("derive(") || line.contains(": ")))
 }
 
 fn is_trait_bound_edit(patch: &str) -> bool {
@@ -1393,28 +999,16 @@ fn is_trait_bound_edit(patch: &str) -> bool {
 }
 
 fn normalized_touched_paths(action: &canon_event::LoopPlanned, target_root: &Path) -> Vec<PathBuf> {
-    touched_paths(action)
-        .into_iter()
-        .map(|path| if path.is_absolute() { path } else { target_root.join(path) })
-        .collect()
+    touched_paths(action).into_iter().map(|path| if path.is_absolute() { path } else { target_root.join(path) }).collect()
 }
 
 fn normalized_created_paths(action: &canon_event::LoopPlanned, target_root: &Path) -> Vec<PathBuf> {
-    created_paths(action)
-        .into_iter()
-        .map(|path| if path.is_absolute() { path } else { target_root.join(path) })
-        .collect()
+    created_paths(action).into_iter().map(|path| if path.is_absolute() { path } else { target_root.join(path) }).collect()
 }
 
 fn touched_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
     match action.action_kind.as_str() {
-        "write_file" | "read_file" | "list_dir" | "patch_file" => action
-            .action_payload
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .into_iter()
-            .collect(),
+        "write_file" | "read_file" | "list_dir" | "patch_file" => action.action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from).into_iter().collect(),
         "apply_patch" => action
             .action_payload
             .get("patch")
@@ -1424,9 +1018,7 @@ fn touched_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
                 args.hunks
                     .into_iter()
                     .map(|hunk| match hunk {
-                        canon_tools_patch::Hunk::AddFile { path, .. }
-                        | canon_tools_patch::Hunk::DeleteFile { path }
-                        | canon_tools_patch::Hunk::UpdateFile { path, .. } => path,
+                        canon_tools_patch::Hunk::AddFile { path, .. } | canon_tools_patch::Hunk::DeleteFile { path } | canon_tools_patch::Hunk::UpdateFile { path, .. } => path,
                     })
                     .collect()
             })
@@ -1437,13 +1029,7 @@ fn touched_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
 
 fn created_paths(action: &canon_event::LoopPlanned) -> Vec<PathBuf> {
     match action.action_kind.as_str() {
-        "write_file" => action
-            .action_payload
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from)
-            .into_iter()
-            .collect(),
+        "write_file" => action.action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from).into_iter().collect(),
         "apply_patch" => action
             .action_payload
             .get("patch")
@@ -1666,69 +1252,29 @@ mod tests {
     #[test]
     fn bootstrap_precondition_requires_cargo_new_for_missing_target() {
         let root = std::env::temp_dir().join(format!("canon_bootstrap_missing_target_{}", uuid::Uuid::new_v4()));
-        let actions = vec![planned_run_command(
-            "cargo init --name event_sim_coverage .",
-            &root.display().to_string(),
-        )];
-        let err = validate_preconditions(
-            &actions,
-            &root,
-            &[PlanningPrecondition::MustBootstrapWorkspace],
-            &SemanticStateSummary::default(),
-        )
-        .unwrap_err();
-        assert_eq!(
-            err,
-            "target workspace is missing; first plan must create the workspace with cargo new"
-        );
+        let actions = vec![planned_run_command("cargo init --name event_sim_coverage .", &root.display().to_string())];
+        let err = validate_preconditions(&actions, &root, &[PlanningPrecondition::MustBootstrapWorkspace], &SemanticStateSummary::default()).unwrap_err();
+        assert_eq!(err, "target workspace is missing; first plan must create the workspace with cargo new");
     }
 
     #[test]
     fn bootstrap_precondition_requires_cargo_init_for_existing_non_cargo_target() {
         let root = std::env::temp_dir().join(format!("canon_bootstrap_existing_dir_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
-        let actions = vec![planned_run_command(
-            "cargo new event_sim_coverage",
-            &root.display().to_string(),
-        )];
-        let err = validate_preconditions(
-            &actions,
-            &root,
-            &[PlanningPrecondition::MustBootstrapWorkspace],
-            &SemanticStateSummary::default(),
-        )
-        .unwrap_err();
-        assert_eq!(
-            err,
-            "target directory exists but is not a Cargo project; first plan must initialize it with cargo init"
-        );
+        let actions = vec![planned_run_command("cargo new event_sim_coverage", &root.display().to_string())];
+        let err = validate_preconditions(&actions, &root, &[PlanningPrecondition::MustBootstrapWorkspace], &SemanticStateSummary::default()).unwrap_err();
+        assert_eq!(err, "target directory exists but is not a Cargo project; first plan must initialize it with cargo init");
     }
 
     #[test]
     fn bootstrap_precondition_detects_state_vs_reality_mismatch() {
         let root = std::env::temp_dir().join(format!("canon_bootstrap_state_mismatch_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"event_sim_coverage\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"event_sim_coverage\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
-        let actions = vec![planned_run_command(
-            "cargo init --name event_sim_coverage .",
-            &root.display().to_string(),
-        )];
-        let err = validate_preconditions(
-            &actions,
-            &root,
-            &[PlanningPrecondition::MustBootstrapWorkspace],
-            &SemanticStateSummary::default(),
-        )
-        .unwrap_err();
-        assert_eq!(
-            err,
-            "semantic state says bootstrap is required, but the target already contains Cargo.toml; refresh observation before planning bootstrap"
-        );
+        let actions = vec![planned_run_command("cargo init --name event_sim_coverage .", &root.display().to_string())];
+        let err = validate_preconditions(&actions, &root, &[PlanningPrecondition::MustBootstrapWorkspace], &SemanticStateSummary::default()).unwrap_err();
+        assert_eq!(err, "semantic state says bootstrap is required, but the target already contains Cargo.toml; refresh observation before planning bootstrap");
     }
 
     #[test]
@@ -1749,12 +1295,7 @@ mod tests {
             signals: None,
             depends_on: Vec::new(),
         }];
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustCreateEntrypoint],
-            &SemanticStateSummary::default(),
-        );
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustCreateEntrypoint], &SemanticStateSummary::default());
         assert!(result.is_err());
     }
 
@@ -1766,19 +1307,10 @@ mod tests {
             &actions,
             &root,
             &[],
-            &SemanticStateSummary {
-                complete: true,
-                path_exists: false,
-                cargo_project: false,
-                target_root: Some(root.display().to_string()),
-                ..SemanticStateSummary::default()
-            },
+            &SemanticStateSummary { complete: true, path_exists: false, cargo_project: false, target_root: Some(root.display().to_string()), ..SemanticStateSummary::default() },
         );
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            "cargo check planned before bootstrapping the target workspace"
-        );
+        assert_eq!(result.unwrap_err(), "cargo check planned before bootstrapping the target workspace");
     }
 
     #[test]
@@ -1801,18 +1333,8 @@ mod tests {
             signals: None,
             depends_on: Vec::new(),
         }];
-        let summary = SemanticStateSummary {
-            complete: true,
-            target_root: Some("/tmp/example".into()),
-            module_gaps: vec!["index -> src/index.rs".into()],
-            ..SemanticStateSummary::default()
-        };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustCreateMissingModules],
-            &summary,
-        );
+        let summary = SemanticStateSummary { complete: true, target_root: Some("/tmp/example".into()), module_gaps: vec!["index -> src/index.rs".into()], ..SemanticStateSummary::default() };
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustCreateMissingModules], &summary);
         assert!(result.is_err());
     }
 
@@ -1836,52 +1358,23 @@ mod tests {
             signals: None,
             depends_on: Vec::new(),
         }];
-        let summary = SemanticStateSummary {
-            complete: true,
-            target_root: Some("/tmp/example".into()),
-            module_gaps: vec!["index -> src/index.rs".into()],
-            ..SemanticStateSummary::default()
-        };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustCreateMissingModules],
-            &summary,
-        );
+        let summary = SemanticStateSummary { complete: true, target_root: Some("/tmp/example".into()), module_gaps: vec!["index -> src/index.rs".into()], ..SemanticStateSummary::default() };
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustCreateMissingModules], &summary);
         assert!(result.is_err());
     }
 
     #[test]
     fn accepts_missing_module_semantic_create_module_file() {
         let actions = vec![planned_create_module_file("src/index.rs")];
-        let summary = SemanticStateSummary {
-            complete: true,
-            target_root: Some("/tmp/example".into()),
-            module_gaps: vec!["index -> src/index.rs".into()],
-            ..SemanticStateSummary::default()
-        };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustCreateMissingModules],
-            &summary,
-        );
+        let summary = SemanticStateSummary { complete: true, target_root: Some("/tmp/example".into()), module_gaps: vec!["index -> src/index.rs".into()], ..SemanticStateSummary::default() };
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustCreateMissingModules], &summary);
         assert!(result.is_ok());
     }
 
     #[test]
     fn repair_intents_preserve_priority_order() {
-        let intents = super::derive_repair_intents(&[
-            PlanningPrecondition::MustBootstrapWorkspace,
-            PlanningPrecondition::MustCreateMissingModules,
-        ], None);
-        assert_eq!(
-            intents,
-            vec![
-                super::RepairIntent::BootstrapWorkspace,
-                super::RepairIntent::CreateMissingModules,
-            ]
-        );
+        let intents = super::derive_repair_intents(&[PlanningPrecondition::MustBootstrapWorkspace, PlanningPrecondition::MustCreateMissingModules], None);
+        assert_eq!(intents, vec![super::RepairIntent::BootstrapWorkspace, super::RepairIntent::CreateMissingModules,]);
     }
 
     #[test]
@@ -1891,14 +1384,7 @@ mod tests {
             "must_fix_dead_code_forbid_conflict=true repair=remove_allow_dead_code_or_make_code_used".into(),
             "must_fix_unresolved_import=true repair=edit_import_or_define_missing_import_target".into(),
         ]);
-        assert_eq!(
-            derived,
-            vec![
-                PlanningPrecondition::MustCreateEntrypoint,
-                PlanningPrecondition::MustFixDeadCodeForbidConflict,
-                PlanningPrecondition::MustFixUnresolvedImport,
-            ]
-        );
+        assert_eq!(derived, vec![PlanningPrecondition::MustCreateEntrypoint, PlanningPrecondition::MustFixDeadCodeForbidConflict, PlanningPrecondition::MustFixUnresolvedImport,]);
     }
 
     #[test]
@@ -1932,12 +1418,7 @@ mod tests {
             )],
             ..SemanticStateSummary::default()
         };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustFixUnresolvedImport],
-            &summary,
-        );
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustFixUnresolvedImport], &summary);
         assert!(result.is_err());
     }
 
@@ -1955,12 +1436,7 @@ mod tests {
             )],
             ..SemanticStateSummary::default()
         };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustFixUnresolvedImport],
-            &summary,
-        );
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustFixUnresolvedImport], &summary);
         assert!(result.is_ok());
     }
 
@@ -1978,12 +1454,7 @@ mod tests {
             )],
             ..SemanticStateSummary::default()
         };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustResolveDuplicateDefinition],
-            &summary,
-        );
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustResolveDuplicateDefinition], &summary);
         assert!(result.is_err());
     }
 
@@ -2001,12 +1472,7 @@ mod tests {
             )],
             ..SemanticStateSummary::default()
         };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustResolveDuplicateDefinition],
-            &summary,
-        );
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustResolveDuplicateDefinition], &summary);
         assert!(result.is_ok());
     }
 
@@ -2021,16 +1487,8 @@ mod tests {
             graph_call_edge_count: Some(2),
             ..SemanticStateSummary::default()
         };
-        let objective_state =
-            canon_semantic_state::derive_self_development_objective_state(&summary, 0, &[], &Default::default());
-        let result = super::validate_development_strategy_alignment(
-            &actions,
-            Path::new("/tmp/example"),
-            &summary,
-            &objective_state,
-            &Default::default(),
-            None,
-        );
+        let objective_state = canon_semantic_state::derive_self_development_objective_state(&summary, 0, &[], &Default::default());
+        let result = super::validate_development_strategy_alignment(&actions, Path::new("/tmp/example"), &summary, &objective_state, &Default::default(), None);
         assert!(result.is_ok());
     }
 
@@ -2040,20 +1498,10 @@ mod tests {
         let summary = SemanticStateSummary {
             complete: true,
             target_root: Some("/tmp/example".into()),
-            compiler_hints: vec![CompilerHintRecord::new(
-                CompilerHintKind::MissingSymbol,
-                "compiler cannot find `run` in scope",
-                "define or import the missing symbol",
-                vec!["src/main.rs".into()],
-            )],
+            compiler_hints: vec![CompilerHintRecord::new(CompilerHintKind::MissingSymbol, "compiler cannot find `run` in scope", "define or import the missing symbol", vec!["src/main.rs".into()])],
             ..SemanticStateSummary::default()
         };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustDefineMissingSymbol],
-            &summary,
-        );
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustDefineMissingSymbol], &summary);
         assert!(result.is_err());
     }
 
@@ -2063,20 +1511,10 @@ mod tests {
         let summary = SemanticStateSummary {
             complete: true,
             target_root: Some("/tmp/example".into()),
-            compiler_hints: vec![CompilerHintRecord::new(
-                CompilerHintKind::MissingSymbol,
-                "compiler cannot find `run` in scope",
-                "define or import the missing symbol",
-                vec!["src/main.rs".into()],
-            )],
+            compiler_hints: vec![CompilerHintRecord::new(CompilerHintKind::MissingSymbol, "compiler cannot find `run` in scope", "define or import the missing symbol", vec!["src/main.rs".into()])],
             ..SemanticStateSummary::default()
         };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustDefineMissingSymbol],
-            &summary,
-        );
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustDefineMissingSymbol], &summary);
         assert!(result.is_ok());
     }
 
@@ -2094,23 +1532,14 @@ mod tests {
             )],
             ..SemanticStateSummary::default()
         };
-        let result = validate_preconditions(
-            &actions,
-            Path::new("/tmp/example"),
-            &[PlanningPrecondition::MustFixTraitBoundFailure],
-            &summary,
-        );
+        let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[PlanningPrecondition::MustFixTraitBoundFailure], &summary);
         assert!(result.is_ok());
     }
 
     #[test]
     fn rejects_repair_plan_without_actionable_failure() {
         let actions = vec![planned_add_import("src/lib.rs")];
-        let summary = SemanticStateSummary {
-            complete: true,
-            target_root: Some("/tmp/example".into()),
-            ..SemanticStateSummary::default()
-        };
+        let summary = SemanticStateSummary { complete: true, target_root: Some("/tmp/example".into()), ..SemanticStateSummary::default() };
         let result = validate_preconditions(&actions, Path::new("/tmp/example"), &[], &summary);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("no actionable failure"));
@@ -2139,22 +1568,12 @@ mod tests {
             target_root: Some("/tmp/example".into()),
             path_exists: false,
             cargo_project: false,
-            planning_preconditions: vec![
-                "must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".into(),
-            ],
+            planning_preconditions: vec!["must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".into()],
             ..SemanticStateSummary::default()
         };
-        let result = super::validate_objective_route_plan_alignment(
-            &actions,
-            Path::new("/tmp/example"),
-            "plan",
-            "remove validation blockers",
-            &summary,
-        );
+        let result = super::validate_objective_route_plan_alignment(&actions, Path::new("/tmp/example"), "plan", "remove validation blockers", &summary);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("validates without addressing the repair target"));
+        assert!(result.unwrap_err().contains("validates without addressing the repair target"));
     }
 
     #[test]
@@ -2164,21 +1583,10 @@ mod tests {
             complete: true,
             target_root: Some("/tmp/example".into()),
             compiler_repair_required: true,
-            compiler_hints: vec![CompilerHintRecord::new(
-                CompilerHintKind::UnresolvedImport,
-                "compiler reports unresolved import",
-                "use semantic import repair",
-                vec!["src/lib.rs".into()],
-            )],
+            compiler_hints: vec![CompilerHintRecord::new(CompilerHintKind::UnresolvedImport, "compiler reports unresolved import", "use semantic import repair", vec!["src/lib.rs".into()])],
             ..SemanticStateSummary::default()
         };
-        let result = super::validate_objective_route_plan_alignment(
-            &actions,
-            Path::new("/tmp/example"),
-            "verify",
-            "reduce compiler repair pressure",
-            &summary,
-        );
+        let result = super::validate_objective_route_plan_alignment(&actions, Path::new("/tmp/example"), "verify", "reduce compiler repair pressure", &summary);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("verification is premature"));
     }
@@ -2221,23 +1629,10 @@ mod tests {
             signals: None,
             depends_on: Vec::new(),
         }];
-        let trend = canon_semantic_state::ObjectiveTrendState {
-            current_no_progress_streak: 2,
-            ..Default::default()
-        };
-        let results = vec![canon_semantic_state::SemanticExecutionResultRecord::new(
-            "no_semantic_progress",
-            "read_file did not expand semantic state",
-            vec!["src/lib.rs".into()],
-            false,
-        )
-        .with_attempted_kind("read_file")];
-        let result = super::validate_trend_intent_alignment(
-            &actions,
-            Path::new("/tmp/example"),
-            &results,
-            &trend,
-        );
+        let trend = canon_semantic_state::ObjectiveTrendState { current_no_progress_streak: 2, ..Default::default() };
+        let results = vec![canon_semantic_state::SemanticExecutionResultRecord::new("no_semantic_progress", "read_file did not expand semantic state", vec!["src/lib.rs".into()], false)
+            .with_attempted_kind("read_file")];
+        let result = super::validate_trend_intent_alignment(&actions, Path::new("/tmp/example"), &results, &trend);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("state-changing first batch"));
     }
@@ -2263,19 +1658,9 @@ mod tests {
                 depends_on: Vec::new(),
             },
         ];
-        let trend = canon_semantic_state::ObjectiveTrendState {
-            planning_attempts: 4,
-            invalid_plan_events: 3,
-            ..Default::default()
-        };
-        let result = super::validate_trend_intent_alignment(
-            &actions,
-            Path::new("/tmp/example"),
-            &[],
-            &trend,
-        );
+        let trend = canon_semantic_state::ObjectiveTrendState { planning_attempts: 4, invalid_plan_events: 3, ..Default::default() };
+        let result = super::validate_trend_intent_alignment(&actions, Path::new("/tmp/example"), &[], &trend);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("single-action first batch"));
     }
-
 }

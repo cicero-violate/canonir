@@ -41,4 +41,3 @@ impl Reducer for Execution {
         *self = Self::default();
     }
 }
-

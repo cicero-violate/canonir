@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use canon_event::{EventId, RuntimeEvent, EditEvent, EventEmitter, EventEmitterHandle, RenameSymbol};
+use canon_event::{EditEvent, EventEmitter, EventEmitterHandle, EventId, RenameSymbol, RuntimeEvent};
 use canon_exec::{ExecutableEvent, ExecutionContext};
 
 struct NullEmitter;

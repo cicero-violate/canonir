@@ -10,10 +10,7 @@ mod tests {
         let model = WorkspaceModel::inspect(goal, PathBuf::from("/tmp").as_path()).unwrap();
         assert!(!model.path_exists);
         assert_eq!(model.entrypoint_kind, EntrypointKind::None);
-        assert!(model
-            .planner_lines()
-            .iter()
-            .any(|line| line.contains("first action must create/init")));
+        assert!(model.planner_lines().iter().any(|line| line.contains("first action must create/init")));
     }
 
     #[test]

@@ -6,7 +6,6 @@ pub mod hooks;
 mod invariants;
 
 use bus::EventBus;
-use canon_invariant::{invariant_violation_delta, invariant_violation_state};
 use canon_event::BinarySegmentWriter;
 use canon_event::{
     new_error_occurred, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CapabilityCompleted, CapabilityFailed, Code, DebugEvent, ErrorOccurred, EventClass, EventConsumer, EventDelta, EventEmitter,
@@ -14,6 +13,7 @@ use canon_event::{
 };
 use canon_event::{EdgeDefined, EdgeRemoved, FileSeen, NodeDefined, NodeRemoved, NodeUpdated};
 use canon_event_store::{extract_edit_event, extract_rustc_event, read_any_events_from_path, AnyEvent};
+use canon_invariant::{invariant_violation_delta, invariant_violation_state};
 use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,11 +30,11 @@ struct CapabilityFailedOwned {
     capability: String,
     error: String,
 }
+use invariants::InvariantEngine;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use invariants::InvariantEngine;
 
 enum RuntimeMode {
     Running,
@@ -365,13 +365,7 @@ impl EventRuntime {
         Ok(())
     }
 
-    pub fn emit_event_with_parents(
-        &mut self,
-        event: RuntimeEvent,
-        parent_ids: Vec<canon_event::EventId>,
-        file: &'static str,
-        line: u32,
-    ) -> Result<()> {
+    pub fn emit_event_with_parents(&mut self, event: RuntimeEvent, parent_ids: Vec<canon_event::EventId>, file: &'static str, line: u32) -> Result<()> {
         self.handle_runtime_event_located_with_parents(event, file, line, parent_ids)?;
         self.drain_emitted_events()?;
         Ok(())
@@ -459,9 +453,7 @@ impl EventRuntime {
         }
         self.append_runtime_event(&event, file, line, parent_ids, event_id.clone());
         if emit_mode_update {
-            let mode_update = RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated {
-                payload: self.runtime_mode_update_payload(),
-            });
+            let mode_update = RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: self.runtime_mode_update_payload() });
             let mode_update_id = canon_event::EventId::new(canon_event::new_event_id());
             self.bus.dispatch(mode_update.clone(), mode_update_id.clone());
             self.append_runtime_event(&mode_update, file, line, vec![event_id.clone()], mode_update_id);
@@ -506,9 +498,9 @@ impl EventRuntime {
                     }),
                     None,
                 ))),
-                RustcEvent::InvariantViolation(payload) => Some(RuntimeEvent::ErrorOccurred(new_error_occurred(
-                    "invariant_violation", "rustc", payload.message.clone(), "error", serde_json::json!({}), None,
-                ))),
+                RustcEvent::InvariantViolation(payload) => {
+                    Some(RuntimeEvent::ErrorOccurred(new_error_occurred("invariant_violation", "rustc", payload.message.clone(), "error", serde_json::json!({}), None)))
+                }
                 _ => None,
             },
             RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload }) => {
@@ -526,22 +518,10 @@ impl EventRuntime {
         Ok(())
     }
 
-    fn record_emission_blocked(
-        &mut self,
-        event: &RuntimeEvent,
-        file: &'static str,
-        line: u32,
-        parent_ids: Vec<canon_event::EventId>,
-    ) -> Result<()> {
-        let reason = self
-            .fatal_halt_reason()
-            .unwrap_or_else(|| "fatal invariant halt active".to_string());
+    fn record_emission_blocked(&mut self, event: &RuntimeEvent, file: &'static str, line: u32, parent_ids: Vec<canon_event::EventId>) -> Result<()> {
+        let reason = self.fatal_halt_reason().unwrap_or_else(|| "fatal invariant halt active".to_string());
         let blocked = RuntimeEvent::Code(Code {
-            delta: invariant_violation_delta(format!(
-                "emission_blocked; halted_by={}; denied_kind={}",
-                reason,
-                canon_event::event_kind_str(event)
-            )),
+            delta: invariant_violation_delta(format!("emission_blocked; halted_by={}; denied_kind={}", reason, canon_event::event_kind_str(event))),
             state: invariant_violation_state(),
         });
         let blocked_id = canon_event::EventId::new(canon_event::new_event_id());
@@ -591,10 +571,7 @@ impl EventRuntime {
             Err(err) => {
                 eprintln!("[canon-runtime] append guard rejected kind={} err={}", canon_event::event_kind_str(event), err);
                 if !matches!(event, RuntimeEvent::Code(_)) {
-                    let recovery = RuntimeEvent::Code(Code {
-                        delta: invariant_violation_delta(err),
-                        state: invariant_violation_state(),
-                    });
+                    let recovery = RuntimeEvent::Code(Code { delta: invariant_violation_delta(err), state: invariant_violation_state() });
                     let recovery_id = canon_event::EventId::new(canon_event::new_event_id());
                     self.append_runtime_event(&recovery, file, line, Vec::new(), recovery_id);
                 }
@@ -626,10 +603,7 @@ impl EventRuntime {
                 h.finish()
             };
             if self.last_kind_hash.get(&wire.kind) == Some(&content_hash) {
-                eprintln!(
-                    "[runtime][dedup_drop] kind={} id={} — skipping consecutive duplicate",
-                    wire.kind, wire.id
-                );
+                eprintln!("[runtime][dedup_drop] kind={} id={} — skipping consecutive duplicate", wire.kind, wire.id);
                 return; // identical consecutive event for this kind — skip write
             }
             self.last_kind_hash.insert(wire.kind, content_hash);
@@ -644,24 +618,13 @@ impl EventRuntime {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
                     if let Err(err) = w.write_canon_event(&wire) {
-                        eprintln!(
-                            "[canon-runtime] append failed kind={} id={} path={} err={}",
-                            wire.kind,
-                            wire.id,
-                            path.display(),
-                            err
-                        );
+                        eprintln!("[canon-runtime] append failed kind={} id={} path={} err={}", wire.kind, wire.id, path.display(), err);
                         !err.to_string().contains("invariant violation")
                     } else {
                         false
                     }
                 } else {
-                    eprintln!(
-                        "[canon-runtime] append failed kind={} id={} path={} err=writer_lock_poisoned",
-                        wire.kind,
-                        wire.id,
-                        path.display()
-                    );
+                    eprintln!("[canon-runtime] append failed kind={} id={} path={} err=writer_lock_poisoned", wire.kind, wire.id, path.display());
                     false
                 };
                 if needs_reopen {
@@ -669,29 +632,13 @@ impl EventRuntime {
                         if let Ok(mut w) = writer_arc.lock() {
                             *w = fresh;
                             if let Err(err) = w.write_canon_event(&wire) {
-                                eprintln!(
-                                    "[canon-runtime] append retry failed kind={} id={} path={} err={}",
-                                    wire.kind,
-                                    wire.id,
-                                    path.display(),
-                                    err
-                                );
+                                eprintln!("[canon-runtime] append retry failed kind={} id={} path={} err={}", wire.kind, wire.id, path.display(), err);
                             }
                         } else {
-                            eprintln!(
-                                "[canon-runtime] append retry failed kind={} id={} path={} err=writer_lock_poisoned",
-                                wire.kind,
-                                wire.id,
-                                path.display()
-                            );
+                            eprintln!("[canon-runtime] append retry failed kind={} id={} path={} err=writer_lock_poisoned", wire.kind, wire.id, path.display());
                         }
                     } else {
-                        eprintln!(
-                            "[canon-runtime] append retry failed kind={} id={} path={} err=reopen_failed",
-                            wire.kind,
-                            wire.id,
-                            path.display()
-                        );
+                        eprintln!("[canon-runtime] append retry failed kind={} id={} path={} err=reopen_failed", wire.kind, wire.id, path.display());
                     }
                 }
             }
@@ -713,11 +660,7 @@ fn payload_from_shape<T: canon_event::CanonPayloadShape>(val: &T, emit_file: &'s
 }
 
 fn runtime_event_to_wire(
-    event: &RuntimeEvent,
-    parent_ids: Vec<canon_event::EventId>,
-    event_id: canon_event::EventId,
-    emit_file: &'static str,
-    emit_line: u32,
+    event: &RuntimeEvent, parent_ids: Vec<canon_event::EventId>, event_id: canon_event::EventId, emit_file: &'static str, emit_line: u32,
 ) -> Result<Option<canon_event::CanonEvent>, String> {
     let (kind, payload) = match event {
         RuntimeEvent::Code(p) => (canon_event::EventKind::Code, payload_from_shape(p, emit_file, emit_line)),
@@ -787,20 +730,9 @@ fn runtime_event_to_wire(
     ];
     let root = ROOT_KINDS.contains(&kind);
     if parent_ids.is_empty() && !root {
-        return Err(format!(
-            "invariant violation: non-root event kind={} id={} has no parent_ids — causal chain broken (emitted from {}:{})",
-            kind, event_id, emit_file, emit_line
-        ));
+        return Err(format!("invariant violation: non-root event kind={} id={} has no parent_ids — causal chain broken (emitted from {}:{})", kind, event_id, emit_file, emit_line));
     }
-    Ok(Some(canon_event::CanonEvent::new(
-        event_id,
-        parent_ids,
-        actor.to_string(),
-        kind,
-        now_ms(),
-        payload,
-        root,
-    )))
+    Ok(Some(canon_event::CanonEvent::new(event_id, parent_ids, actor.to_string(), kind, now_ms(), payload, root)))
 }
 
 /// Returns true for paths that should use `BinarySegmentWriter`:
@@ -848,12 +780,8 @@ fn is_allowed_during_fatal_halt(event: &RuntimeEvent) -> bool {
 
 fn recovery_signal_reason(event: &RuntimeEvent) -> Option<String> {
     match event {
-        RuntimeEvent::ErrorOccurred(err) if matches!(err.kind.as_str(), "recovery_event" | "reset_event" | "override_event") => {
-            Some(err.kind.clone())
-        }
-        RuntimeEvent::Debug(debug) if matches!(debug.kind.as_str(), "recovery_event" | "reset_event" | "override_event") => {
-            Some(debug.kind.clone())
-        }
+        RuntimeEvent::ErrorOccurred(err) if matches!(err.kind.as_str(), "recovery_event" | "reset_event" | "override_event") => Some(err.kind.clone()),
+        RuntimeEvent::Debug(debug) if matches!(debug.kind.as_str(), "recovery_event" | "reset_event" | "override_event") => Some(debug.kind.clone()),
         _ => None,
     }
 }

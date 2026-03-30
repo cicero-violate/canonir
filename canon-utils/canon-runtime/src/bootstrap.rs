@@ -1,5 +1,5 @@
-use serde::Deserialize;
 use canon_prompt_events::{prompt_file_id, prompt_loaded_payload, GOAL_PROMPT_FILE, GOAL_PROMPT_ID, PROMPTS_DIR};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -136,7 +136,5 @@ pub fn reload_prompt_file(path: &Path, registry: &PromptRegistryHandle) -> Optio
     if let Ok(mut reg) = registry.write() {
         reg.prompts.insert(prompt_id.clone(), content.clone());
     }
-    Some(canon_event::PromptLoaded {
-        payload: prompt_loaded_payload(&prompt_id, &path.display().to_string(), &content),
-    })
+    Some(canon_event::PromptLoaded { payload: prompt_loaded_payload(&prompt_id, &path.display().to_string(), &content) })
 }

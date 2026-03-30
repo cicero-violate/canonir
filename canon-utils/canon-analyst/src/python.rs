@@ -10,18 +10,9 @@ pub fn run(code: &str, tlog_path: &str) -> Result<PythonResult> {
     tmp.write_all(code.as_bytes())?;
     tmp.flush()?;
 
-    let output = Command::new("python3")
-        .arg(tmp.path())
-        .env("CANON_TLOG", tlog_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
+    let output = Command::new("python3").arg(tmp.path()).env("CANON_TLOG", tlog_path).stdout(Stdio::piped()).stderr(Stdio::piped()).output()?;
 
-    Ok(PythonResult {
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        exit_code: output.status.code().unwrap_or(-1),
-    })
+    Ok(PythonResult { stdout: String::from_utf8_lossy(&output.stdout).into_owned(), stderr: String::from_utf8_lossy(&output.stderr).into_owned(), exit_code: output.status.code().unwrap_or(-1) })
 }
 
 pub struct PythonResult {
@@ -48,5 +39,9 @@ impl PythonResult {
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+    if s.len() <= max {
+        s
+    } else {
+        &s[..max]
+    }
 }

@@ -58,18 +58,7 @@ impl SymbolIndex {
         dedup_spans(&mut span_index);
         let uses_crate_prefix = module_files.keys().any(|k| k.starts_with("crate::"));
 
-        Ok(Self {
-            span_index,
-            symbol_kinds,
-            symbol_catalog,
-            alias_targets: HashMap::new(),
-            normalized_sources: HashMap::new(),
-            tlog_offset,
-            module_files,
-            file_modules,
-            files,
-            uses_crate_prefix,
-        })
+        Ok(Self { span_index, symbol_kinds, symbol_catalog, alias_targets: HashMap::new(), normalized_sources: HashMap::new(), tlog_offset, module_files, file_modules, files, uses_crate_prefix })
     }
 
     pub fn build(project_root: &Path) -> Result<Self> {
@@ -154,10 +143,7 @@ impl SymbolIndex {
     }
 
     pub fn resolve_symbol_id(&self, symbol_id: &str) -> String {
-        self.alias_targets
-            .get(symbol_id)
-            .cloned()
-            .unwrap_or_else(|| symbol_id.to_string())
+        self.alias_targets.get(symbol_id).cloned().unwrap_or_else(|| symbol_id.to_string())
     }
 
     pub fn alias_targets(&self) -> &HashMap<String, String> {
@@ -247,10 +233,7 @@ impl SymbolIndex {
             let Some((name, kind)) = graph_symbol_identity(&ir, &node.kind) else {
                 continue;
             };
-            let module_path = module_membership
-                .get(&node.id.0)
-                .cloned()
-                .unwrap_or_else(|| "crate".to_string());
+            let module_path = module_membership.get(&node.id.0).cloned().unwrap_or_else(|| "crate".to_string());
             let symbol_id = format!("{module_path}::{name}");
             if symbol_kinds.contains_key(&symbol_id) {
                 return Err(anyhow!("graph index invariant: duplicate canonical symbol id: {symbol_id}"));
@@ -267,26 +250,11 @@ impl SymbolIndex {
         }
         dedup_spans(&mut span_index);
 
-        Ok(Self {
-            span_index,
-            symbol_kinds,
-            symbol_catalog,
-            alias_targets,
-            normalized_sources,
-            tlog_offset: 0,
-            module_files,
-            file_modules,
-            files,
-            uses_crate_prefix: true,
-        })
+        Ok(Self { span_index, symbol_kinds, symbol_catalog, alias_targets, normalized_sources, tlog_offset: 0, module_files, file_modules, files, uses_crate_prefix: true })
     }
 }
 
-fn build_source_spans(
-    symbol_catalog: &[(String, String)],
-    normalized_sources: &HashMap<PathBuf, String>,
-    span_index: &mut HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>,
-) {
+fn build_source_spans(symbol_catalog: &[(String, String)], normalized_sources: &HashMap<PathBuf, String>, span_index: &mut HashMap<String, HashMap<PathBuf, Vec<SpanRange>>>) {
     for (symbol_id, kind) in symbol_catalog {
         if kind == "module" || kind == "MODULE" {
             continue;
@@ -297,26 +265,10 @@ fn build_source_spans(
             while let Some(found) = source[offset..].find(ident) {
                 let lo = offset + found;
                 let hi = lo + ident.len();
-                let left_ok = lo == 0
-                    || !source[..lo]
-                        .chars()
-                        .next_back()
-                        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-                let right_ok = hi == source.len()
-                    || !source[hi..]
-                        .chars()
-                        .next()
-                        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+                let left_ok = lo == 0 || !source[..lo].chars().next_back().is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+                let right_ok = hi == source.len() || !source[hi..].chars().next().is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
                 if left_ok && right_ok {
-                    span_index
-                        .entry(symbol_id.clone())
-                        .or_default()
-                        .entry(path.clone())
-                        .or_default()
-                        .push(SpanRange {
-                            lo: lo as u32,
-                            hi: hi as u32,
-                        });
+                    span_index.entry(symbol_id.clone()).or_default().entry(path.clone()).or_default().push(SpanRange { lo: lo as u32, hi: hi as u32 });
                 }
                 offset = hi;
             }
@@ -327,10 +279,7 @@ fn build_source_spans(
 fn module_path_from_file_guess(project_root: &Path, source_root: &Path, file: &Path) -> Result<String> {
     let root = if file.starts_with(source_root) { source_root } else { project_root };
     let rel = file.strip_prefix(root).unwrap_or(file);
-    let mut components: Vec<String> = rel
-        .components()
-        .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
-        .collect();
+    let mut components: Vec<String> = rel.components().filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string())).collect();
     if components.is_empty() {
         return Err(anyhow!("cannot derive module path for {}", file.display()));
     }

@@ -48,15 +48,9 @@ impl IncidentKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::LlmTimeoutPlanLoop => "llm_timeout_plan_loop",
-            Self::ObserveSuppressedByPendingSuccessor => {
-                "observe_suppressed_by_pending_successor"
-            }
-            Self::RepeatedDeterministicPlanWithoutRecovery => {
-                "repeated_deterministic_plan_without_recovery"
-            }
-            Self::RepeatedRouteSelectedBeforePlanningCompleted => {
-                "repeated_route_selected_before_planning_completed"
-            }
+            Self::ObserveSuppressedByPendingSuccessor => "observe_suppressed_by_pending_successor",
+            Self::RepeatedDeterministicPlanWithoutRecovery => "repeated_deterministic_plan_without_recovery",
+            Self::RepeatedRouteSelectedBeforePlanningCompleted => "repeated_route_selected_before_planning_completed",
             Self::GenericEventLogFailure => "generic_event_log_failure",
         }
     }
@@ -106,52 +100,28 @@ fn main() -> Result<()> {
         .arg("--incident-file")
         .arg(&failure_path);
 
-    let status = cmd
-        .status()
-        .with_context(|| "failed to run canon-harness-repair from canon-eventlog-repair")?;
+    let status = cmd.status().with_context(|| "failed to run canon-harness-repair from canon-eventlog-repair")?;
 
     if status.success() {
         Ok(())
     } else {
-        bail!(
-            "canon-harness-repair exited non-zero for {}::{} with status {}",
-            args.crate_name,
-            synthetic_test,
-            status
-        );
+        bail!("canon-harness-repair exited non-zero for {}::{} with status {}", args.crate_name, synthetic_test, status);
     }
 }
 
 fn synthetic_test_name(incident: IncidentKind) -> &'static str {
     match incident {
-        IncidentKind::LlmTimeoutPlanLoop => {
-            "synthetic_llm_timeout_plan_loop_incident"
-        }
-        IncidentKind::ObserveSuppressedByPendingSuccessor => {
-            "synthetic_observe_suppressed_pending_successor_incident"
-        }
-        IncidentKind::RepeatedDeterministicPlanWithoutRecovery => {
-            "synthetic_repeated_deterministic_plan_without_recovery_incident"
-        }
-        IncidentKind::RepeatedRouteSelectedBeforePlanningCompleted => {
-            "synthetic_repeated_route_selected_before_planning_completed_incident"
-        }
-        IncidentKind::GenericEventLogFailure => {
-            "synthetic_generic_event_trigger_incident"
-        }
+        IncidentKind::LlmTimeoutPlanLoop => "synthetic_llm_timeout_plan_loop_incident",
+        IncidentKind::ObserveSuppressedByPendingSuccessor => "synthetic_observe_suppressed_pending_successor_incident",
+        IncidentKind::RepeatedDeterministicPlanWithoutRecovery => "synthetic_repeated_deterministic_plan_without_recovery_incident",
+        IncidentKind::RepeatedRouteSelectedBeforePlanningCompleted => "synthetic_repeated_route_selected_before_planning_completed_incident",
+        IncidentKind::GenericEventLogFailure => "synthetic_generic_event_trigger_incident",
     }
 }
 
 fn rebuild_harness_repair(workspace: &Path) -> Result<()> {
-    let status = Command::new("cargo")
-        .arg("build")
-        .arg("-p")
-        .arg("canon-runtime")
-        .arg("--bin")
-        .arg("canon-harness-repair")
-        .current_dir(workspace)
-        .status()
-        .context("failed to rebuild canon-harness-repair")?;
+    let status =
+        Command::new("cargo").arg("build").arg("-p").arg("canon-runtime").arg("--bin").arg("canon-harness-repair").current_dir(workspace).status().context("failed to rebuild canon-harness-repair")?;
     if status.success() {
         Ok(())
     } else {
@@ -173,48 +143,25 @@ fn parse_args() -> Result<Args> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--workspace" => {
-                workspace = PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("missing value for --workspace"))?,
-                );
+                workspace = PathBuf::from(args.next().ok_or_else(|| anyhow!("missing value for --workspace"))?);
             }
             "--crate" => {
-                crate_name = Some(
-                    args.next()
-                        .ok_or_else(|| anyhow!("missing value for --crate"))?,
-                );
+                crate_name = Some(args.next().ok_or_else(|| anyhow!("missing value for --crate"))?);
             }
             "--test" => {
-                test_name = Some(
-                    args.next()
-                        .ok_or_else(|| anyhow!("missing value for --test"))?,
-                );
+                test_name = Some(args.next().ok_or_else(|| anyhow!("missing value for --test"))?);
             }
             "--event-jsonl" => {
-                event_jsonl = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("missing value for --event-jsonl"))?,
-                ));
+                event_jsonl = Some(PathBuf::from(args.next().ok_or_else(|| anyhow!("missing value for --event-jsonl"))?));
             }
             "--event-tlog" => {
-                event_tlog = Some(PathBuf::from(
-                    args.next()
-                        .ok_or_else(|| anyhow!("missing value for --event-tlog"))?,
-                ));
+                event_tlog = Some(PathBuf::from(args.next().ok_or_else(|| anyhow!("missing value for --event-tlog"))?));
             }
             "--max-steps" => {
-                max_steps = args
-                    .next()
-                    .ok_or_else(|| anyhow!("missing value for --max-steps"))?
-                    .parse()
-                    .context("--max-steps must be an integer")?;
+                max_steps = args.next().ok_or_else(|| anyhow!("missing value for --max-steps"))?.parse().context("--max-steps must be an integer")?;
             }
             "--max-events" => {
-                max_events = args
-                    .next()
-                    .ok_or_else(|| anyhow!("missing value for --max-events"))?
-                    .parse()
-                    .context("--max-events must be an integer")?;
+                max_events = args.next().ok_or_else(|| anyhow!("missing value for --max-events"))?.parse().context("--max-events must be an integer")?;
             }
             "--dry-run" => dry_run = true,
             other => bail!("unknown argument: {other}"),
@@ -225,9 +172,7 @@ fn parse_args() -> Result<Args> {
         workspace,
         crate_name: crate_name.ok_or_else(|| anyhow!("missing --crate"))?,
         test_name: test_name.ok_or_else(|| anyhow!("missing --test"))?,
-        event_jsonl: event_jsonl.unwrap_or_else(|| {
-            PathBuf::from("/workspace/ai_sandbox/canon/state/event_window.jsonl")
-        }),
+        event_jsonl: event_jsonl.unwrap_or_else(|| PathBuf::from("/workspace/ai_sandbox/canon/state/event_window.jsonl")),
         event_tlog,
         max_steps,
         max_events,
@@ -241,8 +186,7 @@ fn load_event_records(args: &Args) -> Result<Vec<EventRecord>> {
     }
 
     if args.event_jsonl.exists() {
-        let raw = fs::read_to_string(&args.event_jsonl)
-            .with_context(|| format!("failed to read {}", args.event_jsonl.display()))?;
+        let raw = fs::read_to_string(&args.event_jsonl).with_context(|| format!("failed to read {}", args.event_jsonl.display()))?;
         return parse_event_records(&raw, args.max_events);
     }
 
@@ -251,9 +195,7 @@ fn load_event_records(args: &Args) -> Result<Vec<EventRecord>> {
         return parse_event_records_from_tlog(&default_tlog, args.max_events);
     }
 
-    Err(anyhow!(
-        "no event source found; provide --event-tlog or --event-jsonl"
-    ))
+    Err(anyhow!("no event source found; provide --event-tlog or --event-jsonl"))
 }
 
 fn parse_event_records(raw: &str, max_events: usize) -> Result<Vec<EventRecord>> {
@@ -263,8 +205,7 @@ fn parse_event_records(raw: &str, max_events: usize) -> Result<Vec<EventRecord>>
         if trimmed.is_empty() {
             continue;
         }
-        let value: Value = serde_json::from_str(trimmed)
-            .with_context(|| format!("invalid jsonl event line: {trimmed}"))?;
+        let value: Value = serde_json::from_str(trimmed).with_context(|| format!("invalid jsonl event line: {trimmed}"))?;
         out.push(EventRecord::from_value(&value));
         if out.len() >= max_events {
             break;
@@ -275,8 +216,7 @@ fn parse_event_records(raw: &str, max_events: usize) -> Result<Vec<EventRecord>>
 }
 
 fn parse_event_records_from_tlog(path: &Path, max_events: usize) -> Result<Vec<EventRecord>> {
-    let events = read_any_events_from_path(path)
-        .with_context(|| format!("failed to read tlog {}", path.display()))?;
+    let events = read_any_events_from_path(path).with_context(|| format!("failed to read tlog {}", path.display()))?;
     let mut out = Vec::new();
 
     for event in events.into_iter().rev() {
@@ -297,47 +237,14 @@ impl EventRecord {
         let meta = payload.get("meta").unwrap_or(&Value::Null);
 
         Self {
-            kind: value
-                .get("kind")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            actor: value
-                .get("actor")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            message: data
-                .get("message")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            status: data
-                .get("status")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            debug_kind: data
-                .get("kind")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            approved_route: data
-                .get("approved_route")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            gate_rules_fired: data
-                .get("gate_rules_fired")
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(ToString::to_string)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            meta_file: meta
-                .get("file")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
+            kind: value.get("kind").and_then(Value::as_str).unwrap_or_default().to_string(),
+            actor: value.get("actor").and_then(Value::as_str).unwrap_or_default().to_string(),
+            message: data.get("message").and_then(Value::as_str).map(ToString::to_string),
+            status: data.get("status").and_then(Value::as_str).map(ToString::to_string),
+            debug_kind: data.get("kind").and_then(Value::as_str).map(ToString::to_string),
+            approved_route: data.get("approved_route").and_then(Value::as_str).map(ToString::to_string),
+            gate_rules_fired: data.get("gate_rules_fired").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(ToString::to_string).collect()).unwrap_or_default(),
+            meta_file: meta.get("file").and_then(Value::as_str).map(ToString::to_string),
             meta_line: meta.get("line").and_then(Value::as_u64),
         }
     }
@@ -375,25 +282,11 @@ impl EventRecord {
             String::new()
         };
 
-        let message = extract_debug_string(&text, "message: \"").or_else(|| {
-            if lowered.contains("llm call timed out") {
-                Some("llm call timed out".to_string())
-            } else {
-                None
-            }
-        });
+        let message = extract_debug_string(&text, "message: \"").or_else(|| if lowered.contains("llm call timed out") { Some("llm call timed out".to_string()) } else { None });
 
-        let status = if lowered.contains("status: \"llm_failed\"") || lowered.contains("status:\"llm_failed\"") {
-            Some("llm_failed".to_string())
-        } else {
-            None
-        };
+        let status = if lowered.contains("status: \"llm_failed\"") || lowered.contains("status:\"llm_failed\"") { Some("llm_failed".to_string()) } else { None };
 
-        let debug_kind = if lowered.contains("observe_suppressed_due_to_pending_successor") {
-            Some("observe_suppressed_due_to_pending_successor".to_string())
-        } else {
-            None
-        };
+        let debug_kind = if lowered.contains("observe_suppressed_due_to_pending_successor") { Some("observe_suppressed_due_to_pending_successor".to_string()) } else { None };
 
         let approved_route = if lowered.contains("approved_route: \"plan\"")
             || lowered.contains("approved_route:\"plan\"")
@@ -410,17 +303,7 @@ impl EventRecord {
             gate_rules_fired.push("deterministic:missing_target_plan".to_string());
         }
 
-        Self {
-            kind,
-            actor,
-            message,
-            status,
-            debug_kind,
-            approved_route,
-            gate_rules_fired,
-            meta_file: extract_meta_string(&text, "file: \""),
-            meta_line: extract_meta_u64(&text, "line: "),
-        }
+        Self { kind, actor, message, status, debug_kind, approved_route, gate_rules_fired, meta_file: extract_meta_string(&text, "file: \""), meta_line: extract_meta_u64(&text, "line: ") }
     }
 }
 
@@ -433,10 +316,7 @@ fn extract_meta_string(text: &str, key: &str) -> Option<String> {
 
 fn extract_meta_u64(text: &str, key: &str) -> Option<u64> {
     let start = text.find(key)? + key.len();
-    let digits: String = text[start..]
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect();
+    let digits: String = text[start..].chars().take_while(|ch| ch.is_ascii_digit()).collect();
     digits.parse().ok()
 }
 
@@ -448,32 +328,14 @@ fn extract_debug_string(text: &str, key: &str) -> Option<String> {
 }
 
 fn classify_incident(records: &[EventRecord]) -> IncidentReport {
-    let llm_timeout = records.iter().any(|record| {
-        record.kind == "capability_failed"
-            && record.message.as_deref() == Some("llm call timed out")
-    });
-    let planning_failed = records.iter().any(|record| {
-        record.kind == "planning_completed" && record.status.as_deref() == Some("llm_failed")
-    });
-    let observe_suppressed = records.iter().any(|record| {
-        record.kind == "debug"
-            && record.debug_kind.as_deref()
-                == Some("observe_suppressed_due_to_pending_successor")
-    });
-    let deterministic_plan = records.iter().any(|record| {
-        record.kind == "route_selected"
-            && record.approved_route.as_deref() == Some("plan")
-            && record
-                .gate_rules_fired
-                .iter()
-                .any(|rule| rule.contains("missing_target_plan"))
-    });
-    let repeated_route_selected_before_planning_completed = records.iter().any(|record| {
-        record.kind == "error_occurred"
-            && record.message.as_deref().is_some_and(|message| {
-                message.contains("expected=planning_completed; got=route_selected")
-            })
-    });
+    let llm_timeout = records.iter().any(|record| record.kind == "capability_failed" && record.message.as_deref() == Some("llm call timed out"));
+    let planning_failed = records.iter().any(|record| record.kind == "planning_completed" && record.status.as_deref() == Some("llm_failed"));
+    let observe_suppressed = records.iter().any(|record| record.kind == "debug" && record.debug_kind.as_deref() == Some("observe_suppressed_due_to_pending_successor"));
+    let deterministic_plan = records
+        .iter()
+        .any(|record| record.kind == "route_selected" && record.approved_route.as_deref() == Some("plan") && record.gate_rules_fired.iter().any(|rule| rule.contains("missing_target_plan")));
+    let repeated_route_selected_before_planning_completed =
+        records.iter().any(|record| record.kind == "error_occurred" && record.message.as_deref().is_some_and(|message| message.contains("expected=planning_completed; got=route_selected")));
 
     let incident = if llm_timeout && planning_failed && observe_suppressed && deterministic_plan {
         IncidentKind::LlmTimeoutPlanLoop
@@ -489,16 +351,7 @@ fn classify_incident(records: &[EventRecord]) -> IncidentReport {
 
     let files = collect_files(records);
     let lines = collect_file_lines(records);
-    let event_excerpt = records
-        .iter()
-        .rev()
-        .take(12)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .map(format_record_excerpt)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let event_excerpt = records.iter().rev().take(12).collect::<Vec<_>>().into_iter().rev().map(format_record_excerpt).collect::<Vec<_>>().join("\n");
 
     let (summary, guidance) = match incident {
         IncidentKind::LlmTimeoutPlanLoop => (
@@ -542,23 +395,12 @@ fn classify_incident(records: &[EventRecord]) -> IncidentReport {
         ),
         IncidentKind::GenericEventLogFailure => (
             "Generic event-log failure pattern detected.".to_string(),
-            [
-                "Read the files cited in the event meta first.",
-                "Prefer the smallest fix that restores a valid control transition.",
-                "Add a synthetic reproduction for the observed event sequence.",
-            ]
-            .join("\n"),
+            ["Read the files cited in the event meta first.", "Prefer the smallest fix that restores a valid control transition.", "Add a synthetic reproduction for the observed event sequence."]
+                .join("\n"),
         ),
     };
 
-    IncidentReport {
-        incident,
-        summary,
-        guidance,
-        files,
-        lines,
-        event_excerpt,
-    }
+    IncidentReport { incident, summary, guidance, files, lines, event_excerpt }
 }
 
 fn collect_files(records: &[EventRecord]) -> Vec<String> {
@@ -609,16 +451,8 @@ fn format_record_excerpt(record: &EventRecord) -> String {
 }
 
 fn build_failure_output(args: &Args, report: &IncidentReport) -> String {
-    let files = if report.files.is_empty() {
-        "<none>".to_string()
-    } else {
-        report.files.join("\n")
-    };
-    let lines = if report.lines.is_empty() {
-        "<none>".to_string()
-    } else {
-        report.lines.join("\n")
-    };
+    let files = if report.files.is_empty() { "<none>".to_string() } else { report.files.join("\n") };
+    let lines = if report.lines.is_empty() { "<none>".to_string() } else { report.lines.join("\n") };
 
     format!(
         "EVENT-LOG REPAIR INCIDENT\n\
@@ -662,14 +496,7 @@ mod tests {
     use super::*;
 
     fn record(
-        kind: &str,
-        actor: &str,
-        message: Option<&str>,
-        status: Option<&str>,
-        debug_kind: Option<&str>,
-        approved_route: Option<&str>,
-        gate_rules_fired: &[&str],
-        meta_file: Option<&str>,
+        kind: &str, actor: &str, message: Option<&str>, status: Option<&str>, debug_kind: Option<&str>, approved_route: Option<&str>, gate_rules_fired: &[&str], meta_file: Option<&str>,
         meta_line: Option<u64>,
     ) -> EventRecord {
         EventRecord {
@@ -688,50 +515,10 @@ mod tests {
     #[test]
     fn classify_incident_detects_llm_timeout_plan_loop() {
         let records = vec![
-            record(
-                "capability_failed",
-                "event-runtime",
-                Some("llm call timed out"),
-                None,
-                None,
-                None,
-                &[],
-                Some("canon-utils/canon-exec/src/exec/llm.rs"),
-                Some(355),
-            ),
-            record(
-                "debug",
-                "loop_stage_executor",
-                None,
-                None,
-                Some("observe_suppressed_due_to_pending_successor"),
-                None,
-                &[],
-                Some("canon-utils/canon-loop/src/executor.rs"),
-                Some(91),
-            ),
-            record(
-                "planning_completed",
-                "plan",
-                None,
-                Some("llm_failed"),
-                None,
-                None,
-                &[],
-                Some("canon-utils/canon-loop/src/executor.rs"),
-                Some(296),
-            ),
-            record(
-                "route_selected",
-                "supervisor",
-                None,
-                None,
-                None,
-                Some("plan"),
-                &["deterministic:missing_target_plan"],
-                Some("canon-utils/canon-route/src/executor.rs"),
-                Some(796),
-            ),
+            record("capability_failed", "event-runtime", Some("llm call timed out"), None, None, None, &[], Some("canon-utils/canon-exec/src/exec/llm.rs"), Some(355)),
+            record("debug", "loop_stage_executor", None, None, Some("observe_suppressed_due_to_pending_successor"), None, &[], Some("canon-utils/canon-loop/src/executor.rs"), Some(91)),
+            record("planning_completed", "plan", None, Some("llm_failed"), None, None, &[], Some("canon-utils/canon-loop/src/executor.rs"), Some(296)),
+            record("route_selected", "supervisor", None, None, None, Some("plan"), &["deterministic:missing_target_plan"], Some("canon-utils/canon-route/src/executor.rs"), Some(796)),
         ];
 
         let report = classify_incident(&records);
@@ -756,14 +543,8 @@ mod tests {
             incident: IncidentKind::ObserveSuppressedByPendingSuccessor,
             summary: "Observe recovery is blocked.".to_string(),
             guidance: "Inspect loop executor successor gating first.".to_string(),
-            files: vec![
-                "canon-utils/canon-loop/src/executor.rs".to_string(),
-                "canon-utils/canon-route/src/executor.rs".to_string(),
-            ],
-            lines: vec![
-                "canon-utils/canon-loop/src/executor.rs:91".to_string(),
-                "canon-utils/canon-route/src/executor.rs:796".to_string(),
-            ],
+            files: vec!["canon-utils/canon-loop/src/executor.rs".to_string(), "canon-utils/canon-route/src/executor.rs".to_string()],
+            lines: vec!["canon-utils/canon-loop/src/executor.rs:91".to_string(), "canon-utils/canon-route/src/executor.rs:796".to_string()],
             event_excerpt: "kind=debug actor=loop_stage_executor".to_string(),
         };
 
@@ -776,58 +557,15 @@ mod tests {
     #[test]
     fn synthetic_llm_timeout_plan_loop_incident() {
         let records = vec![
-            record(
-                "capability_failed",
-                "event-runtime",
-                Some("llm call timed out"),
-                None,
-                None,
-                None,
-                &[],
-                Some("canon-utils/canon-exec/src/exec/llm.rs"),
-                Some(373),
-            ),
-            record(
-                "planning_completed",
-                "plan",
-                None,
-                Some("llm_failed"),
-                None,
-                None,
-                &[],
-                Some("canon-utils/canon-loop/src/stage/plan.rs"),
-                Some(1038),
-            ),
-            record(
-                "debug",
-                "loop_stage_executor",
-                None,
-                None,
-                Some("observe_suppressed_due_to_pending_successor"),
-                None,
-                &[],
-                Some("canon-utils/canon-loop/src/executor.rs"),
-                Some(91),
-            ),
-            record(
-                "route_selected",
-                "supervisor",
-                None,
-                None,
-                None,
-                Some("plan"),
-                &["deterministic:missing_target_plan"],
-                Some("canon-utils/canon-route/src/executor.rs"),
-                Some(796),
-            ),
+            record("capability_failed", "event-runtime", Some("llm call timed out"), None, None, None, &[], Some("canon-utils/canon-exec/src/exec/llm.rs"), Some(373)),
+            record("planning_completed", "plan", None, Some("llm_failed"), None, None, &[], Some("canon-utils/canon-loop/src/stage/plan.rs"), Some(1038)),
+            record("debug", "loop_stage_executor", None, None, Some("observe_suppressed_due_to_pending_successor"), None, &[], Some("canon-utils/canon-loop/src/executor.rs"), Some(91)),
+            record("route_selected", "supervisor", None, None, None, Some("plan"), &["deterministic:missing_target_plan"], Some("canon-utils/canon-route/src/executor.rs"), Some(796)),
         ];
 
         let report = classify_incident(&records);
         assert_eq!(report.incident, IncidentKind::LlmTimeoutPlanLoop);
-        assert_eq!(
-            synthetic_test_name(report.incident),
-            "synthetic_llm_timeout_plan_loop_incident"
-        );
+        assert_eq!(synthetic_test_name(report.incident), "synthetic_llm_timeout_plan_loop_incident");
         assert!(report.summary.contains("LLM timeout"));
         assert!(report.guidance.contains("observe recovery"));
     }
@@ -835,36 +573,13 @@ mod tests {
     #[test]
     fn synthetic_observe_suppressed_pending_successor_incident() {
         let records = vec![
-            record(
-                "debug",
-                "loop_stage_executor",
-                None,
-                None,
-                Some("observe_suppressed_due_to_pending_successor"),
-                None,
-                &[],
-                Some("canon-utils/canon-loop/src/executor.rs"),
-                Some(91),
-            ),
-            record(
-                "error_occurred",
-                "event-runtime",
-                Some("stale pending successor blocked observe"),
-                None,
-                None,
-                None,
-                &[],
-                Some("canon-utils/canon-runtime/src/bus.rs"),
-                Some(239),
-            ),
+            record("debug", "loop_stage_executor", None, None, Some("observe_suppressed_due_to_pending_successor"), None, &[], Some("canon-utils/canon-loop/src/executor.rs"), Some(91)),
+            record("error_occurred", "event-runtime", Some("stale pending successor blocked observe"), None, None, None, &[], Some("canon-utils/canon-runtime/src/bus.rs"), Some(239)),
         ];
 
         let report = classify_incident(&records);
         assert_eq!(report.incident, IncidentKind::ObserveSuppressedByPendingSuccessor);
-        assert_eq!(
-            synthetic_test_name(report.incident),
-            "synthetic_observe_suppressed_pending_successor_incident"
-        );
+        assert_eq!(synthetic_test_name(report.incident), "synthetic_observe_suppressed_pending_successor_incident");
         assert!(report.summary.contains("Observe recovery"));
         assert!(report.guidance.contains("successor gating"));
     }
@@ -872,39 +587,13 @@ mod tests {
     #[test]
     fn synthetic_repeated_deterministic_plan_without_recovery_incident() {
         let records = vec![
-            record(
-                "planning_completed",
-                "plan",
-                None,
-                Some("llm_failed"),
-                None,
-                None,
-                &[],
-                Some("canon-utils/canon-loop/src/stage/plan.rs"),
-                Some(1038),
-            ),
-            record(
-                "route_selected",
-                "supervisor",
-                None,
-                None,
-                None,
-                Some("plan"),
-                &["deterministic:missing_target_plan"],
-                Some("canon-utils/canon-route/src/executor.rs"),
-                Some(796),
-            ),
+            record("planning_completed", "plan", None, Some("llm_failed"), None, None, &[], Some("canon-utils/canon-loop/src/stage/plan.rs"), Some(1038)),
+            record("route_selected", "supervisor", None, None, None, Some("plan"), &["deterministic:missing_target_plan"], Some("canon-utils/canon-route/src/executor.rs"), Some(796)),
         ];
 
         let report = classify_incident(&records);
-        assert_eq!(
-            report.incident,
-            IncidentKind::RepeatedDeterministicPlanWithoutRecovery
-        );
-        assert_eq!(
-            synthetic_test_name(report.incident),
-            "synthetic_repeated_deterministic_plan_without_recovery_incident"
-        );
+        assert_eq!(report.incident, IncidentKind::RepeatedDeterministicPlanWithoutRecovery);
+        assert_eq!(synthetic_test_name(report.incident), "synthetic_repeated_deterministic_plan_without_recovery_incident");
         assert!(report.summary.contains("Deterministic plan routing repeats"));
         assert!(report.guidance.contains("fresh recovery route"));
     }
@@ -912,17 +601,7 @@ mod tests {
     #[test]
     fn synthetic_repeated_route_selected_before_planning_completed_incident() {
         let records = vec![
-            record(
-                "route_selected",
-                "supervisor",
-                None,
-                None,
-                None,
-                Some("plan"),
-                &["deterministic:missing_target_plan"],
-                Some("canon-utils/canon-route/src/executor.rs"),
-                Some(809),
-            ),
+            record("route_selected", "supervisor", None, None, None, Some("plan"), &["deterministic:missing_target_plan"], Some("canon-utils/canon-route/src/executor.rs"), Some(809)),
             record(
                 "error_occurred",
                 "event-runtime",
@@ -937,40 +616,19 @@ mod tests {
         ];
 
         let report = classify_incident(&records);
-        assert_eq!(
-            report.incident,
-            IncidentKind::RepeatedRouteSelectedBeforePlanningCompleted
-        );
-        assert_eq!(
-            synthetic_test_name(report.incident),
-            "synthetic_repeated_route_selected_before_planning_completed_incident"
-        );
+        assert_eq!(report.incident, IncidentKind::RepeatedRouteSelectedBeforePlanningCompleted);
+        assert_eq!(synthetic_test_name(report.incident), "synthetic_repeated_route_selected_before_planning_completed_incident");
         assert!(report.summary.contains("route_selected(plan)"));
         assert!(report.guidance.contains("planning_completed"));
     }
 
     #[test]
     fn synthetic_generic_event_trigger_incident() {
-        let records = vec![
-            record(
-                "debug",
-                "event-runtime",
-                Some("generic bad event"),
-                None,
-                None,
-                None,
-                &[],
-                Some("canon-utils/canon-runtime-events/src/tlog/binary.rs"),
-                Some(383),
-            ),
-        ];
+        let records = vec![record("debug", "event-runtime", Some("generic bad event"), None, None, None, &[], Some("canon-utils/canon-runtime-events/src/tlog/binary.rs"), Some(383))];
 
         let report = classify_incident(&records);
         assert_eq!(report.incident, IncidentKind::GenericEventLogFailure);
-        assert_eq!(
-            synthetic_test_name(report.incident),
-            "synthetic_generic_event_trigger_incident"
-        );
+        assert_eq!(synthetic_test_name(report.incident), "synthetic_generic_event_trigger_incident");
         assert!(report.summary.contains("Generic event-log failure"));
         assert!(report.guidance.contains("smallest fix"));
     }

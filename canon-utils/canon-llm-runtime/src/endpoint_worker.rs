@@ -79,13 +79,8 @@ impl LlmWorker {
         // turn to this tab; all subsequent turns carry only the user prompt.
         // For non-stateful endpoints the role_schema is always prepended (each
         // call starts a fresh context).
-        let include_role = !role_schema.trim().is_empty()
-            && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
-        let raw_prompt = if include_role {
-            format!("{}\n\n{}", role_schema.trim_end(), prompt)
-        } else {
-            prompt
-        };
+        let include_role = !role_schema.trim().is_empty() && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
+        let raw_prompt = if include_role { format!("{}\n\n{}", role_schema.trim_end(), prompt) } else { prompt };
         let full_prompt = if raw_prompt.len() > 120_000 {
             // Walk back from byte 120_000 to the nearest valid char boundary.
             let mut safe = 120_000usize;

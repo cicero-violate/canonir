@@ -10,14 +10,7 @@ impl RouteController {
         Self { gate: Gatekeeper::new(config) }
     }
 
-    pub fn build_prompt(
-        &self,
-        mission: &str,
-        snapshot: &str,
-        semantic_context: &str,
-        recent_tool_results: &[serde_json::Value],
-        journal: &[JournalLine],
-    ) -> String {
+    pub fn build_prompt(&self, mission: &str, snapshot: &str, semantic_context: &str, recent_tool_results: &[serde_json::Value], journal: &[JournalLine]) -> String {
         compose_routing_prompt(&RoutingInput {
             mission: mission.to_string(),
             snapshot: snapshot.to_string(),

@@ -38,4 +38,3 @@ impl Reducer for Robustness {
         *self = Self::default();
     }
 }
-

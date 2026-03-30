@@ -108,13 +108,7 @@ impl InvariantEngine {
             Feature { name: "kind_hash", extractor: kind_hash },
             Feature { name: "actor_hash", extractor: actor_hash },
         ];
-        Self {
-            features,
-            prev: VecDeque::new(),
-            stats: HashMap::new(),
-            invariants: HashSet::new(),
-            cfg: Config::from_env(),
-        }
+        Self { features, prev: VecDeque::new(), stats: HashMap::new(), invariants: HashSet::new(), cfg: Config::from_env() }
     }
 
     fn record(&mut self, feature: &'static str, delta_zero: bool, emitter: &EventEmitterHandle, parent: &canon_event::EventId) -> bool {
@@ -123,11 +117,7 @@ impl InvariantEngine {
         let after = entry.confidence();
         if after >= self.cfg.theta && entry.total >= self.cfg.min_support && !self.invariants.contains(feature) {
             self.invariants.insert(feature);
-            let event = RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
-                feature: feature.to_string(),
-                confidence: after,
-                support: entry.total,
-            });
+            let event = RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered { feature: feature.to_string(), confidence: after, support: entry.total });
             emitter.emit_child(event, vec![parent.clone()], file!(), line!());
             return true;
         }

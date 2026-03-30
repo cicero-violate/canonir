@@ -329,16 +329,9 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
                 Some(m) => m,
                 None => continue,
             };
-            let assistant_reaction = msg
-                .get("reactions")
-                .and_then(|r| r.get("assistant"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let assistant_reaction = msg.get("reactions").and_then(|r| r.get("assistant")).and_then(|v| v.as_str()).unwrap_or("");
             if !assistant_reaction.is_empty() {
-                return FrameResult::Snapshot(format!(
-                    "assistant reaction-only terminal frame: {}",
-                    assistant_reaction
-                ));
+                return FrameResult::Snapshot(format!("assistant reaction-only terminal frame: {}", assistant_reaction));
             }
             continue;
         }

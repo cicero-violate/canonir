@@ -41,10 +41,7 @@ struct Queued {
 impl Ord for Queued {
     fn cmp(&self, other: &Self) -> Ordering {
         // Higher priority first; earlier enqueue first for stability.
-        self.priority
-            .cmp(&other.priority)
-            .then_with(|| other.enqueued_at.cmp(&self.enqueued_at))
-            .then_with(|| other.seq.cmp(&self.seq))
+        self.priority.cmp(&other.priority).then_with(|| other.enqueued_at.cmp(&self.enqueued_at)).then_with(|| other.seq.cmp(&self.seq))
     }
 }
 
@@ -83,13 +80,7 @@ impl Scheduler {
     pub fn push(&mut self, mut task: ScheduledTask) {
         task.seq = self.seq;
         self.seq = self.seq.saturating_add(1);
-        self.heap.push(Queued {
-            priority: task.priority,
-            enqueued_at: task.enqueued_at,
-            seq: task.seq,
-            agent_id: task.agent_id.clone(),
-            plan: task.plan,
-        });
+        self.heap.push(Queued { priority: task.priority, enqueued_at: task.enqueued_at, seq: task.seq, agent_id: task.agent_id.clone(), plan: task.plan });
     }
 
     pub fn pop_any(&mut self) -> Option<ScheduledTask> {

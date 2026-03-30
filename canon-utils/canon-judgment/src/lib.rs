@@ -155,7 +155,6 @@ impl Gatekeeper {
         // Action mapping: scan/repair/block→observe  shape/replan/explore→plan
         //                 validate/checkpoint→verify  execute→act
         if let Some(s) = &signals.llm_signals {
-
             // ── CRITICAL: universal blockers (fire regardless of current lane) ──
 
             // goal_alignment_score critical < 0.3 → replan+block → plan
@@ -356,10 +355,7 @@ impl Gatekeeper {
             notes.push("repair loop stalled requires plan for replan");
         }
 
-        if signals.repair_pressure_score > 0
-            && !signals.has_queued_plan
-            && matches!(lane, RouteKind::Verify | RouteKind::Conclude)
-        {
+        if signals.repair_pressure_score > 0 && !signals.has_queued_plan && matches!(lane, RouteKind::Verify | RouteKind::Conclude) {
             lane = RouteKind::Plan;
             changed = true;
             notes.push("repair pressure requires plan");
@@ -381,9 +377,7 @@ impl Gatekeeper {
             notes.push("act requires context_ready or queued plan");
         }
 
-        if lane == RouteKind::Verify
-            && !(signals.performed_recently || signals.last_action_kind == "done" || signals.finish_ready)
-        {
+        if lane == RouteKind::Verify && !(signals.performed_recently || signals.last_action_kind == "done" || signals.finish_ready) {
             lane = RouteKind::Plan;
             changed = true;
             notes.push("verify requires recent execution, done action, or finish_ready");
@@ -419,12 +413,7 @@ mod tests {
     use serde_json::Value;
 
     fn pick(route: RouteKind) -> RouteSelection {
-        RouteSelection {
-            route,
-            rationale: String::new(),
-            confidence: Some(0.9),
-            signals: Value::Null,
-        }
+        RouteSelection { route, rationale: String::new(), confidence: Some(0.9), signals: Value::Null }
     }
 
     #[test]

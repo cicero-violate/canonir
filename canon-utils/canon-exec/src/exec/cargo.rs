@@ -1,5 +1,5 @@
 use super::{Executable, ExecutionContext, ExecutionResult};
-use canon_event::{RuntimeEvent, CapabilityCompleted, CapabilityResult, CargoEvent, ProcessResult, RuntimeStateUpdated};
+use canon_event::{CapabilityCompleted, CapabilityResult, CargoEvent, ProcessResult, RuntimeEvent, RuntimeStateUpdated};
 use serde_json::json;
 use std::process::Command;
 use std::time::Instant;

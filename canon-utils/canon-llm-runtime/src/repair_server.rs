@@ -15,7 +15,6 @@
 /// The daemon processes one job at a time (the ChatGPT tab is stateful and
 /// sequential). The conversation accumulates across jobs — the repair agent
 /// builds context about what it has already tried.
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -72,11 +71,7 @@ impl RepairServerHandle {
 /// only after the current job completes.  This is intentional: the stateful
 /// ChatGPT tab processes one conversation at a time.
 pub async fn repair_server_start(
-    addr: &str,
-    job_fn: impl Fn(RepairJobRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = RepairJobResult> + Send>>
-        + Send
-        + Sync
-        + 'static,
+    addr: &str, job_fn: impl Fn(RepairJobRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = RepairJobResult> + Send>> + Send + Sync + 'static,
 ) -> Result<RepairServerHandle> {
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -187,10 +182,7 @@ mod tests {
 
     #[test]
     fn test_repair_job_result_serde_roundtrip() {
-        for result in [
-            RepairJobResult { success: true, steps_taken: 3, error: None },
-            RepairJobResult { success: false, steps_taken: 8, error: Some("compile failed".to_string()) },
-        ] {
+        for result in [RepairJobResult { success: true, steps_taken: 3, error: None }, RepairJobResult { success: false, steps_taken: 8, error: Some("compile failed".to_string()) }] {
             let json = serde_json::to_string(&result).expect("serialize");
             let decoded: RepairJobResult = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(result, decoded);
@@ -201,11 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_repair_server_binds_and_accepts() {
-        let handle = repair_server_start("127.0.0.1:0", |_req| {
-            Box::pin(async { RepairJobResult { success: true, steps_taken: 1, error: None } })
-        })
-        .await
-        .expect("repair server must start");
+        let handle = repair_server_start("127.0.0.1:0", |_req| Box::pin(async { RepairJobResult { success: true, steps_taken: 1, error: None } })).await.expect("repair server must start");
 
         let addr = handle.local_addr();
         let stream = tokio::net::TcpStream::connect(addr).await;
@@ -214,21 +202,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_repair_client_submit_success() {
-        let handle = repair_server_start("127.0.0.1:0", |_req| {
-            Box::pin(async {
-                RepairJobResult { success: true, steps_taken: 2, error: None }
-            })
-        })
-        .await
-        .expect("start");
+        let handle = repair_server_start("127.0.0.1:0", |_req| Box::pin(async { RepairJobResult { success: true, steps_taken: 2, error: None } })).await.expect("start");
 
         let addr = handle.local_addr().to_string();
         let req = sample_job();
 
-        let result = tokio::task::spawn_blocking(move || repair_client_submit(&addr, &req))
-            .await
-            .expect("no panic")
-            .expect("submit must succeed");
+        let result = tokio::task::spawn_blocking(move || repair_client_submit(&addr, &req)).await.expect("no panic").expect("submit must succeed");
 
         assert!(result.success);
         assert_eq!(result.steps_taken, 2);
@@ -239,18 +218,13 @@ mod tests {
     async fn test_repair_client_submit_failure_result() {
         let handle = repair_server_start("127.0.0.1:0", |req| {
             let msg = format!("repair exhausted {} steps for {}", req.max_steps, req.test_name);
-            Box::pin(async move {
-                RepairJobResult { success: false, steps_taken: 8, error: Some(msg) }
-            })
+            Box::pin(async move { RepairJobResult { success: false, steps_taken: 8, error: Some(msg) } })
         })
         .await
         .expect("start");
 
         let addr = handle.local_addr().to_string();
-        let result = tokio::task::spawn_blocking(move || repair_client_submit(&addr, &sample_job()))
-            .await
-            .expect("no panic")
-            .expect("submit must not Err");
+        let result = tokio::task::spawn_blocking(move || repair_client_submit(&addr, &sample_job())).await.expect("no panic").expect("submit must not Err");
 
         assert!(!result.success);
         assert!(result.error.as_deref().unwrap_or("").contains("synthetic_timeout_recovery"));
@@ -261,13 +235,7 @@ mod tests {
     async fn test_repair_server_receives_incident_context() {
         let handle = repair_server_start("127.0.0.1:0", |req| {
             let had_context = req.incident_context.is_some();
-            Box::pin(async move {
-                RepairJobResult {
-                    success: had_context,
-                    steps_taken: 0,
-                    error: if had_context { None } else { Some("no context".to_string()) },
-                }
-            })
+            Box::pin(async move { RepairJobResult { success: had_context, steps_taken: 0, error: if had_context { None } else { Some("no context".to_string()) } } })
         })
         .await
         .expect("start");
@@ -276,10 +244,7 @@ mod tests {
         let mut req = sample_job();
         req.incident_context = Some("incident_kind=llm_timeout_plan_loop".to_string());
 
-        let result = tokio::task::spawn_blocking(move || repair_client_submit(&addr, &req))
-            .await
-            .expect("no panic")
-            .expect("submit");
+        let result = tokio::task::spawn_blocking(move || repair_client_submit(&addr, &req)).await.expect("no panic").expect("submit");
 
         assert!(result.success, "job_fn must see the incident_context: {:?}", result.error);
     }
@@ -310,16 +275,10 @@ mod tests {
 
         // Submit two sequential jobs.
         let addr1 = addr.clone();
-        let r1 = tokio::task::spawn_blocking(move || repair_client_submit(&addr1, &sample_job()))
-            .await
-            .expect("no panic")
-            .expect("job1");
+        let r1 = tokio::task::spawn_blocking(move || repair_client_submit(&addr1, &sample_job())).await.expect("no panic").expect("job1");
 
         let addr2 = addr.clone();
-        let r2 = tokio::task::spawn_blocking(move || repair_client_submit(&addr2, &sample_job()))
-            .await
-            .expect("no panic")
-            .expect("job2");
+        let r2 = tokio::task::spawn_blocking(move || repair_client_submit(&addr2, &sample_job())).await.expect("no panic").expect("job2");
 
         assert!(r1.success);
         assert!(r2.success);
@@ -330,11 +289,7 @@ mod tests {
     /// Dropping the handle shuts down the server.
     #[tokio::test]
     async fn test_repair_server_shuts_down_on_handle_drop() {
-        let handle = repair_server_start("127.0.0.1:0", |_req| {
-            Box::pin(async { RepairJobResult { success: true, steps_taken: 0, error: None } })
-        })
-        .await
-        .expect("start");
+        let handle = repair_server_start("127.0.0.1:0", |_req| Box::pin(async { RepairJobResult { success: true, steps_taken: 0, error: None } })).await.expect("start");
 
         let addr = handle.local_addr();
         drop(handle);

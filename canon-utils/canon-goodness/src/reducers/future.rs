@@ -39,4 +39,3 @@ impl Reducer for FutureProof {
         *self = Self::default();
     }
 }
-

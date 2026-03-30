@@ -1,7 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use canon_llm::repair_server::{
-    repair_client_submit, RepairJobRequest, REPAIR_SERVER_ADDR,
-};
+use canon_llm::repair_server::{repair_client_submit, RepairJobRequest, REPAIR_SERVER_ADDR};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -33,10 +31,8 @@ fn main() -> Result<()> {
                 max_rounds = value.parse().context("--max-rounds must be an integer")?;
             }
             "--max-steps-per-test" => {
-                let value =
-                    args.next().ok_or_else(|| anyhow!("missing value for --max-steps-per-test"))?;
-                max_steps_per_test =
-                    value.parse().context("--max-steps-per-test must be an integer")?;
+                let value = args.next().ok_or_else(|| anyhow!("missing value for --max-steps-per-test"))?;
+                max_steps_per_test = value.parse().context("--max-steps-per-test must be an integer")?;
             }
             "--forever" => {
                 forever = true;
@@ -57,59 +53,27 @@ fn main() -> Result<()> {
         let suite = run_suite_tests(&workspace, crate_name.as_deref())?;
         if suite.success {
             match crate_name.as_deref() {
-                Some(name) => println!(
-                    "harness suite complete: cargo test -p {} passed after {} round(s)",
-                    name,
-                    round - 1
-                ),
-                None => println!(
-                    "harness suite complete: cargo test --workspace passed after {} round(s)",
-                    round - 1
-                ),
+                Some(name) => println!("harness suite complete: cargo test -p {} passed after {} round(s)", name, round - 1),
+                None => println!("harness suite complete: cargo test --workspace passed after {} round(s)", round - 1),
             }
             return Ok(());
         }
 
         match crate_name.as_deref() {
-            Some(name) => eprintln!(
-                "[canon-harness-suite] cargo test -p {} failed in round {}",
-                name, round
-            ),
-            None => eprintln!(
-                "[canon-harness-suite] cargo test --workspace failed in round {}",
-                round
-            ),
+            Some(name) => eprintln!("[canon-harness-suite] cargo test -p {} failed in round {}", name, round),
+            None => eprintln!("[canon-harness-suite] cargo test --workspace failed in round {}", round),
         }
 
         let Some((repair_crate, failing_test)) = first_failing_case(&suite, crate_name.as_deref()) else {
             match crate_name.as_deref() {
-                Some(name) => bail!(
-                    "cargo test -p {} failed, but no failing test name could be parsed\n{}",
-                    name,
-                    truncate(&suite.output, 4000)
-                ),
-                None => bail!(
-                    "cargo test --workspace failed, but no failing crate/test could be parsed\n{}",
-                    truncate(&suite.output, 4000)
-                ),
+                Some(name) => bail!("cargo test -p {} failed, but no failing test name could be parsed\n{}", name, truncate(&suite.output, 4000)),
+                None => bail!("cargo test --workspace failed, but no failing crate/test could be parsed\n{}", truncate(&suite.output, 4000)),
             };
         };
 
-        eprintln!(
-            "[canon-harness-suite] round {} repairing {}::{}",
-            round, repair_crate, failing_test
-        );
-        if let Err(err) = run_harness_repair(
-            &workspace,
-            &repair_crate,
-            &failing_test,
-            &suite.output,
-            max_steps_per_test,
-        ) {
-            eprintln!(
-                "[canon-harness-suite] harness repair failed for {}::{}: {}",
-                repair_crate, failing_test, err
-            );
+        eprintln!("[canon-harness-suite] round {} repairing {}::{}", round, repair_crate, failing_test);
+        if let Err(err) = run_harness_repair(&workspace, &repair_crate, &failing_test, &suite.output, max_steps_per_test) {
+            eprintln!("[canon-harness-suite] harness repair failed for {}::{}: {}", repair_crate, failing_test, err);
         }
 
         round += 1;
@@ -120,25 +84,12 @@ fn main() -> Result<()> {
 
     match crate_name.as_deref() {
         Some(name) => {
-            eprintln!(
-                "[canon-harness-suite] failed after {} round(s) for crate {}",
-                max_rounds, name
-            );
-            bail!(
-                "harness suite stopped after {} round(s) without passing cargo test -p {}",
-                max_rounds,
-                name
-            )
+            eprintln!("[canon-harness-suite] failed after {} round(s) for crate {}", max_rounds, name);
+            bail!("harness suite stopped after {} round(s) without passing cargo test -p {}", max_rounds, name)
         }
         None => {
-            eprintln!(
-                "[canon-harness-suite] failed after {} round(s) for workspace",
-                max_rounds
-            );
-            bail!(
-                "harness suite stopped after {} round(s) without passing cargo test --workspace",
-                max_rounds
-            )
+            eprintln!("[canon-harness-suite] failed after {} round(s) for workspace", max_rounds);
+            bail!("harness suite stopped after {} round(s) without passing cargo test --workspace", max_rounds)
         }
     }
 }
@@ -177,25 +128,14 @@ mod tests {
 
     #[test]
     fn test_crate_from_compile_error_standard() {
-        let output = concat!(
-            "error[E0599]: no function found\n",
-            "   --> src/relay.rs:10:5\n",
-            "error: could not compile `canon-llm-runtime` (lib test) ",
-            "due to 1 previous error\n",
-        );
-        assert_eq!(
-            crate_from_compile_error(output),
-            Some("canon-llm-runtime".to_string())
-        );
+        let output = concat!("error[E0599]: no function found\n", "   --> src/relay.rs:10:5\n", "error: could not compile `canon-llm-runtime` (lib test) ", "due to 1 previous error\n",);
+        assert_eq!(crate_from_compile_error(output), Some("canon-llm-runtime".to_string()));
     }
 
     #[test]
     fn test_crate_from_compile_error_short_form() {
         let output = "error: could not compile `my-crate` due to 3 previous errors\n";
-        assert_eq!(
-            crate_from_compile_error(output),
-            Some("my-crate".to_string())
-        );
+        assert_eq!(crate_from_compile_error(output), Some("my-crate".to_string()));
     }
 
     #[test]
@@ -234,15 +174,10 @@ fn run_suite_tests(workspace: &PathBuf, crate_name: Option<&str>) -> Result<Comm
     } else {
         cmd.arg("--workspace");
     }
-    let output = cmd
-        .arg("--")
-        .arg("--nocapture")
-        .current_dir(workspace)
-        .output()
-        .with_context(|| match crate_name {
-            Some(name) => format!("failed to run cargo test -p {name}"),
-            None => "failed to run cargo test --workspace".to_string(),
-        })?;
+    let output = cmd.arg("--").arg("--nocapture").current_dir(workspace).output().with_context(|| match crate_name {
+        Some(name) => format!("failed to run cargo test -p {name}"),
+        None => "failed to run cargo test --workspace".to_string(),
+    })?;
     Ok(CommandResult {
         success: output.status.success(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -251,15 +186,8 @@ fn run_suite_tests(workspace: &PathBuf, crate_name: Option<&str>) -> Result<Comm
     })
 }
 
-fn run_harness_repair(
-    workspace: &PathBuf,
-    crate_name: &str,
-    test_name: &str,
-    suite_output: &str,
-    max_steps_per_test: usize,
-) -> Result<()> {
-    let server_addr = std::env::var("CANON_REPAIR_SERVER_ADDR")
-        .unwrap_or_else(|_| REPAIR_SERVER_ADDR.to_string());
+fn run_harness_repair(workspace: &PathBuf, crate_name: &str, test_name: &str, suite_output: &str, max_steps_per_test: usize) -> Result<()> {
+    let server_addr = std::env::var("CANON_REPAIR_SERVER_ADDR").unwrap_or_else(|_| REPAIR_SERVER_ADDR.to_string());
     let req = RepairJobRequest {
         crate_name: crate_name.to_string(),
         test_name: test_name.to_string(),
@@ -272,40 +200,19 @@ fn run_harness_repair(
     let result = match repair_client_submit(&server_addr, &req) {
         Ok(result) => result,
         Err(err) => {
-            eprintln!(
-                "[canon-harness-suite] daemon submit failed at {}: {}; falling back to local canon-harness-repair",
-                server_addr, err
-            );
-            return run_harness_repair_local(
-                workspace,
-                crate_name,
-                test_name,
-                suite_output,
-                max_steps_per_test,
-            );
+            eprintln!("[canon-harness-suite] daemon submit failed at {}: {}; falling back to local canon-harness-repair", server_addr, err);
+            return run_harness_repair_local(workspace, crate_name, test_name, suite_output, max_steps_per_test);
         }
     };
 
     if result.success {
         Ok(())
     } else {
-        bail!(
-            "repair daemon reported failure for {}::{} after {} step(s): {}",
-            crate_name,
-            test_name,
-            result.steps_taken,
-            result.error.unwrap_or_else(|| "unknown repair failure".to_string())
-        )
+        bail!("repair daemon reported failure for {}::{} after {} step(s): {}", crate_name, test_name, result.steps_taken, result.error.unwrap_or_else(|| "unknown repair failure".to_string()))
     }
 }
 
-fn run_harness_repair_local(
-    workspace: &PathBuf,
-    crate_name: &str,
-    test_name: &str,
-    suite_output: &str,
-    max_steps_per_test: usize,
-) -> Result<()> {
+fn run_harness_repair_local(workspace: &PathBuf, crate_name: &str, test_name: &str, suite_output: &str, max_steps_per_test: usize) -> Result<()> {
     let state_dir = workspace.join("state");
     std::fs::create_dir_all(&state_dir)?;
     let stderr_path = state_dir.join("harness_suite_failure.txt");
@@ -326,12 +233,7 @@ fn run_harness_repair_local(
     if status.success() {
         Ok(())
     } else {
-        bail!(
-            "local canon-harness-repair failed for {}::{} with status {}",
-            crate_name,
-            test_name,
-            status
-        )
+        bail!("local canon-harness-repair failed for {}::{} with status {}", crate_name, test_name, status)
     }
 }
 
@@ -340,24 +242,18 @@ fn first_failing_case(result: &CommandResult, default_crate: Option<&str>) -> Op
         return Some(found);
     }
     if let Some(test_name) = first_failed_test_name(&result.stdout) {
-        if let Some(crate_name) =
-            infer_crate_from_failure_output(&result.stderr, &result.stdout, default_crate)
-        {
+        if let Some(crate_name) = infer_crate_from_failure_output(&result.stderr, &result.stdout, default_crate) {
             return Some((crate_name, test_name));
         }
     }
     if let Some(test_name) = first_failed_test_name(&result.stderr) {
-        if let Some(crate_name) =
-            infer_crate_from_failure_output(&result.stderr, &result.stdout, default_crate)
-        {
+        if let Some(crate_name) = infer_crate_from_failure_output(&result.stderr, &result.stdout, default_crate) {
             return Some((crate_name, test_name));
         }
     }
     // Fall back to compile-error detection: if cargo reported a build failure,
     // extract the crate name and use the first error line as the synthetic test name.
-    if let Some(crate_name) = crate_from_compile_error(&result.output)
-        .or_else(|| default_crate.map(str::to_string))
-    {
+    if let Some(crate_name) = crate_from_compile_error(&result.output).or_else(|| default_crate.map(str::to_string)) {
         if let Some(error_summary) = compile_error_first_line(&result.output) {
             return Some((crate_name, error_summary));
         }
@@ -409,11 +305,7 @@ fn first_failed_test_name(text: &str) -> Option<String> {
     None
 }
 
-fn infer_crate_from_failure_output(
-    stderr: &str,
-    stdout: &str,
-    default_crate: Option<&str>,
-) -> Option<String> {
+fn infer_crate_from_failure_output(stderr: &str, stdout: &str, default_crate: Option<&str>) -> Option<String> {
     if let Some(crate_name) = crate_from_rerun_hint(stderr) {
         return Some(crate_name);
     }
@@ -463,10 +355,7 @@ fn crate_from_rerun_hint(text: &str) -> Option<String> {
             continue;
         };
         let suffix = &line[idx + marker.len()..];
-        let crate_name = suffix
-            .split([' ', '`'])
-            .next()?
-            .trim();
+        let crate_name = suffix.split([' ', '`']).next()?.trim();
         if !crate_name.is_empty() {
             return Some(crate_name.to_string());
         }
@@ -475,10 +364,7 @@ fn crate_from_rerun_hint(text: &str) -> Option<String> {
 }
 
 fn last_running_crate(stdout: &str) -> Option<String> {
-    stdout
-        .lines()
-        .filter_map(|line| parse_running_crate(line.trim()))
-        .last()
+    stdout.lines().filter_map(|line| parse_running_crate(line.trim())).last()
 }
 
 fn parse_running_crate(line: &str) -> Option<String> {
@@ -497,34 +383,20 @@ fn parse_running_crate(line: &str) -> Option<String> {
 
 fn parse_failed_test_name(line: &str, in_failures_section: bool) -> Option<String> {
     if line.starts_with("test ") && line.ends_with("FAILED") {
-        let test_name = line
-            .trim_start_matches("test ")
-            .trim_end_matches("FAILED")
-            .trim()
-            .trim_end_matches("...")
-            .trim_end_matches('.')
-            .trim();
+        let test_name = line.trim_start_matches("test ").trim_end_matches("FAILED").trim().trim_end_matches("...").trim_end_matches('.').trim();
         if !test_name.is_empty() {
             return Some(test_name.to_string());
         }
     }
 
     if line.starts_with("---- ") && line.ends_with(" stdout ----") {
-        let test_name = line
-            .trim_start_matches("---- ")
-            .trim_end_matches(" stdout ----")
-            .trim();
+        let test_name = line.trim_start_matches("---- ").trim_end_matches(" stdout ----").trim();
         if !test_name.is_empty() {
             return Some(test_name.to_string());
         }
     }
 
-    if in_failures_section
-        && !line.is_empty()
-        && !line.starts_with("failures:")
-        && !line.starts_with("---- ")
-        && !line.starts_with("test result:")
-    {
+    if in_failures_section && !line.is_empty() && !line.starts_with("failures:") && !line.starts_with("---- ") && !line.starts_with("test result:") {
         return Some(line.to_string());
     }
 

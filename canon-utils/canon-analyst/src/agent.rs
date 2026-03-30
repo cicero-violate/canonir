@@ -27,17 +27,13 @@ No code block = final answer.";
 pub async fn run(question: &str, tlog_path: &str) -> Result<()> {
     let config = CapabilityConfig::snapshot_store_load()?;
 
-    let endpoint = config
-        .llm_endpoints
-        .iter()
-        .find(|e| e.id == ANALYST_ENDPOINT_ID || e.role.as_deref() == Some(ANALYST_ROLE))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "analyst endpoint '{}' not found in capability_config.toml. \
+    let endpoint = config.llm_endpoints.iter().find(|e| e.id == ANALYST_ENDPOINT_ID || e.role.as_deref() == Some(ANALYST_ROLE)).ok_or_else(|| {
+        anyhow::anyhow!(
+            "analyst endpoint '{}' not found in capability_config.toml. \
                  Add [llm.endpoints.analyst] with role=\"analyst\".",
-                ANALYST_ENDPOINT_ID
-            )
-        })?;
+            ANALYST_ENDPOINT_ID
+        )
+    })?;
 
     let bridge_addr = std::env::var("CANON_LLM_BRIDGE_ADDR").unwrap_or_else(|_| "127.0.0.1:9100".to_string());
     let addr: std::net::SocketAddr = bridge_addr.parse().unwrap_or_else(|_| "127.0.0.1:9100".parse().unwrap());
@@ -76,12 +72,12 @@ pub async fn run(question: &str, tlog_path: &str) -> Result<()> {
             &endpoint.url,
             endpoint.stateful,
             &prompt,
-            "",              // role_schema embedded in prompt
-            None,            // node_id
-            None,            // cache_key
-            false,           // bust_cache
-            true,            // allow_req_id_mismatch
-            "analyst",       // phase
+            "",        // role_schema embedded in prompt
+            None,      // node_id
+            None,      // cache_key
+            false,     // bust_cache
+            true,      // allow_req_id_mismatch
+            "analyst", // phase
             &tabs,
             endpoint.max_tabs,
             config.tab_cooldown_ms,
@@ -117,7 +113,11 @@ fn extract_python_block(text: &str) -> Option<String> {
     let after = &text[start + 9..]; // skip "```python"
     let end = after.find("```")?;
     let code = after[..end].trim().to_string();
-    if code.is_empty() { None } else { Some(code) }
+    if code.is_empty() {
+        None
+    } else {
+        Some(code)
+    }
 }
 
 /// Build a bounded prompt for non-stateful endpoints by replaying the

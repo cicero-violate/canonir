@@ -1,6 +1,6 @@
 use crate::hooks::{hook_denied_event, HookChain, HookDecision};
-use canon_invariant::{decision_trace_payload, invariant_violation_delta, invariant_violation_state};
 use canon_event::{Code, DebugEvent, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventMask, EventOutcome, RuntimeEvent, RustcEvent};
+use canon_invariant::{decision_trace_payload, invariant_violation_delta, invariant_violation_state};
 use crossbeam_channel::{bounded, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -78,13 +78,7 @@ fn should_count_as_noop_violation(consumer: &str, reason: &str) -> bool {
                 | "route_executor_noop"
                 | "route_executor_missing_target_plan"
         ),
-        "loop_stage_executor" => !matches!(
-            reason,
-            "loop_stage_not_stage_event"
-                | "loop_stage_async"
-                | "loop_stage_halted"
-                | "loop_stage_no_emitter"
-        ),
+        "loop_stage_executor" => !matches!(reason, "loop_stage_not_stage_event" | "loop_stage_async" | "loop_stage_halted" | "loop_stage_no_emitter"),
         _ => false,
     }
 }
@@ -282,11 +276,7 @@ impl EventBus {
             if let Some(first) = self.sync_consumers.first() {
                 first.emitter.emit_with_parents(
                     RuntimeEvent::Code(Code {
-                        delta: invariant_violation_delta(format!(
-                            "control event delivered to 0 consumers; kind={}; event_id={}",
-                            canon_event::event_kind_str(&base_event),
-                            event_id
-                        )),
+                        delta: invariant_violation_delta(format!("control event delivered to 0 consumers; kind={}; event_id={}", canon_event::event_kind_str(&base_event), event_id)),
                         state: invariant_violation_state(),
                     }),
                     vec![event_id],

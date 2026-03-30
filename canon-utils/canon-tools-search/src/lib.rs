@@ -28,13 +28,7 @@ pub fn search_files(query: &str, root: &Path, limit: usize) -> Result<Vec<Search
     let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
     let pattern = Pattern::new(query, CaseMatching::Smart, Normalization::Smart, AtomKind::Fuzzy);
 
-    let walker = WalkBuilder::new(root)
-        .hidden(false)
-        .ignore(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .build();
+    let walker = WalkBuilder::new(root).hidden(false).ignore(true).git_ignore(true).git_global(true).git_exclude(true).build();
 
     let mut results = Vec::new();
     for entry in walker.flatten() {
@@ -59,12 +53,7 @@ pub fn search_files(query: &str, root: &Path, limit: usize) -> Result<Vec<Search
         let Some(score) = pattern.score(haystack, &mut matcher) else {
             continue;
         };
-        results.push(SearchResult {
-            path: rel,
-            full_path,
-            score,
-            snippet: None,
-        });
+        results.push(SearchResult { path: rel, full_path, score, snippet: None });
     }
 
     results.sort_by(|a, b| match b.score.cmp(&a.score) {
@@ -89,13 +78,7 @@ pub fn search_files_bm25(query: &str, root: &Path, limit: usize) -> Result<Vec<S
     }
 
     let mut documents: Vec<(PathBuf, PathBuf, Vec<String>)> = Vec::new();
-    let walker = WalkBuilder::new(root)
-        .hidden(false)
-        .ignore(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .build();
+    let walker = WalkBuilder::new(root).hidden(false).ignore(true).git_ignore(true).git_global(true).git_exclude(true).build();
 
     for entry in walker.flatten() {
         let file_type = match entry.file_type() {
@@ -166,12 +149,7 @@ pub fn search_files_bm25(query: &str, root: &Path, limit: usize) -> Result<Vec<S
         }
         if score > 0.0 {
             let snippet = make_snippet(&tokens, &query_terms);
-            scored.push(SearchResult {
-                path: rel,
-                full_path: full,
-                score: (score * 1000.0) as u32,
-                snippet,
-            });
+            scored.push(SearchResult { path: rel, full_path: full, score: (score * 1000.0) as u32, snippet });
         }
     }
 
@@ -186,17 +164,11 @@ pub fn search_files_bm25(query: &str, root: &Path, limit: usize) -> Result<Vec<S
 }
 
 fn tokenize(text: &str) -> Vec<String> {
-    text.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '/' && c != '.')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_ascii_lowercase())
-        .collect()
+    text.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '/' && c != '.').filter(|s| !s.is_empty()).map(|s| s.to_ascii_lowercase()).collect()
 }
 
 fn is_text_candidate(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|s| s.to_str()),
-        Some("rs" | "toml" | "md" | "txt" | "json" | "yaml" | "yml")
-    )
+    matches!(path.extension().and_then(|s| s.to_str()), Some("rs" | "toml" | "md" | "txt" | "json" | "yaml" | "yml"))
 }
 
 fn make_snippet(tokens: &[String], terms: &[String]) -> Option<String> {
@@ -210,4 +182,3 @@ fn make_snippet(tokens: &[String], terms: &[String]) -> Option<String> {
     }
     None
 }
-

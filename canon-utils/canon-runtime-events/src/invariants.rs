@@ -31,12 +31,7 @@ pub fn validate_event(event: &CanonEvent) -> Result<()> {
 }
 
 fn route_selected_target(event: &CanonEvent) -> Option<&str> {
-    event
-        .payload
-        .data
-        .get("approved_route")
-        .and_then(|v| v.as_str())
-        .or_else(|| event.payload.output.get("approved_route").and_then(|v| v.as_str()))
+    event.payload.data.get("approved_route").and_then(|v| v.as_str()).or_else(|| event.payload.output.get("approved_route").and_then(|v| v.as_str()))
 }
 
 pub fn required_successor_kind(kind: EventKind, approved_route: Option<&str>) -> Option<EventKind> {
@@ -70,11 +65,7 @@ pub fn validate_transition(prev: &CanonEvent, next: &CanonEvent) -> Result<()> {
     let allowed = prev.kind.allowed_next().contains(&next.kind);
 
     if !allowed {
-        bail!(
-            "invariant violation: illegal transition {} -> {}",
-            prev.kind,
-            next.kind
-        );
+        bail!("invariant violation: illegal transition {} -> {}", prev.kind, next.kind);
     }
 
     Ok(())
@@ -90,20 +81,8 @@ pub struct PendingTransition {
 
 pub fn is_recovery_event(event: &CanonEvent) -> bool {
     match event.kind {
-        EventKind::ErrorOccurred => event
-            .payload
-            .data
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .map(|kind| matches!(kind, "recovery_event" | "reset_event" | "override_event"))
-            .unwrap_or(false),
-        EventKind::Debug => event
-            .payload
-            .data
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .map(|kind| matches!(kind, "recovery_event" | "reset_event" | "override_event"))
-            .unwrap_or(false),
+        EventKind::ErrorOccurred => event.payload.data.get("kind").and_then(|v| v.as_str()).map(|kind| matches!(kind, "recovery_event" | "reset_event" | "override_event")).unwrap_or(false),
+        EventKind::Debug => event.payload.data.get("kind").and_then(|v| v.as_str()).map(|kind| matches!(kind, "recovery_event" | "reset_event" | "override_event")).unwrap_or(false),
         _ => false,
     }
 }
@@ -116,33 +95,25 @@ pub fn required_successor(event: &CanonEvent) -> Option<PendingTransition> {
         EventKind::RouteSelected => {
             let approved = route_selected_target(event)?;
             let expected = required_successor_kind(event.kind, Some(approved))?;
+            Some(PendingTransition { expected, parent: event.id.clone(), source_kind: event.kind, note: format!("approved_route={approved}") })
+        }
+        EventKind::LoopObserved | EventKind::PlanningCompleted | EventKind::LoopActed | EventKind::LoopVerified | EventKind::VerifierPolicyUpdated | EventKind::LoopRewarded => {
             Some(PendingTransition {
-                expected,
+                expected: required_successor_kind(event.kind, None)?,
                 parent: event.id.clone(),
                 source_kind: event.kind,
-                note: format!("approved_route={approved}"),
+                note: match event.kind {
+                    EventKind::LoopObserved => "post-observe routing",
+                    EventKind::PlanningCompleted => "post-plan routing",
+                    EventKind::LoopActed => "post-act routing",
+                    EventKind::LoopVerified => "verifier policy update must follow verify",
+                    EventKind::VerifierPolicyUpdated => "reward must follow verifier policy update",
+                    EventKind::LoopRewarded => "post-reward routing",
+                    _ => unreachable!(),
+                }
+                .to_string(),
             })
         }
-        EventKind::LoopObserved
-        | EventKind::PlanningCompleted
-        | EventKind::LoopActed
-        | EventKind::LoopVerified
-        | EventKind::VerifierPolicyUpdated
-        | EventKind::LoopRewarded => Some(PendingTransition {
-            expected: required_successor_kind(event.kind, None)?,
-            parent: event.id.clone(),
-            source_kind: event.kind,
-            note: match event.kind {
-                EventKind::LoopObserved => "post-observe routing",
-                EventKind::PlanningCompleted => "post-plan routing",
-                EventKind::LoopActed => "post-act routing",
-                EventKind::LoopVerified => "verifier policy update must follow verify",
-                EventKind::VerifierPolicyUpdated => "reward must follow verifier policy update",
-                EventKind::LoopRewarded => "post-reward routing",
-                _ => unreachable!(),
-            }
-            .to_string(),
-        }),
         _ => None,
     }
 }
@@ -154,13 +125,7 @@ mod tests {
     use serde_json::json;
 
     fn payload() -> CanonPayload {
-        CanonPayload {
-            input: json!({"x":1}),
-            output: json!({"y":1}),
-            delta: json!({"z":1}),
-            meta: CanonPayloadMeta { file: "test".to_string(), line: 1 },
-            data: json!({}),
-        }
+        CanonPayload { input: json!({"x":1}), output: json!({"y":1}), delta: json!({"z":1}), meta: CanonPayloadMeta { file: "test".to_string(), line: 1 }, data: json!({}) }
     }
 
     fn root(id: &str, kind: EventKind) -> CanonEvent {
@@ -169,18 +134,10 @@ mod tests {
 
     #[test]
     fn control_chain_completeness_state_space_is_closed() {
-        let route_cases = [
-            ("observe", EventKind::LoopObserved),
-            ("plan", EventKind::PlanningCompleted),
-            ("act", EventKind::LoopActed),
-            ("verify", EventKind::LoopVerified),
-            ("conclude", EventKind::LoopRewarded),
-        ];
+        let route_cases =
+            [("observe", EventKind::LoopObserved), ("plan", EventKind::PlanningCompleted), ("act", EventKind::LoopActed), ("verify", EventKind::LoopVerified), ("conclude", EventKind::LoopRewarded)];
         for (approved, expected) in route_cases {
-            assert_eq!(
-                required_successor_kind(EventKind::RouteSelected, Some(approved)),
-                Some(expected)
-            );
+            assert_eq!(required_successor_kind(EventKind::RouteSelected, Some(approved)), Some(expected));
         }
         let control_cases = [
             (EventKind::LoopObserved, EventKind::RouteSelected),

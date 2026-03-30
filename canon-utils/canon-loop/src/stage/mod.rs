@@ -1,13 +1,13 @@
-use canon_event::{events::VerifierPolicyUpdated, CapabilityCompleted, CapabilityFailed, EventId, RuntimeEvent, RouteSelected};
+use canon_event::{events::VerifierPolicyUpdated, CapabilityCompleted, CapabilityFailed, EventId, RouteSelected, RuntimeEvent};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
+pub mod act;
+pub mod decompose;
 pub mod observe;
 pub mod plan;
-pub mod act;
-pub mod verify;
 pub mod reward;
-pub mod decompose;
+pub mod verify;
 
 pub enum LoopStageEvent {
     Scan(RouteSelected),

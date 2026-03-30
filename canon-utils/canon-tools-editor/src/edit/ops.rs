@@ -166,12 +166,7 @@ impl ProjectEditor {
         };
         let (per_file, per_file_attr_pairs) = self.collect_symbol_replacements(&session, renames)?;
         if !renames.is_empty() && per_file.is_empty() {
-            crate::tlog::publish_invariant_error(
-                &self.project_root,
-                "rename_symbol_apply",
-                "apply invariant: rename produced no replacements",
-                serde_json::json!({ "renames": renames }),
-            );
+            crate::tlog::publish_invariant_error(&self.project_root, "rename_symbol_apply", "apply invariant: rename produced no replacements", serde_json::json!({ "renames": renames }));
             return Err(anyhow!("apply invariant: rename produced no replacements"));
         }
         let mut touched = HashSet::new();
@@ -189,11 +184,7 @@ impl ProjectEditor {
         let mut per_file_attr_pairs: std::collections::HashMap<PathBuf, Vec<(String, String)>> = std::collections::HashMap::new();
         for (symbol_id, new_name) in renames {
             let canonical_symbol_id = session.resolve_symbol_id(symbol_id);
-            let old_ident = canonical_symbol_id
-                .rsplit_once("::")
-                .map(|(_, s)| s)
-                .unwrap_or(canonical_symbol_id.as_str())
-                .to_string();
+            let old_ident = canonical_symbol_id.rsplit_once("::").map(|(_, s)| s).unwrap_or(canonical_symbol_id.as_str()).to_string();
             let norm = crate::edit::symbol_id::normalize_symbol_id(&canonical_symbol_id);
             let Some(occurrences) = session.spans_for(&norm) else {
                 crate::tlog::publish_invariant_error(

@@ -16,7 +16,6 @@
 ///
 /// The relay server is intentionally minimal: one POST endpoint, JSON in/out,
 /// no auth (loopback only), blocking response (no streaming).
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -70,14 +69,14 @@ impl RelayServerHandle {
 ///
 /// Returns a handle whose lifetime controls the server.
 pub async fn relay_server_start(
-    addr: &str,
-    dispatch_fn: impl Fn(RelayRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>
-        + Send
-        + Sync
-        + 'static,
+    addr: &str, dispatch_fn: impl Fn(RelayRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>> + Send + Sync + 'static,
 ) -> Result<RelayServerHandle> {
-    use tokio::{net::TcpListener, io::{AsyncReadExt, AsyncWriteExt}, sync::oneshot};
     use std::sync::Arc;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::oneshot,
+    };
 
     let listener = TcpListener::bind(addr).await?;
     let local_addr = listener.local_addr()?;
@@ -137,16 +136,8 @@ pub fn relay_client_call(relay_addr: &str, req: &RelayRequest) -> Result<RelayRe
 /// Convenience: resolve a role name to an endpoint ID using the loaded config.
 /// Returns the first endpoint whose `role` field matches `role_name`, or an
 /// error if no such endpoint is registered.
-pub fn relay_resolve_role_to_endpoint(
-    config: &crate::config::CapabilityConfig,
-    role_name: &str,
-) -> Result<String> {
-    config
-        .llm_endpoints
-        .iter()
-        .find(|e| e.role.as_deref() == Some(role_name))
-        .map(|e| e.id.clone())
-        .ok_or_else(|| anyhow::anyhow!("no endpoint registered for role '{}'", role_name))
+pub fn relay_resolve_role_to_endpoint(config: &crate::config::CapabilityConfig, role_name: &str) -> Result<String> {
+    config.llm_endpoints.iter().find(|e| e.role.as_deref() == Some(role_name)).map(|e| e.id.clone()).ok_or_else(|| anyhow::anyhow!("no endpoint registered for role '{}'", role_name))
 }
 
 #[cfg(test)]
@@ -201,8 +192,7 @@ burst = 1
     }
 
     fn load_harness_config() -> CapabilityConfig {
-        CapabilityConfig::snapshot_store_load()
-            .expect("harness_config_toml must parse correctly")
+        CapabilityConfig::snapshot_store_load().expect("harness_config_toml must parse correctly")
     }
 
     // ── relay_resolve_role_to_endpoint ────────────────────────────────────────
@@ -211,8 +201,7 @@ burst = 1
     #[test]
     fn test_resolve_harness_repair_role() {
         let config = load_harness_config();
-        let endpoint_id = relay_resolve_role_to_endpoint(&config, "harness_repair")
-            .expect("harness_repair role must resolve");
+        let endpoint_id = relay_resolve_role_to_endpoint(&config, "harness_repair").expect("harness_repair role must resolve");
         assert_eq!(endpoint_id, "harness_repair_chatgpt");
     }
 
@@ -220,8 +209,7 @@ burst = 1
     #[test]
     fn test_resolve_harness_eventlog_role() {
         let config = load_harness_config();
-        let endpoint_id = relay_resolve_role_to_endpoint(&config, "harness_eventlog")
-            .expect("harness_eventlog role must resolve");
+        let endpoint_id = relay_resolve_role_to_endpoint(&config, "harness_eventlog").expect("harness_eventlog role must resolve");
         assert_eq!(endpoint_id, "harness_eventlog_chatgpt");
     }
 
@@ -241,10 +229,7 @@ burst = 1
         let config = load_harness_config();
         let repair_id = relay_resolve_role_to_endpoint(&config, "harness_repair").unwrap();
         let eventlog_id = relay_resolve_role_to_endpoint(&config, "harness_eventlog").unwrap();
-        assert_ne!(
-            repair_id, eventlog_id,
-            "harness_repair and harness_eventlog must map to separate endpoints"
-        );
+        assert_ne!(repair_id, eventlog_id, "harness_repair and harness_eventlog must map to separate endpoints");
     }
 
     // ── RelayRequest / RelayResponse serde ───────────────────────────────────
@@ -267,22 +252,12 @@ burst = 1
     /// RelayResponse must round-trip through JSON without data loss.
     #[test]
     fn test_relay_response_serde_roundtrip() {
-        let ok_resp = RelayResponse {
-            ok: true,
-            response: Some("```json\n[{\"action\":\"done\"}]\n```".to_string()),
-            error: None,
-            request_tag: Some("req-abc-123".to_string()),
-        };
+        let ok_resp = RelayResponse { ok: true, response: Some("```json\n[{\"action\":\"done\"}]\n```".to_string()), error: None, request_tag: Some("req-abc-123".to_string()) };
         let json = serde_json::to_string(&ok_resp).expect("serialize");
         let decoded: RelayResponse = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(ok_resp, decoded);
 
-        let err_resp = RelayResponse {
-            ok: false,
-            response: None,
-            error: Some("tab timeout".to_string()),
-            request_tag: None,
-        };
+        let err_resp = RelayResponse { ok: false, response: None, error: Some("tab timeout".to_string()), request_tag: None };
         let json2 = serde_json::to_string(&err_resp).expect("serialize");
         let decoded2: RelayResponse = serde_json::from_str(&json2).expect("deserialize");
         assert_eq!(err_resp, decoded2);
@@ -295,20 +270,12 @@ burst = 1
     /// is actually open (a real HTTP POST is tested separately).
     #[tokio::test]
     async fn test_relay_server_binds_on_configured_addr() {
-        let handle = relay_server_start("127.0.0.1:0", |_req| {
-            Box::pin(async { Ok("mock response".to_string()) })
-        })
-        .await
-        .expect("relay server must start successfully");
+        let handle = relay_server_start("127.0.0.1:0", |_req| Box::pin(async { Ok("mock response".to_string()) })).await.expect("relay server must start successfully");
 
         let addr = handle.local_addr();
         // Verify the port is reachable.
         let stream = tokio::net::TcpStream::connect(addr).await;
-        assert!(
-            stream.is_ok(),
-            "relay server must accept TCP connections on {addr}: {:?}",
-            stream.err()
-        );
+        assert!(stream.is_ok(), "relay server must accept TCP connections on {addr}: {:?}", stream.err());
     }
 
     /// Sending a well-formed RelayRequest via relay_client_call to a running
@@ -316,11 +283,7 @@ burst = 1
     /// LLM response text.
     #[tokio::test]
     async fn test_relay_client_call_returns_mock_response() {
-        let handle = relay_server_start("127.0.0.1:0", |_req| {
-            Box::pin(async { Ok("```json\n[{\"action\":\"done\"}]\n```".to_string()) })
-        })
-        .await
-        .expect("relay server must start");
+        let handle = relay_server_start("127.0.0.1:0", |_req| Box::pin(async { Ok("```json\n[{\"action\":\"done\"}]\n```".to_string()) })).await.expect("relay server must start");
 
         let addr_str = handle.local_addr().to_string();
         let req = RelayRequest {
@@ -333,16 +296,10 @@ burst = 1
 
         // relay_client_call is a blocking call — run on a thread so we don't
         // block the async runtime.
-        let resp = tokio::task::spawn_blocking(move || relay_client_call(&addr_str, &req))
-            .await
-            .expect("spawn_blocking did not panic")
-            .expect("relay_client_call must succeed");
+        let resp = tokio::task::spawn_blocking(move || relay_client_call(&addr_str, &req)).await.expect("spawn_blocking did not panic").expect("relay_client_call must succeed");
 
         assert!(resp.ok, "response must be ok: {:?}", resp.error);
-        assert_eq!(
-            resp.response.as_deref(),
-            Some("```json\n[{\"action\":\"done\"}]\n```")
-        );
+        assert_eq!(resp.response.as_deref(), Some("```json\n[{\"action\":\"done\"}]\n```"));
         assert_eq!(resp.request_tag.as_deref(), Some("t1"));
     }
 
@@ -350,20 +307,10 @@ burst = 1
     /// a RelayResponse with ok=false and a non-empty error field.
     #[tokio::test]
     async fn test_relay_client_call_propagates_dispatch_error() {
-        let handle = relay_server_start("127.0.0.1:0", |_req| {
-            Box::pin(async { Err(anyhow::anyhow!("simulated tab timeout")) })
-        })
-        .await
-        .expect("relay server must start");
+        let handle = relay_server_start("127.0.0.1:0", |_req| Box::pin(async { Err(anyhow::anyhow!("simulated tab timeout")) })).await.expect("relay server must start");
 
         let addr_str = handle.local_addr().to_string();
-        let req = RelayRequest {
-            role: "harness_repair".to_string(),
-            endpoint_id: None,
-            prompt: "repair".to_string(),
-            role_schema: String::new(),
-            request_tag: Some("t2".to_string()),
-        };
+        let req = RelayRequest { role: "harness_repair".to_string(), endpoint_id: None, prompt: "repair".to_string(), role_schema: String::new(), request_tag: Some("t2".to_string()) };
 
         let resp = tokio::task::spawn_blocking(move || relay_client_call(&addr_str, &req))
             .await
@@ -372,10 +319,7 @@ burst = 1
 
         assert!(!resp.ok);
         let err = resp.error.expect("error field must be present on failure");
-        assert!(
-            err.contains("tab timeout") || !err.is_empty(),
-            "error must contain the dispatch error message: {err}"
-        );
+        assert!(err.contains("tab timeout") || !err.is_empty(), "error must contain the dispatch error message: {err}");
         assert_eq!(resp.request_tag.as_deref(), Some("t2"));
     }
 
@@ -399,13 +343,7 @@ burst = 1
         let repair_task = tokio::task::spawn_blocking(move || {
             relay_client_call(
                 &addr_repair,
-                &RelayRequest {
-                    role: "harness_repair".to_string(),
-                    endpoint_id: None,
-                    prompt: "repair prompt".to_string(),
-                    role_schema: String::new(),
-                    request_tag: Some("repair".to_string()),
-                },
+                &RelayRequest { role: "harness_repair".to_string(), endpoint_id: None, prompt: "repair prompt".to_string(), role_schema: String::new(), request_tag: Some("repair".to_string()) },
             )
         });
 
@@ -413,13 +351,7 @@ burst = 1
         let eventlog_task = tokio::task::spawn_blocking(move || {
             relay_client_call(
                 &addr_eventlog,
-                &RelayRequest {
-                    role: "harness_eventlog".to_string(),
-                    endpoint_id: None,
-                    prompt: "eventlog prompt".to_string(),
-                    role_schema: String::new(),
-                    request_tag: Some("eventlog".to_string()),
-                },
+                &RelayRequest { role: "harness_eventlog".to_string(), endpoint_id: None, prompt: "eventlog prompt".to_string(), role_schema: String::new(), request_tag: Some("eventlog".to_string()) },
             )
         });
 
@@ -431,27 +363,15 @@ burst = 1
         assert!(repair_resp.ok, "repair call must succeed");
         assert!(eventlog_resp.ok, "eventlog call must succeed");
 
-        assert_eq!(
-            repair_resp.response.as_deref(),
-            Some("response_for_harness_repair"),
-            "repair response must be scoped to harness_repair role"
-        );
-        assert_eq!(
-            eventlog_resp.response.as_deref(),
-            Some("response_for_harness_eventlog"),
-            "eventlog response must be scoped to harness_eventlog role"
-        );
+        assert_eq!(repair_resp.response.as_deref(), Some("response_for_harness_repair"), "repair response must be scoped to harness_repair role");
+        assert_eq!(eventlog_resp.response.as_deref(), Some("response_for_harness_eventlog"), "eventlog response must be scoped to harness_eventlog role");
     }
 
     /// Dropping the RelayServerHandle must shut down the server: subsequent
     /// connection attempts must be refused.
     #[tokio::test]
     async fn test_relay_server_shuts_down_on_handle_drop() {
-        let handle = relay_server_start("127.0.0.1:0", |_req| {
-            Box::pin(async { Ok("ok".to_string()) })
-        })
-        .await
-        .expect("relay server must start");
+        let handle = relay_server_start("127.0.0.1:0", |_req| Box::pin(async { Ok("ok".to_string()) })).await.expect("relay server must start");
 
         let addr = handle.local_addr();
         drop(handle);
@@ -460,9 +380,6 @@ burst = 1
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let result = tokio::net::TcpStream::connect(addr).await;
-        assert!(
-            result.is_err(),
-            "after handle is dropped the server must no longer accept connections"
-        );
+        assert!(result.is_err(), "after handle is dropped the server must no longer accept connections");
     }
 }

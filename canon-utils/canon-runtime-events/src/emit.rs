@@ -68,32 +68,10 @@ pub fn write_canon_event_auto(path: &Path, event: &CanonEvent) -> Result<()> {
     }
 }
 
-pub fn write_shaped_event_auto<T: CanonPayloadShape>(
-    path: &Path,
-    actor: &str,
-    kind: EventKind,
-    shape: &T,
-    parent_ids: Vec<EventId>,
-    root: bool,
-    meta: CanonPayloadMeta,
-) -> Result<EventId> {
+pub fn write_shaped_event_auto<T: CanonPayloadShape>(path: &Path, actor: &str, kind: EventKind, shape: &T, parent_ids: Vec<EventId>, root: bool, meta: CanonPayloadMeta) -> Result<EventId> {
     let id = EventId::new(new_event_id());
-    let payload = CanonPayload::from_data(
-        shape.payload_input(),
-        shape.payload_output(),
-        shape.payload_delta(),
-        meta,
-        shape.payload_data(),
-    );
-    let event = CanonEvent::new(
-        id.clone(),
-        parent_ids,
-        actor.to_string(),
-        kind,
-        now_millis(),
-        payload,
-        root,
-    );
+    let payload = CanonPayload::from_data(shape.payload_input(), shape.payload_output(), shape.payload_delta(), meta, shape.payload_data());
+    let event = CanonEvent::new(id.clone(), parent_ids, actor.to_string(), kind, now_millis(), payload, root);
     write_canon_event_auto(path, &event)?;
     Ok(id)
 }

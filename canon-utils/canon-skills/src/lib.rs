@@ -31,17 +31,9 @@ pub struct Skill {
 }
 
 impl Skill {
-    pub fn supports(
-        &self,
-        objective: Option<DevelopmentObjectiveKind>,
-        strategy: Option<DevelopmentStrategyKind>,
-    ) -> bool {
-        let objective_ok = objective.is_none_or(|objective| {
-            self.objectives.is_empty() || self.objectives.contains(&objective)
-        });
-        let strategy_ok = strategy.is_none_or(|strategy| {
-            self.strategies.is_empty() || self.strategies.contains(&strategy)
-        });
+    pub fn supports(&self, objective: Option<DevelopmentObjectiveKind>, strategy: Option<DevelopmentStrategyKind>) -> bool {
+        let objective_ok = objective.is_none_or(|objective| self.objectives.is_empty() || self.objectives.contains(&objective));
+        let strategy_ok = strategy.is_none_or(|strategy| self.strategies.is_empty() || self.strategies.contains(&strategy));
         objective_ok && strategy_ok
     }
 }
@@ -144,11 +136,7 @@ impl SkillRegistry {
         let path = self.skills_dir.join(format!("{skill_path}.md"));
         let content = fs::read_to_string(&path)?;
         let (front, body) = split_frontmatter(&content);
-        let fm: SkillFrontmatter = if let Some(raw) = front {
-            serde_yaml::from_str(raw)?
-        } else {
-            SkillFrontmatter::default()
-        };
+        let fm: SkillFrontmatter = if let Some(raw) = front { serde_yaml::from_str(raw)? } else { SkillFrontmatter::default() };
         let mut included_prompts = Vec::new();
         if let Some(includes) = fm.includes.as_ref() {
             for inc in includes {
@@ -164,18 +152,8 @@ impl SkillRegistry {
             name: fm.name.unwrap_or_else(|| skill_path.to_string()),
             description: fm.description.unwrap_or_default(),
             effort: fm.effort,
-            objectives: fm
-                .objectives
-                .unwrap_or_default()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            strategies: fm
-                .strategies
-                .unwrap_or_default()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            objectives: fm.objectives.unwrap_or_default().into_iter().map(Into::into).collect(),
+            strategies: fm.strategies.unwrap_or_default().into_iter().map(Into::into).collect(),
             tools: fm.tools.unwrap_or_default(),
             preconditions: fm.preconditions.unwrap_or_default(),
             prompt,
@@ -184,20 +162,11 @@ impl SkillRegistry {
         Ok(skill)
     }
 
-    pub fn select_for(
-        &self,
-        objective: DevelopmentObjectiveKind,
-        strategy: DevelopmentStrategyKind,
-    ) -> Result<Vec<Arc<Skill>>> {
+    pub fn select_for(&self, objective: DevelopmentObjectiveKind, strategy: DevelopmentStrategyKind) -> Result<Vec<Arc<Skill>>> {
         self.select_for_scope("", objective, strategy)
     }
 
-    pub fn select_for_scope(
-        &self,
-        scope: &str,
-        objective: DevelopmentObjectiveKind,
-        strategy: DevelopmentStrategyKind,
-    ) -> Result<Vec<Arc<Skill>>> {
+    pub fn select_for_scope(&self, scope: &str, objective: DevelopmentObjectiveKind, strategy: DevelopmentStrategyKind) -> Result<Vec<Arc<Skill>>> {
         let mut out = Vec::new();
         for skill_path in collect_skill_paths(&self.skills_dir, scope)? {
             let skill = self.load(&skill_path)?;
@@ -217,12 +186,7 @@ fn collect_skill_paths(root: &PathBuf, scope: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
-fn collect_skill_paths_inner(
-    root: &PathBuf,
-    current: &PathBuf,
-    scope: &str,
-    out: &mut Vec<String>,
-) -> Result<()> {
+fn collect_skill_paths_inner(root: &PathBuf, current: &PathBuf, scope: &str, out: &mut Vec<String>) -> Result<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
@@ -262,9 +226,7 @@ fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
 
 pub fn global_registry() -> &'static SkillRegistry {
     static REG: Lazy<SkillRegistry> = Lazy::new(|| {
-        let dir = std::env::var("CANON_SKILLS_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/canon-agent-prompts/skills"));
+        let dir = std::env::var("CANON_SKILLS_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/canon-agent-prompts/skills"));
         SkillRegistry::new(dir)
     });
     &REG

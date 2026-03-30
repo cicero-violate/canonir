@@ -3,8 +3,8 @@ use canon_goal::parse_agent_goal_markdown;
 use canon_semantic_state::SemanticStateSummary;
 use canon_tools_search::search_files;
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
@@ -39,8 +39,7 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         ctx.goal_text.hash(&mut h);
         h.finish()
     };
-    let (semantic_summary, observe_diagnostics, observe_events) =
-        build_observation_payload(&ctx.goal_text, &ctx.workspace, &ctx.recent_compiler_errors);
+    let (semantic_summary, observe_diagnostics, observe_events) = build_observation_payload(&ctx.goal_text, &ctx.workspace, &ctx.recent_compiler_errors);
     let facts_hash = {
         let mut h = DefaultHasher::new();
         semantic_summary.hash(&mut h);
@@ -107,8 +106,7 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
                 continue;
             }
             let val = &ev.payload.data;
-            let is_goal = val.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL")
-                || val.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
+            let is_goal = val.get("prompt_id").and_then(|v| v.as_str()) == Some("AGENT_GOAL") || val.get("path").and_then(|v| v.as_str()).map(|p| p.contains("AGENT_GOAL")).unwrap_or(false);
             if is_goal {
                 if let Some(c) = val.get("content").and_then(|v| v.as_str()) {
                     found = Some(c.to_string());
@@ -119,11 +117,7 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
     found
 }
 
-fn build_observation_payload(
-    goal_text: &Option<String>,
-    workspace: &Path,
-    compiler_errors: &[serde_json::Value],
-) -> (SemanticStateSummary, Vec<String>, Vec<RuntimeEvent>) {
+fn build_observation_payload(goal_text: &Option<String>, workspace: &Path, compiler_errors: &[serde_json::Value]) -> (SemanticStateSummary, Vec<String>, Vec<RuntimeEvent>) {
     let Some(goal) = goal_text else {
         return (SemanticStateSummary::default(), Vec::new(), Vec::new());
     };
@@ -131,32 +125,22 @@ fn build_observation_payload(
     let Some(model) = WorkspaceModel::inspect(goal, workspace) else {
         return (SemanticStateSummary::default(), Vec::new(), Vec::new());
     };
-    let planning_preconditions =
-        planning_preconditions::derive_preconditions(Some(&model), compiler_errors);
+    let planning_preconditions = planning_preconditions::derive_preconditions(Some(&model), compiler_errors);
     let compiler_hints = crate::compiler_hints::planner_lines(compiler_errors);
     let planning_precondition_lines = planning_preconditions::planner_lines(&planning_preconditions);
-    let failure_class = compiler_hints
-        .iter()
-        .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()))
-        .or_else(|| {
-            if planning_preconditions.is_empty() {
-                Some(canon_semantic_state::FailureClassKind::NoActionableFailure.as_str().to_string())
-            } else {
-                None
-            }
-        });
+    let failure_class = compiler_hints.iter().find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string())).or_else(|| {
+        if planning_preconditions.is_empty() {
+            Some(canon_semantic_state::FailureClassKind::NoActionableFailure.as_str().to_string())
+        } else {
+            None
+        }
+    });
     let failure_scope = compiler_hints
         .iter()
         .filter_map(|hint| hint.failure_scope_enum())
         .find(|scope| *scope != canon_semantic_state::FailureScopeKind::None)
         .map(|scope| scope.as_str().to_string())
-        .or_else(|| {
-            if planning_preconditions.is_empty() {
-                Some(canon_semantic_state::FailureScopeKind::None.as_str().to_string())
-            } else {
-                None
-            }
-        });
+        .or_else(|| if planning_preconditions.is_empty() { Some(canon_semantic_state::FailureScopeKind::None.as_str().to_string()) } else { None });
     let repair_intents = planning_preconditions::derive_repair_intents(&planning_preconditions, failure_scope.as_deref());
     let target_root = model.target_root.clone();
     let summary = SemanticStateSummary {
@@ -169,32 +153,13 @@ fn build_observation_payload(
         crate_name: model.crate_name.clone(),
         entrypoint_kind: Some(model.entrypoint_kind.as_str().to_string()),
         rust_file_count: Some(model.rust_file_count),
-        source_files: model
-            .source_files
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect(),
-        module_gaps: model
-            .module_gaps
-            .iter()
-            .map(|gap| {
-                format!(
-                    "{} -> {}",
-                    gap.module_name,
-                    gap.expected_paths
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(" or ")
-                )
-            })
-            .collect(),
+        source_files: model.source_files.iter().map(|p| p.display().to_string()).collect(),
+        module_gaps: model.module_gaps.iter().map(|gap| format!("{} -> {}", gap.module_name, gap.expected_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" or "))).collect(),
         planning_preconditions: planning_precondition_lines,
         repair_intents: planning_preconditions::repair_intent_lines(&repair_intents),
         compiler_hints,
         validation_blocked_by_preconditions: !planning_preconditions.is_empty(),
-        compiler_repair_required: planning_preconditions
-            .contains(&planning_preconditions::PlanningPrecondition::MustFixDeadCodeForbidConflict),
+        compiler_repair_required: planning_preconditions.contains(&planning_preconditions::PlanningPrecondition::MustFixDeadCodeForbidConflict),
         failure_class,
         failure_scope,
         ..read_graph_summary(&target_root).unwrap_or_default()
@@ -287,11 +252,7 @@ fn build_observation_payload(
 }
 
 fn read_graph_summary(target_root: &Path) -> Option<SemanticStateSummary> {
-    let path = target_root
-        .join("state")
-        .join("graph")
-        .join("index")
-        .join("latest_workspace.json");
+    let path = target_root.join("state").join("graph").join("index").join("latest_workspace.json");
     let raw = std::fs::read_to_string(path).ok()?;
     let wrapper: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let summary = wrapper.get("latest_workspace").cloned().unwrap_or(wrapper);
@@ -301,27 +262,14 @@ fn read_graph_summary(target_root: &Path) -> Option<SemanticStateSummary> {
         graph_node_count: summary.get("node_count").and_then(|v| v.as_u64()).map(|v| v as usize),
         graph_edge_count: summary.get("edge_count").and_then(|v| v.as_u64()).map(|v| v as usize),
         graph_file_count: summary.get("file_count").and_then(|v| v.as_u64()).map(|v| v as usize),
-        graph_call_edge_count: summary
-            .get("call_edge_count")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize),
-        graph_module_edge_count: summary
-            .get("module_edge_count")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize),
-        graph_cfg_edge_count: summary
-            .get("cfg_edge_count")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize),
+        graph_call_edge_count: summary.get("call_edge_count").and_then(|v| v.as_u64()).map(|v| v as usize),
+        graph_module_edge_count: summary.get("module_edge_count").and_then(|v| v.as_u64()).map(|v| v as usize),
+        graph_cfg_edge_count: summary.get("cfg_edge_count").and_then(|v| v.as_u64()).map(|v| v as usize),
         ..SemanticStateSummary::default()
     })
 }
 
-fn build_observe_diagnostics(
-    model: &WorkspaceModel,
-    listing: &[String],
-    search_hits: &[serde_json::Value],
-) -> Vec<String> {
+fn build_observe_diagnostics(model: &WorkspaceModel, listing: &[String], search_hits: &[serde_json::Value]) -> Vec<String> {
     let mut diagnostics = Vec::new();
     if !listing.is_empty() {
         diagnostics.push(format!("dir_entries={}", listing.join(",")));
@@ -336,33 +284,13 @@ fn build_observe_diagnostics(
     diagnostics
 }
 
-fn synthetic_observe_event(
-    node_id: &str,
-    kind: &str,
-    payload: serde_json::Value,
-    output: serde_json::Value,
-) -> Vec<RuntimeEvent> {
+fn synthetic_observe_event(node_id: &str, kind: &str, payload: serde_json::Value, output: serde_json::Value) -> Vec<RuntimeEvent> {
     let request_id = format!("observe-{}", Uuid::new_v4());
     let tool_call_id = Uuid::new_v4().to_string();
     let tool_result_id = Uuid::new_v4().to_string();
     vec![
-        RuntimeEvent::ToolCall(ToolCall {
-            node_id: node_id.to_string(),
-            tool_call_id: tool_call_id.clone(),
-            request_id: request_id.clone(),
-            kind: kind.to_string(),
-            payload,
-            accepted: true,
-        }),
-        RuntimeEvent::ToolResult(ToolResult {
-            node_id: node_id.to_string(),
-            tool_call_id,
-            tool_result_id,
-            request_id,
-            kind: kind.to_string(),
-            output,
-            success: true,
-        }),
+        RuntimeEvent::ToolCall(ToolCall { node_id: node_id.to_string(), tool_call_id: tool_call_id.clone(), request_id: request_id.clone(), kind: kind.to_string(), payload, accepted: true }),
+        RuntimeEvent::ToolResult(ToolResult { node_id: node_id.to_string(), tool_call_id, tool_result_id, request_id, kind: kind.to_string(), output, success: true }),
     ]
 }
 

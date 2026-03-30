@@ -41,9 +41,7 @@ pub enum BootstrapCommandChoice {
 
 impl WorkspaceModel {
     pub fn inspect(goal_text: &str, workspace: &Path) -> Option<Self> {
-        let target_root = parse_agent_goal_markdown(goal_text)
-            .target_path
-            .unwrap_or_else(|| workspace.to_path_buf());
+        let target_root = parse_agent_goal_markdown(goal_text).target_path.unwrap_or_else(|| workspace.to_path_buf());
         let path_exists = target_root.exists();
         if !path_exists {
             return Some(Self {
@@ -91,10 +89,7 @@ impl WorkspaceModel {
     }
 
     pub fn planner_lines(&self) -> Vec<String> {
-        let mut lines = vec![
-            format!("target_root={}", self.target_root.display()),
-            format!("path_exists={}", self.path_exists),
-        ];
+        let mut lines = vec![format!("target_root={}", self.target_root.display()), format!("path_exists={}", self.path_exists)];
         if !self.path_exists {
             lines.push("precondition: target workspace missing; first action must create/init it".to_string());
             return lines;
@@ -109,15 +104,7 @@ impl WorkspaceModel {
         lines.push(format!("entrypoint_kind={}", self.entrypoint_kind.as_str()));
         lines.push(format!("rust_file_count={}", self.rust_file_count));
         if !self.source_files.is_empty() {
-            lines.push(format!(
-                "file_graph={}",
-                self.source_files
-                    .iter()
-                    .take(8)
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+            lines.push(format!("file_graph={}", self.source_files.iter().take(8).map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")));
         }
         if !self.cargo_toml_exists {
             lines.push("precondition: directory exists but is not a Cargo project; prefer cargo init".to_string());
@@ -130,23 +117,10 @@ impl WorkspaceModel {
                 .module_gaps
                 .iter()
                 .take(4)
-                .map(|gap| {
-                    format!(
-                        "{} -> {}",
-                        gap.module_name,
-                        gap.expected_paths
-                            .iter()
-                            .map(|p| p.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(" or ")
-                    )
-                })
+                .map(|gap| format!("{} -> {}", gap.module_name, gap.expected_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" or ")))
                 .collect::<Vec<_>>()
                 .join("; ");
-            lines.push(format!(
-                "precondition: missing module files detected; create them before cargo check: {}",
-                summary
-            ));
+            lines.push(format!("precondition: missing module files detected; create them before cargo check: {}", summary));
         }
         lines
     }
@@ -172,11 +146,7 @@ pub fn select_bootstrap_command(target_root: &Path) -> BootstrapCommandChoice {
     BootstrapCommandChoice::NoBootstrapNeeded
 }
 
-pub fn semantic_state_matches_workspace_model(
-    path_exists: bool,
-    cargo_project: bool,
-    model: &WorkspaceModel,
-) -> bool {
+pub fn semantic_state_matches_workspace_model(path_exists: bool, cargo_project: bool, model: &WorkspaceModel) -> bool {
     path_exists == model.path_exists && cargo_project == model.cargo_toml_exists
 }
 
@@ -219,10 +189,7 @@ fn collect_source_files(root: &Path) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        semantic_state_matches_workspace_model, select_bootstrap_command, BootstrapCommandChoice,
-        WorkspaceModel,
-    };
+    use super::{select_bootstrap_command, semantic_state_matches_workspace_model, BootstrapCommandChoice, WorkspaceModel};
 
     #[test]
     fn select_bootstrap_command_uses_cargo_new_for_missing_dir() {
@@ -241,11 +208,7 @@ mod tests {
     fn select_bootstrap_command_rejects_bootstrap_for_existing_cargo_project() {
         let root = std::env::temp_dir().join(format!("canon_bootstrap_existing_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"bootstrap_existing\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"bootstrap_existing\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
         assert_eq!(select_bootstrap_command(&root), BootstrapCommandChoice::NoBootstrapNeeded);
     }
@@ -254,17 +217,9 @@ mod tests {
     fn semantic_state_matches_workspace_model_detects_state_vs_reality_mismatch() {
         let root = std::env::temp_dir().join(format!("canon_state_match_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"state_match\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"state_match\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
-        let model = WorkspaceModel::inspect(
-            &format!("# Goal\n\n## Target\n- Project path: `{}`\n", root.display()),
-            &root,
-        )
-        .unwrap();
+        let model = WorkspaceModel::inspect(&format!("# Goal\n\n## Target\n- Project path: `{}`\n", root.display()), &root).unwrap();
         assert!(!semantic_state_matches_workspace_model(false, false, &model));
         assert!(semantic_state_matches_workspace_model(true, true, &model));
     }
@@ -320,11 +275,7 @@ fn collect_module_gaps(root: &Path) -> Vec<ModuleGap> {
             let expected_rs = parent.join(format!("{module_name}.rs"));
             let expected_mod = parent.join(&module_name).join("mod.rs");
             if !expected_rs.exists() && !expected_mod.exists() {
-                gaps.push(ModuleGap {
-                    declared_in: entry.clone(),
-                    module_name,
-                    expected_paths: vec![expected_rs, expected_mod],
-                });
+                gaps.push(ModuleGap { declared_in: entry.clone(), module_name, expected_paths: vec![expected_rs, expected_mod] });
             }
         }
     }
@@ -338,9 +289,7 @@ fn parse_module_declarations(contents: &str) -> Vec<String> {
         if line.starts_with("//") || line.contains('{') {
             continue;
         }
-        let candidate = line
-            .strip_prefix("pub mod ")
-            .or_else(|| line.strip_prefix("mod "));
+        let candidate = line.strip_prefix("pub mod ").or_else(|| line.strip_prefix("mod "));
         let Some(candidate) = candidate else {
             continue;
         };

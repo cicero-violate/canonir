@@ -1,7 +1,4 @@
-use crate::{
-    add_import_paths, create_module_files, move_symbol_pairs, rename_symbol_pairs,
-    SymbolIndex,
-};
+use crate::{add_import_paths, create_module_files, move_symbol_pairs, rename_symbol_pairs, SymbolIndex};
 use canon_analysis::{GraphArtifactIndex, GraphArtifactSummary};
 use canon_ir::{csr_graph::CsrGraph, CanonIR, CanonNodeKind, EdgeKind};
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,10 +43,7 @@ path = "src/lib.rs"
 fn derive_module_path(project: &Path, file: &Path) -> String {
     let src_root = project.join("src");
     let rel = file.strip_prefix(&src_root).unwrap();
-    let mut segments: Vec<String> = rel
-        .components()
-        .filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string()))
-        .collect();
+    let mut segments: Vec<String> = rel.components().filter_map(|c| c.as_os_str().to_str().map(|s| s.to_string())).collect();
     let filename = segments.pop().unwrap();
     if filename != "lib.rs" && filename != "main.rs" && filename != "mod.rs" {
         segments.push(filename.trim_end_matches(".rs").to_string());
@@ -77,37 +71,12 @@ fn collect_source_symbols(project: &Path) -> Vec<SourceSymbol> {
 fn collect_items(items: &[syn::Item], file: &Path, module_path: &str, out: &mut Vec<SourceSymbol>) {
     for item in items {
         match item {
-            syn::Item::Fn(item) => out.push(SourceSymbol {
-                module_path: module_path.to_string(),
-                symbol: item.sig.ident.to_string(),
-                kind: "fn".to_string(),
-                file: file.to_path_buf(),
-            }),
-            syn::Item::Struct(item) => out.push(SourceSymbol {
-                module_path: module_path.to_string(),
-                symbol: item.ident.to_string(),
-                kind: "struct".to_string(),
-                file: file.to_path_buf(),
-            }),
-            syn::Item::Enum(item) => out.push(SourceSymbol {
-                module_path: module_path.to_string(),
-                symbol: item.ident.to_string(),
-                kind: "enum".to_string(),
-                file: file.to_path_buf(),
-            }),
-            syn::Item::Trait(item) => out.push(SourceSymbol {
-                module_path: module_path.to_string(),
-                symbol: item.ident.to_string(),
-                kind: "trait".to_string(),
-                file: file.to_path_buf(),
-            }),
+            syn::Item::Fn(item) => out.push(SourceSymbol { module_path: module_path.to_string(), symbol: item.sig.ident.to_string(), kind: "fn".to_string(), file: file.to_path_buf() }),
+            syn::Item::Struct(item) => out.push(SourceSymbol { module_path: module_path.to_string(), symbol: item.ident.to_string(), kind: "struct".to_string(), file: file.to_path_buf() }),
+            syn::Item::Enum(item) => out.push(SourceSymbol { module_path: module_path.to_string(), symbol: item.ident.to_string(), kind: "enum".to_string(), file: file.to_path_buf() }),
+            syn::Item::Trait(item) => out.push(SourceSymbol { module_path: module_path.to_string(), symbol: item.ident.to_string(), kind: "trait".to_string(), file: file.to_path_buf() }),
             syn::Item::Mod(item) => {
-                out.push(SourceSymbol {
-                    module_path: module_path.to_string(),
-                    symbol: item.ident.to_string(),
-                    kind: "module".to_string(),
-                    file: file.to_path_buf(),
-                });
+                out.push(SourceSymbol { module_path: module_path.to_string(), symbol: item.ident.to_string(), kind: "module".to_string(), file: file.to_path_buf() });
                 if let Some((_, items)) = &item.content {
                     let nested = format!("{module_path}::{}", item.ident);
                     collect_items(items, file, &nested, out);
@@ -145,37 +114,10 @@ fn write_graph_artifact_from_source(project: &Path) {
     for symbol in &symbols {
         let name_id = ir.intern_name(&symbol.symbol);
         let node_id = match symbol.kind.as_str() {
-            "fn" => ir.push_node(CanonNodeKind::Fn {
-                name_id,
-                sig_id: canon_ir::CanonId(0),
-                body: None,
-                attrs: Vec::new(),
-                flags: 0,
-            }),
-            "struct" => ir.push_node(CanonNodeKind::Struct {
-                name_id,
-                generics: Vec::new(),
-                fields: Vec::new(),
-                derives: Vec::new(),
-                attrs: Vec::new(),
-                flags: 0,
-                struct_kind: 0,
-            }),
-            "enum" => ir.push_node(CanonNodeKind::Enum {
-                name_id,
-                generics: Vec::new(),
-                variants: Vec::new(),
-                derives: Vec::new(),
-                attrs: Vec::new(),
-                flags: 0,
-            }),
-            "trait" => ir.push_node(CanonNodeKind::Trait {
-                name_id,
-                generics: Vec::new(),
-                methods: Vec::new(),
-                attrs: Vec::new(),
-                flags: 0,
-            }),
+            "fn" => ir.push_node(CanonNodeKind::Fn { name_id, sig_id: canon_ir::CanonId(0), body: None, attrs: Vec::new(), flags: 0 }),
+            "struct" => ir.push_node(CanonNodeKind::Struct { name_id, generics: Vec::new(), fields: Vec::new(), derives: Vec::new(), attrs: Vec::new(), flags: 0, struct_kind: 0 }),
+            "enum" => ir.push_node(CanonNodeKind::Enum { name_id, generics: Vec::new(), variants: Vec::new(), derives: Vec::new(), attrs: Vec::new(), flags: 0 }),
+            "trait" => ir.push_node(CanonNodeKind::Trait { name_id, generics: Vec::new(), methods: Vec::new(), attrs: Vec::new(), flags: 0 }),
             "module" => continue,
             _ => continue,
         };
@@ -201,61 +143,27 @@ fn write_graph_artifact_from_source(project: &Path) {
         crate_name: "semantic_capability_fixture".to_string(),
         node_count: ir.nodes.len(),
         edge_count: ir.module_graph.edge_count(),
-        file_count: walkdir::WalkDir::new(project.join("src"))
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("rs"))
-            .count(),
+        file_count: walkdir::WalkDir::new(project.join("src")).into_iter().filter_map(Result::ok).filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("rs")).count(),
         call_edge_count: 0,
         module_edge_count: ir.module_graph.edge_count(),
         cfg_edge_count: 0,
     };
-    let index = GraphArtifactIndex {
-        latest_workspace: summary.clone(),
-    };
+    let index = GraphArtifactIndex { latest_workspace: summary.clone() };
     fs::write(graph_dir.join("index/latest_workspace.json"), serde_json::to_vec(&index).unwrap()).unwrap();
-    fs::write(
-        graph_dir.join("index/by_crate/semantic_capability_fixture.json"),
-        serde_json::to_vec(&summary).unwrap(),
-    )
-    .unwrap();
-    fs::write(
-        graph_dir.join("index/by_hash").join(format!("{artifact_id}.json")),
-        serde_json::to_vec(&summary).unwrap(),
-    )
-    .unwrap();
+    fs::write(graph_dir.join("index/by_crate/semantic_capability_fixture.json"), serde_json::to_vec(&summary).unwrap()).unwrap();
+    fs::write(graph_dir.join("index/by_hash").join(format!("{artifact_id}.json")), serde_json::to_vec(&summary).unwrap()).unwrap();
 }
 
 fn cargo_check(project: &Path) {
-    let output = Command::new("cargo")
-        .arg("check")
-        .arg("--quiet")
-        .current_dir(project)
-        .env("CARGO_TARGET_DIR", project.join("target"))
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "cargo check failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let output = Command::new("cargo").arg("check").arg("--quiet").current_dir(project).env("CARGO_TARGET_DIR", project.join("target")).output().unwrap();
+    assert!(output.status.success(), "cargo check failed:\nstdout:\n{}\nstderr:\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
 }
 
 fn assert_graph_and_invariants(project: &Path, expected: &[&str], absent: &[&str]) {
     write_graph_artifact_from_source(project);
     let index = SymbolIndex::build(project).unwrap();
-    let symbols: BTreeSet<String> = collect_source_symbols(project)
-        .into_iter()
-        .filter(|symbol| symbol.kind != "module")
-        .map(|symbol| format!("{}::{}", symbol.module_path, symbol.symbol))
-        .collect();
-    let catalog: BTreeSet<String> = index
-        .symbol_catalog()
-        .into_iter()
-        .filter(|(_, kind)| kind != "module")
-        .map(|(id, _)| id)
-        .collect();
+    let symbols: BTreeSet<String> = collect_source_symbols(project).into_iter().filter(|symbol| symbol.kind != "module").map(|symbol| format!("{}::{}", symbol.module_path, symbol.symbol)).collect();
+    let catalog: BTreeSet<String> = index.symbol_catalog().into_iter().filter(|(_, kind)| kind != "module").map(|(id, _)| id).collect();
     assert_eq!(catalog, symbols, "graph catalog diverged from source graph");
     for wanted in expected {
         assert!(catalog.contains(*wanted), "missing expected symbol {wanted}");
@@ -279,13 +187,7 @@ fn assert_graph_and_invariants(project: &Path, expected: &[&str], absent: &[&str
 #[test]
 fn rename_symbol_simple_case() {
     let dir = temp_project();
-    write_project_files(
-        dir.path(),
-        &[(
-            "src/lib.rs",
-            "pub fn run() -> usize { helper() }\n\nfn helper() -> usize { 1 }\n",
-        )],
-    );
+    write_project_files(dir.path(), &[("src/lib.rs", "pub fn run() -> usize { helper() }\n\nfn helper() -> usize { 1 }\n")]);
     write_graph_artifact_from_source(dir.path());
     let index = SymbolIndex::build(dir.path()).unwrap();
     assert!(index.spans_for("crate::helper").is_some(), "missing helper spans");
@@ -302,31 +204,17 @@ fn rename_symbol_cross_module_references() {
     let dir = temp_project();
     write_project_files(
         dir.path(),
-        &[
-            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            ("src/alpha.rs", "pub struct Foo;\n"),
-            (
-                "src/beta.rs",
-                "use crate::alpha::Foo;\n\npub fn make() -> Foo { Foo }\n",
-            ),
-        ],
+        &[("src/lib.rs", "pub mod alpha;\npub mod beta;\n"), ("src/alpha.rs", "pub struct Foo;\n"), ("src/beta.rs", "use crate::alpha::Foo;\n\npub fn make() -> Foo { Foo }\n")],
     );
     write_graph_artifact_from_source(dir.path());
     let index = SymbolIndex::build(dir.path()).unwrap();
     assert!(index.spans_for("crate::alpha::Foo").is_some(), "missing Foo spans");
-    let report = rename_symbol_pairs(
-        dir.path(),
-        &[("crate::alpha::Foo".into(), "crate::alpha::Bar".into())],
-    );
+    let report = rename_symbol_pairs(dir.path(), &[("crate::alpha::Foo".into(), "crate::alpha::Bar".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
     assert!(beta.contains("use crate::alpha::Bar;"));
     assert!(beta.contains("-> Bar"));
-    assert_graph_and_invariants(
-        dir.path(),
-        &["crate::alpha::Bar", "crate::beta::make"],
-        &["crate::alpha::Foo"],
-    );
+    assert_graph_and_invariants(dir.path(), &["crate::alpha::Bar", "crate::beta::make"], &["crate::alpha::Foo"]);
 }
 
 #[test]
@@ -337,25 +225,15 @@ fn rename_symbol_updates_reexport_target() {
         &[
             ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
             ("src/alpha.rs", "pub struct Foo;\n"),
-            (
-                "src/beta.rs",
-                "pub use crate::alpha::Foo as PublicFoo;\n\npub fn make() -> PublicFoo { PublicFoo }\n",
-            ),
+            ("src/beta.rs", "pub use crate::alpha::Foo as PublicFoo;\n\npub fn make() -> PublicFoo { PublicFoo }\n"),
         ],
     );
     write_graph_artifact_from_source(dir.path());
-    let report = rename_symbol_pairs(
-        dir.path(),
-        &[("crate::alpha::Foo".into(), "crate::alpha::Bar".into())],
-    );
+    let report = rename_symbol_pairs(dir.path(), &[("crate::alpha::Foo".into(), "crate::alpha::Bar".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
     assert!(beta.contains("pub use crate::alpha::Bar as PublicFoo;"));
-    assert_graph_and_invariants(
-        dir.path(),
-        &["crate::alpha::Bar", "crate::beta::make"],
-        &["crate::alpha::Foo"],
-    );
+    assert_graph_and_invariants(dir.path(), &["crate::alpha::Bar", "crate::beta::make"], &["crate::alpha::Foo"]);
 }
 
 #[test]
@@ -363,20 +241,10 @@ fn rename_symbol_duplicate_symbol_is_rejected() {
     let dir = temp_project();
     write_project_files(
         dir.path(),
-        &[
-            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            ("src/alpha.rs", "pub struct Foo;\n"),
-            (
-                "src/beta.rs",
-                "pub struct Foo;\npub struct FooBeta;\npub fn make() -> Foo { Foo }\n",
-            ),
-        ],
+        &[("src/lib.rs", "pub mod alpha;\npub mod beta;\n"), ("src/alpha.rs", "pub struct Foo;\n"), ("src/beta.rs", "pub struct Foo;\npub struct FooBeta;\npub fn make() -> Foo { Foo }\n")],
     );
     write_graph_artifact_from_source(dir.path());
-    let report = rename_symbol_pairs(
-        dir.path(),
-        &[("crate::beta::Foo".into(), "crate::beta::FooBeta".into())],
-    );
+    let report = rename_symbol_pairs(dir.path(), &[("crate::beta::Foo".into(), "crate::beta::FooBeta".into())]);
     assert!(report.error.is_some());
 }
 
@@ -387,34 +255,21 @@ fn rename_symbol_trait_impl_interaction() {
         dir.path(),
         &[
             ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            (
-                "src/alpha.rs",
-                "pub trait Worker { fn work(&self) -> usize; }\n\npub struct Job;\n\nimpl Worker for Job { fn work(&self) -> usize { 1 } }\n",
-            ),
-            (
-                "src/beta.rs",
-                "use crate::alpha::{Job, Worker};\n\npub fn run() -> usize { Job.work() }\n",
-            ),
+            ("src/alpha.rs", "pub trait Worker { fn work(&self) -> usize; }\n\npub struct Job;\n\nimpl Worker for Job { fn work(&self) -> usize { 1 } }\n"),
+            ("src/beta.rs", "use crate::alpha::{Job, Worker};\n\npub fn run() -> usize { Job.work() }\n"),
         ],
     );
     write_graph_artifact_from_source(dir.path());
     let index = SymbolIndex::build(dir.path()).unwrap();
     assert!(index.spans_for("crate::alpha::Worker").is_some(), "missing Worker spans");
-    let report = rename_symbol_pairs(
-        dir.path(),
-        &[("crate::alpha::Worker".into(), "crate::alpha::Runnable".into())],
-    );
+    let report = rename_symbol_pairs(dir.path(), &[("crate::alpha::Worker".into(), "crate::alpha::Runnable".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let alpha = fs::read_to_string(dir.path().join("src/alpha.rs")).unwrap();
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
     assert!(alpha.contains("trait Runnable"));
     assert!(alpha.contains("impl Runnable for Job"));
     assert!(beta.contains("use crate::alpha::{Job, Runnable};"));
-    assert_graph_and_invariants(
-        dir.path(),
-        &["crate::alpha::Runnable", "crate::alpha::Job"],
-        &["crate::alpha::Worker"],
-    );
+    assert_graph_and_invariants(dir.path(), &["crate::alpha::Runnable", "crate::alpha::Job"], &["crate::alpha::Worker"]);
 }
 
 #[test]
@@ -422,29 +277,16 @@ fn rename_symbol_invalid_missing_symbol() {
     let dir = temp_project();
     write_project_files(dir.path(), &[("src/lib.rs", "pub fn run() {}\n")]);
     write_graph_artifact_from_source(dir.path());
-    let report = rename_symbol_pairs(
-        dir.path(),
-        &[("crate::missing::Nope".into(), "crate::missing::Nope2".into())],
-    );
+    let report = rename_symbol_pairs(dir.path(), &[("crate::missing::Nope".into(), "crate::missing::Nope2".into())]);
     assert!(report.error.is_some());
 }
 
 #[test]
 fn rename_symbol_accepts_alias_path_via_graph_binding() {
     let dir = temp_project();
-    write_project_files(
-        dir.path(),
-        &[
-            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            ("src/alpha.rs", "pub struct Foo;\n"),
-            ("src/beta.rs", "pub use crate::alpha::Foo as PublicFoo;\n"),
-        ],
-    );
+    write_project_files(dir.path(), &[("src/lib.rs", "pub mod alpha;\npub mod beta;\n"), ("src/alpha.rs", "pub struct Foo;\n"), ("src/beta.rs", "pub use crate::alpha::Foo as PublicFoo;\n")]);
     write_graph_artifact_from_source(dir.path());
-    let report = rename_symbol_pairs(
-        dir.path(),
-        &[("crate::beta::PublicFoo".into(), "crate::alpha::Bar".into())],
-    );
+    let report = rename_symbol_pairs(dir.path(), &[("crate::beta::PublicFoo".into(), "crate::alpha::Bar".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let alpha = fs::read_to_string(dir.path().join("src/alpha.rs")).unwrap();
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
@@ -456,29 +298,15 @@ fn rename_symbol_accepts_alias_path_via_graph_binding() {
 #[test]
 fn move_symbol_simple_case() {
     let dir = temp_project();
-    write_project_files(
-        dir.path(),
-        &[
-            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            ("src/alpha.rs", "pub struct Worker;\n"),
-            ("src/beta.rs", "\n"),
-        ],
-    );
+    write_project_files(dir.path(), &[("src/lib.rs", "pub mod alpha;\npub mod beta;\n"), ("src/alpha.rs", "pub struct Worker;\n"), ("src/beta.rs", "\n")]);
     write_graph_artifact_from_source(dir.path());
-    let report = move_symbol_pairs(
-        dir.path(),
-        &[("crate::alpha::Worker".into(), "crate::beta".into())],
-    );
+    let report = move_symbol_pairs(dir.path(), &[("crate::alpha::Worker".into(), "crate::beta".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let alpha = fs::read_to_string(dir.path().join("src/alpha.rs")).unwrap();
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
     assert!(!alpha.contains("Worker"));
     assert!(beta.contains("Worker"));
-    assert_graph_and_invariants(
-        dir.path(),
-        &["crate::beta::Worker"],
-        &["crate::alpha::Worker"],
-    );
+    assert_graph_and_invariants(dir.path(), &["crate::beta::Worker"], &["crate::alpha::Worker"]);
 }
 
 #[test]
@@ -490,25 +318,15 @@ fn move_symbol_cross_module_reference_updates() {
             ("src/lib.rs", "pub mod alpha;\npub mod beta;\npub mod gamma;\n"),
             ("src/alpha.rs", "pub struct Worker;\n"),
             ("src/beta.rs", "\n"),
-            (
-                "src/gamma.rs",
-                "use crate::alpha::Worker;\n\npub fn make() -> Worker { Worker }\n",
-            ),
+            ("src/gamma.rs", "use crate::alpha::Worker;\n\npub fn make() -> Worker { Worker }\n"),
         ],
     );
     write_graph_artifact_from_source(dir.path());
-    let report = move_symbol_pairs(
-        dir.path(),
-        &[("crate::alpha::Worker".into(), "crate::beta".into())],
-    );
+    let report = move_symbol_pairs(dir.path(), &[("crate::alpha::Worker".into(), "crate::beta".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let gamma = fs::read_to_string(dir.path().join("src/gamma.rs")).unwrap();
     assert!(gamma.contains("use crate::beta::Worker;"));
-    assert_graph_and_invariants(
-        dir.path(),
-        &["crate::beta::Worker", "crate::gamma::make"],
-        &["crate::alpha::Worker"],
-    );
+    assert_graph_and_invariants(dir.path(), &["crate::beta::Worker", "crate::gamma::make"], &["crate::alpha::Worker"]);
 }
 
 #[test]
@@ -516,42 +334,23 @@ fn move_symbol_invalid_missing_symbol() {
     let dir = temp_project();
     write_project_files(dir.path(), &[("src/lib.rs", "pub mod alpha;\n"), ("src/alpha.rs", "\n")]);
     write_graph_artifact_from_source(dir.path());
-    let report = move_symbol_pairs(
-        dir.path(),
-        &[("crate::alpha::Missing".into(), "crate::beta".into())],
-    );
+    let report = move_symbol_pairs(dir.path(), &[("crate::alpha::Missing".into(), "crate::beta".into())]);
     assert!(report.error.is_some());
 }
 
 #[test]
 fn move_symbol_invalid_missing_target_module() {
     let dir = temp_project();
-    write_project_files(
-        dir.path(),
-        &[
-            ("src/lib.rs", "pub mod alpha;\n"),
-            ("src/alpha.rs", "pub struct Worker;\n"),
-        ],
-    );
+    write_project_files(dir.path(), &[("src/lib.rs", "pub mod alpha;\n"), ("src/alpha.rs", "pub struct Worker;\n")]);
     write_graph_artifact_from_source(dir.path());
-    let report = move_symbol_pairs(
-        dir.path(),
-        &[("crate::alpha::Worker".into(), "crate::beta".into())],
-    );
+    let report = move_symbol_pairs(dir.path(), &[("crate::alpha::Worker".into(), "crate::beta".into())]);
     assert!(report.error.is_some());
 }
 
 #[test]
 fn import_resolution_simple_case() {
     let dir = temp_project();
-    write_project_files(
-        dir.path(),
-        &[
-            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            ("src/alpha.rs", "pub struct Foo;\n"),
-            ("src/beta.rs", "pub fn make() -> Foo { Foo }\n"),
-        ],
-    );
+    write_project_files(dir.path(), &[("src/lib.rs", "pub mod alpha;\npub mod beta;\n"), ("src/alpha.rs", "pub struct Foo;\n"), ("src/beta.rs", "pub fn make() -> Foo { Foo }\n")]);
     write_graph_artifact_from_source(dir.path());
     let report = add_import_paths(dir.path(), &[("src/beta.rs".into(), "crate::alpha::Foo".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
@@ -565,20 +364,10 @@ fn import_resolution_cross_module_alias_case() {
     let dir = temp_project();
     write_project_files(
         dir.path(),
-        &[
-            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            ("src/alpha.rs", "pub struct Foo;\n"),
-            (
-                "src/beta.rs",
-                "pub struct Foo;\n\npub fn wrap(value: AlphaFoo) -> AlphaFoo { value }\n",
-            ),
-        ],
+        &[("src/lib.rs", "pub mod alpha;\npub mod beta;\n"), ("src/alpha.rs", "pub struct Foo;\n"), ("src/beta.rs", "pub struct Foo;\n\npub fn wrap(value: AlphaFoo) -> AlphaFoo { value }\n")],
     );
     write_graph_artifact_from_source(dir.path());
-    let report = add_import_paths(
-        dir.path(),
-        &[("src/beta.rs".into(), "crate::alpha::Foo as AlphaFoo".into())],
-    );
+    let report = add_import_paths(dir.path(), &[("src/beta.rs".into(), "crate::alpha::Foo as AlphaFoo".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
     assert!(beta.contains("use crate::alpha::Foo as AlphaFoo;"));
@@ -592,14 +381,8 @@ fn import_resolution_trait_interaction() {
         dir.path(),
         &[
             ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            (
-                "src/alpha.rs",
-                "pub trait Greeter { fn greet(&self) -> &'static str; }\n\npub struct Person;\n\nimpl Greeter for Person { fn greet(&self) -> &'static str { \"hi\" } }\n",
-            ),
-            (
-                "src/beta.rs",
-                "use crate::alpha::Person;\n\npub fn run() -> &'static str { Person.greet() }\n",
-            ),
+            ("src/alpha.rs", "pub trait Greeter { fn greet(&self) -> &'static str; }\n\npub struct Person;\n\nimpl Greeter for Person { fn greet(&self) -> &'static str { \"hi\" } }\n"),
+            ("src/beta.rs", "use crate::alpha::Person;\n\npub fn run() -> &'static str { Person.greet() }\n"),
         ],
     );
     write_graph_artifact_from_source(dir.path());
@@ -622,29 +405,16 @@ fn import_resolution_invalid_missing_file() {
 fn import_resolution_invalid_non_canonical_path() {
     let dir = temp_project();
     write_project_files(dir.path(), &[("src/lib.rs", "pub fn run() {}\n")]);
-    let report = add_import_paths(
-        dir.path(),
-        &[("src/lib.rs".into(), "foo::Bar".into())],
-    );
+    let report = add_import_paths(dir.path(), &[("src/lib.rs".into(), "foo::Bar".into())]);
     assert!(report.error.is_some());
 }
 
 #[test]
 fn import_resolution_canonicalizes_relative_alias_path() {
     let dir = temp_project();
-    write_project_files(
-        dir.path(),
-        &[
-            ("src/lib.rs", "pub mod alpha;\npub mod beta;\n"),
-            ("src/alpha.rs", "pub struct Foo;\n"),
-            ("src/beta.rs", "pub fn use_it(_: LocalFoo) {}\n"),
-        ],
-    );
+    write_project_files(dir.path(), &[("src/lib.rs", "pub mod alpha;\npub mod beta;\n"), ("src/alpha.rs", "pub struct Foo;\n"), ("src/beta.rs", "pub fn use_it(_: LocalFoo) {}\n")]);
     write_graph_artifact_from_source(dir.path());
-    let report = add_import_paths(
-        dir.path(),
-        &[("src/beta.rs".into(), "super::alpha::Foo as LocalFoo".into())],
-    );
+    let report = add_import_paths(dir.path(), &[("src/beta.rs".into(), "super::alpha::Foo as LocalFoo".into())]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let beta = fs::read_to_string(dir.path().join("src/beta.rs")).unwrap();
     assert!(beta.contains("use crate::alpha::Foo as LocalFoo;"));
@@ -665,17 +435,8 @@ fn module_creation_simple_case() {
 #[test]
 fn module_creation_nested_case() {
     let dir = temp_project();
-    write_project_files(
-        dir.path(),
-        &[
-            ("src/lib.rs", "pub mod feature;\n"),
-            ("src/feature.rs", "pub mod inner;\n"),
-        ],
-    );
-    let report = create_module_files(
-        dir.path(),
-        &[("src/feature/inner.rs".into(), Some("inner".into()))],
-    );
+    write_project_files(dir.path(), &[("src/lib.rs", "pub mod feature;\n"), ("src/feature.rs", "pub mod inner;\n")]);
+    let report = create_module_files(dir.path(), &[("src/feature/inner.rs".into(), Some("inner".into()))]);
     assert!(report.error.is_none(), "{:?}", report.error);
     assert!(dir.path().join("src/feature/inner.rs").exists());
     assert_graph_and_invariants(dir.path(), &[], &[]);
@@ -684,13 +445,7 @@ fn module_creation_nested_case() {
 #[test]
 fn module_creation_existing_file_is_stable() {
     let dir = temp_project();
-    write_project_files(
-        dir.path(),
-        &[
-            ("src/lib.rs", "pub mod merge;\n"),
-            ("src/merge.rs", "pub struct Merge;\n"),
-        ],
-    );
+    write_project_files(dir.path(), &[("src/lib.rs", "pub mod merge;\n"), ("src/merge.rs", "pub struct Merge;\n")]);
     let report = create_module_files(dir.path(), &[("src/merge.rs".into(), Some("merge".into()))]);
     assert!(report.error.is_none(), "{:?}", report.error);
     let merge = fs::read_to_string(dir.path().join("src/merge.rs")).unwrap();
@@ -702,9 +457,6 @@ fn module_creation_existing_file_is_stable() {
 fn module_creation_invalid_non_rust_path() {
     let dir = temp_project();
     write_project_files(dir.path(), &[("src/lib.rs", "pub fn run() {}\n")]);
-    let report = create_module_files(
-        dir.path(),
-        &[("src/merge.txt".into(), Some("merge".into()))],
-    );
+    let report = create_module_files(dir.path(), &[("src/merge.txt".into(), Some("merge".into()))]);
     assert!(report.error.is_some());
 }

@@ -41,9 +41,7 @@ pub fn apply_patch(patch: &str, cwd: &Path) -> Result<AffectedPaths, ApplyPatchE
     // Resolve relative paths against cwd.
     for hunk in args.hunks.iter_mut() {
         match hunk {
-            parser::Hunk::AddFile { path, .. }
-            | parser::Hunk::DeleteFile { path }
-            | parser::Hunk::UpdateFile { path, .. } => {
+            parser::Hunk::AddFile { path, .. } | parser::Hunk::DeleteFile { path } | parser::Hunk::UpdateFile { path, .. } => {
                 if path.is_relative() {
                     *path = cwd.join(&*path);
                 }
@@ -100,15 +98,9 @@ fn run_external_apply_patch(patch: &str, cwd: &Path) -> Result<(), ApplyPatchErr
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|source| ApplyPatchError::Io(IoError {
-            context: format!("failed to spawn {}", APPLY_PATCH_BIN),
-            source,
-        }))?;
+        .map_err(|source| ApplyPatchError::Io(IoError { context: format!("failed to spawn {}", APPLY_PATCH_BIN), source }))?;
 
-    let output = child
-        .wait_with_output()
-        .with_context(|| format!("wait for {}", APPLY_PATCH_BIN))
-        .map_err(to_io)?;
+    let output = child.wait_with_output().with_context(|| format!("wait for {}", APPLY_PATCH_BIN)).map_err(to_io)?;
 
     if output.status.success() {
         Ok(())

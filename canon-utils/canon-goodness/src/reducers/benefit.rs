@@ -34,4 +34,3 @@ impl Reducer for Benefit {
         *self = Self::default();
     }
 }
-

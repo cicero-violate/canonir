@@ -1,7 +1,11 @@
 use canon_event::{EventConsumer, EventFilter, EventId, EventOutcome, RuntimeEvent};
 use canon_proc_macros::must_emit;
 
-use crate::{aggregator::{compute_g, compute_reward}, reducers::AllReducers, MetricsStorage};
+use crate::{
+    aggregator::{compute_g, compute_reward},
+    reducers::AllReducers,
+    MetricsStorage,
+};
 
 pub struct GoodnessConsumer {
     reducers: AllReducers,
@@ -11,11 +15,7 @@ pub struct GoodnessConsumer {
 
 impl GoodnessConsumer {
     pub fn new(storage_root: Option<std::path::PathBuf>) -> Self {
-        Self {
-            reducers: AllReducers::new(),
-            g_prev: 0.0,
-            storage: storage_root.map(|p| MetricsStorage::new(&p)),
-        }
+        Self { reducers: AllReducers::new(), g_prev: 0.0, storage: storage_root.map(|p| MetricsStorage::new(&p)) }
     }
 
     pub fn latest_g(&self) -> f32 {
@@ -28,9 +28,13 @@ impl EventConsumer for GoodnessConsumer {
         EventFilter::All
     }
 
-    fn is_synchronous(&self) -> bool { true }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
 
-    fn consumer_name(&self) -> &'static str { "goodness_consumer" }
+    fn consumer_name(&self) -> &'static str {
+        "goodness_consumer"
+    }
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
@@ -47,12 +51,11 @@ impl EventConsumer for GoodnessConsumer {
                 store.append_goodness(v.tick, g_now, delta);
             }
 
-            return EventOutcome::emit(RuntimeEvent::GoodnessSnapshot(canon_event::GoodnessSnapshot {
-                tick: v.tick,
-                g: g_now,
-                delta_g: delta,
-                metrics: serde_json::to_value(&metrics).unwrap_or_default(),
-            }), file!(), line!());
+            return EventOutcome::emit(
+                RuntimeEvent::GoodnessSnapshot(canon_event::GoodnessSnapshot { tick: v.tick, g: g_now, delta_g: delta, metrics: serde_json::to_value(&metrics).unwrap_or_default() }),
+                file!(),
+                line!(),
+            );
         }
         EventOutcome::NoOp("goodness_noop")
     }

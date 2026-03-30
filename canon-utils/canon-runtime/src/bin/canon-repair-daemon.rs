@@ -12,11 +12,8 @@
 ///
 /// The daemon runs until killed.  harness_suite (or any other caller) submits
 /// jobs via repair_client_submit().
-
 use anyhow::{anyhow, bail, Context, Result};
-use canon_llm::repair_server::{
-    repair_server_start, RepairJobResult, REPAIR_SERVER_ADDR,
-};
+use canon_llm::repair_server::{repair_server_start, RepairJobResult, REPAIR_SERVER_ADDR};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -25,11 +22,8 @@ const WORKSPACE_REPAIR_SENTINEL: &str = "__workspace__";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let mut addr = std::env::var("CANON_REPAIR_SERVER_ADDR")
-        .unwrap_or_else(|_| REPAIR_SERVER_ADDR.to_string());
-    let mut workspace = PathBuf::from(
-        std::env::var("CANON_WORKSPACE").unwrap_or_else(|_| DEFAULT_WORKSPACE.to_string()),
-    );
+    let mut addr = std::env::var("CANON_REPAIR_SERVER_ADDR").unwrap_or_else(|_| REPAIR_SERVER_ADDR.to_string());
+    let mut workspace = PathBuf::from(std::env::var("CANON_WORKSPACE").unwrap_or_else(|_| DEFAULT_WORKSPACE.to_string()));
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -37,9 +31,7 @@ fn main() -> Result<()> {
                 addr = args.next().ok_or_else(|| anyhow!("missing value for --addr"))?;
             }
             "--workspace" => {
-                workspace = PathBuf::from(
-                    args.next().ok_or_else(|| anyhow!("missing value for --workspace"))?,
-                );
+                workspace = PathBuf::from(args.next().ok_or_else(|| anyhow!("missing value for --workspace"))?);
             }
             other => bail!("unknown argument: {other}"),
         }
@@ -48,10 +40,7 @@ fn main() -> Result<()> {
     // Ensure canon-harness-repair is up to date before accepting any jobs.
     rebuild_harness_repair(&workspace)?;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to build tokio runtime")?;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().context("failed to build tokio runtime")?;
 
     runtime.block_on(async move {
         let workspace_for_fn = workspace.clone();
@@ -59,19 +48,12 @@ fn main() -> Result<()> {
         let handle = repair_server_start(&addr, move |req| {
             let workspace = workspace_for_fn.clone();
             Box::pin(async move {
-                if req.crate_name == WORKSPACE_REPAIR_SENTINEL
-                    && req.test_name == WORKSPACE_REPAIR_SENTINEL
-                {
-                    eprintln!(
-                        "[canon-repair-daemon] workspace incident repair is temporarily disabled; refusing unstable synthetic workspace path (max_steps={})",
-                        req.max_steps
-                    );
+                if req.crate_name == WORKSPACE_REPAIR_SENTINEL && req.test_name == WORKSPACE_REPAIR_SENTINEL {
+                    eprintln!("[canon-repair-daemon] workspace incident repair is temporarily disabled; refusing unstable synthetic workspace path (max_steps={})", req.max_steps);
                     return RepairJobResult {
                         success: false,
                         steps_taken: 0,
-                        error: Some(
-                            "workspace incident repair is temporarily disabled; use crate/test-scoped harness repair until workspace triage is stabilized".to_string(),
-                        ),
+                        error: Some("workspace incident repair is temporarily disabled; use crate/test-scoped harness repair until workspace triage is stabilized".to_string()),
                     };
                 }
 
@@ -83,36 +65,18 @@ fn main() -> Result<()> {
                 let _ = std::fs::create_dir_all(&state_dir);
                 let stderr_path = state_dir.join("harness_suite_failure.txt");
                 if let Err(e) = std::fs::write(&stderr_path, &req.failure_output) {
-                    return RepairJobResult {
-                        success: false,
-                        steps_taken: 0,
-                        error: Some(format!("failed to write failure output: {e}")),
-                    };
+                    return RepairJobResult { success: false, steps_taken: 0, error: Some(format!("failed to write failure output: {e}")) };
                 }
 
-                eprintln!(
-                    "[canon-repair-daemon] running repair for {}::{} (max_steps={})",
-                    req.crate_name, req.test_name, req.max_steps
-                );
+                eprintln!("[canon-repair-daemon] running repair for {}::{} (max_steps={})", req.crate_name, req.test_name, req.max_steps);
 
                 let mut cmd = Command::new(&bin);
-                cmd.arg(&req.crate_name)
-                    .arg(&req.test_name)
-                    .arg("--workspace")
-                    .arg(&workspace)
-                    .arg("--stderr-file")
-                    .arg(&stderr_path)
-                    .arg("--max-steps")
-                    .arg(req.max_steps.to_string());
+                cmd.arg(&req.crate_name).arg(&req.test_name).arg("--workspace").arg(&workspace).arg("--stderr-file").arg(&stderr_path).arg("--max-steps").arg(req.max_steps.to_string());
 
                 if let Some(ctx) = &req.incident_context {
                     let incident_path = state_dir.join("repair_incident_context.txt");
                     if let Err(e) = std::fs::write(&incident_path, ctx) {
-                        return RepairJobResult {
-                            success: false,
-                            steps_taken: 0,
-                            error: Some(format!("failed to write incident context: {e}")),
-                        };
+                        return RepairJobResult { success: false, steps_taken: 0, error: Some(format!("failed to write incident context: {e}")) };
                     }
                     cmd.arg("--incident-file").arg(&incident_path);
                 }
@@ -122,17 +86,11 @@ fn main() -> Result<()> {
 
                 match result {
                     Ok(Ok(status)) if status.success() => {
-                        eprintln!(
-                            "[canon-repair-daemon] repair succeeded for {}::{}",
-                            req.crate_name, req.test_name
-                        );
+                        eprintln!("[canon-repair-daemon] repair succeeded for {}::{}", req.crate_name, req.test_name);
                         RepairJobResult { success: true, steps_taken: req.max_steps, error: None }
                     }
                     Ok(Ok(status)) => {
-                        let msg = format!(
-                            "canon-harness-repair exited with status {} for {}::{}",
-                            status, req.crate_name, req.test_name
-                        );
+                        let msg = format!("canon-harness-repair exited with status {} for {}::{}", status, req.crate_name, req.test_name);
                         eprintln!("[canon-repair-daemon] {msg}");
                         RepairJobResult { success: false, steps_taken: req.max_steps, error: Some(msg) }
                     }

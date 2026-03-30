@@ -269,13 +269,7 @@ pub struct CanonPayload {
 }
 
 impl CanonPayload {
-    pub fn from_data(
-        input: serde_json::Value,
-        output: serde_json::Value,
-        delta: serde_json::Value,
-        meta: CanonPayloadMeta,
-        data: serde_json::Value,
-    ) -> Self {
+    pub fn from_data(input: serde_json::Value, output: serde_json::Value, delta: serde_json::Value, meta: CanonPayloadMeta, data: serde_json::Value) -> Self {
         assert!(!input.is_null(), "CanonPayload.input must not be null");
         assert!(!output.is_null(), "CanonPayload.output must not be null");
         assert!(!delta.is_null(), "CanonPayload.delta must not be null");
@@ -300,53 +294,21 @@ pub struct CanonEvent {
 
 impl CanonEvent {
     #[track_caller]
-    pub fn new(
-        id: EventId,
-        parent_ids: Vec<EventId>,
-        actor: impl Into<String>,
-        kind: EventKind,
-        ts: u64,
-        payload: CanonPayload,
-        root: bool,
-    ) -> Self {
+    pub fn new(id: EventId, parent_ids: Vec<EventId>, actor: impl Into<String>, kind: EventKind, ts: u64, payload: CanonPayload, root: bool) -> Self {
         if !root {
-            assert!(
-                !parent_ids.is_empty(),
-                "CanonEvent requires at least one parent_id unless root=true (kind={kind})"
-            );
+            assert!(!parent_ids.is_empty(), "CanonEvent requires at least one parent_id unless root=true (kind={kind})");
         }
         Self { id, parent_ids, actor: actor.into(), kind, ts, payload, prev_event_id: None }
     }
 
     /// Construct a child event whose causal parent is `parent`.
     /// The parent chain is enforced at the type level — impossible to omit.
-    pub fn from_parent(
-        parent: &CanonEvent,
-        id: EventId,
-        actor: impl Into<String>,
-        kind: EventKind,
-        ts: u64,
-        payload: CanonPayload,
-    ) -> Self {
-        Self {
-            id,
-            parent_ids: vec![parent.id.clone()],
-            actor: actor.into(),
-            kind,
-            ts,
-            payload,
-            prev_event_id: None,
-        }
+    pub fn from_parent(parent: &CanonEvent, id: EventId, actor: impl Into<String>, kind: EventKind, ts: u64, payload: CanonPayload) -> Self {
+        Self { id, parent_ids: vec![parent.id.clone()], actor: actor.into(), kind, ts, payload, prev_event_id: None }
     }
 
     /// Construct a root event (legitimately parentless: Tick, PromptLoaded, etc.).
-    pub fn new_root(
-        id: EventId,
-        actor: impl Into<String>,
-        kind: EventKind,
-        ts: u64,
-        payload: CanonPayload,
-    ) -> Self {
+    pub fn new_root(id: EventId, actor: impl Into<String>, kind: EventKind, ts: u64, payload: CanonPayload) -> Self {
         Self { id, parent_ids: Vec::new(), actor: actor.into(), kind, ts, payload, prev_event_id: None }
     }
 }
@@ -357,48 +319,19 @@ mod tests {
     use serde_json::json;
 
     fn payload() -> CanonPayload {
-        CanonPayload {
-            input: json!({"x":1}),
-            output: json!({"y":1}),
-            delta: json!({"z":1}),
-            meta: CanonPayloadMeta { file: "test".to_string(), line: 1 },
-            data: json!({}),
-        }
+        CanonPayload { input: json!({"x":1}), output: json!({"y":1}), delta: json!({"z":1}), meta: CanonPayloadMeta { file: "test".to_string(), line: 1 }, data: json!({}) }
     }
 
     #[test]
     fn parent_causality_integrity_requires_parent_for_non_root_events() {
-        let result = std::panic::catch_unwind(|| {
-            CanonEvent::new(
-                EventId::new("child".to_string()),
-                Vec::new(),
-                "test",
-                EventKind::LoopObserved,
-                1,
-                payload(),
-                false,
-            )
-        });
+        let result = std::panic::catch_unwind(|| CanonEvent::new(EventId::new("child".to_string()), Vec::new(), "test", EventKind::LoopObserved, 1, payload(), false));
         assert!(result.is_err());
     }
 
     #[test]
     fn from_parent_constructs_reconstructable_chain() {
-        let parent = CanonEvent::new_root(
-            EventId::new("parent".to_string()),
-            "test",
-            EventKind::RouteSelected,
-            1,
-            payload(),
-        );
-        let child = CanonEvent::from_parent(
-            &parent,
-            EventId::new("child".to_string()),
-            "test",
-            EventKind::LoopObserved,
-            2,
-            payload(),
-        );
+        let parent = CanonEvent::new_root(EventId::new("parent".to_string()), "test", EventKind::RouteSelected, 1, payload());
+        let child = CanonEvent::from_parent(&parent, EventId::new("child".to_string()), "test", EventKind::LoopObserved, 2, payload());
         assert_eq!(child.parent_ids.len(), 1);
         assert_eq!(child.parent_ids[0].as_str(), parent.id.as_str());
     }

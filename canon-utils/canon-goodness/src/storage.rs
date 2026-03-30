@@ -11,10 +11,7 @@ pub struct MetricsStorage {
 
 impl MetricsStorage {
     pub fn new(root: &Path) -> Self {
-        Self {
-            metrics_path: root.join("metrics.log"),
-            goodness_path: root.join("goodness.log"),
-        }
+        Self { metrics_path: root.join("metrics.log"), goodness_path: root.join("goodness.log") }
     }
 
     pub fn append_metrics(&self, tick: u64, m: &Metrics) {
@@ -41,4 +38,3 @@ fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
-

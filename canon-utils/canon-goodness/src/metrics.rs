@@ -17,8 +17,6 @@ pub struct Metrics {
 
 impl Metrics {
     pub fn as_array(&self) -> [f32; 13] {
-        [
-            self.i, self.e, self.c, self.a, self.r, self.p, self.s, self.d, self.x, self.b, self.l, self.f, self.lambda,
-        ]
+        [self.i, self.e, self.c, self.a, self.r, self.p, self.s, self.d, self.x, self.b, self.l, self.f, self.lambda]
     }
 }

@@ -6,97 +6,101 @@ pub fn extract_compiler_hints(errors: &[serde_json::Value]) -> Vec<CompilerHintR
         let target_files = extract_target_files(&text);
         let scope = classify_failure_scope(&text, &target_files);
         if let Some(module_name) = extract_missing_module_name(&text) {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::MissingModule,
-                format!("compiler reports missing module `{module_name}`"),
-                format!("use semantic module creation to add `{module_name}` before cargo check"),
-                target_files,
-            )
-            .with_failure_scope(scope));
+            hints.push(
+                CompilerHintRecord::new(
+                    CompilerHintKind::MissingModule,
+                    format!("compiler reports missing module `{module_name}`"),
+                    format!("use semantic module creation to add `{module_name}` before cargo check"),
+                    target_files,
+                )
+                .with_failure_scope(scope),
+            );
             continue;
         }
         if text.contains("allow(dead_code) incompatible with previous forbid") {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::DeadCodeForbidConflict,
-                "compiler forbids dead_code while source adds allow(dead_code)",
-                "remove allow(dead_code) or make the code used; do not suppress this lint",
-                target_files,
-            )
-            .with_failure_scope(FailureScopeKind::Workspace));
+            hints.push(
+                CompilerHintRecord::new(
+                    CompilerHintKind::DeadCodeForbidConflict,
+                    "compiler forbids dead_code while source adds allow(dead_code)",
+                    "remove allow(dead_code) or make the code used; do not suppress this lint",
+                    target_files,
+                )
+                .with_failure_scope(FailureScopeKind::Workspace),
+            );
             continue;
         }
         if text.contains("main function not found") || text.contains("`main` function not found") {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::MissingEntrypoint,
-                "compiler reports missing main entrypoint",
-                "create src/main.rs with a valid main function or convert the crate to a library",
-                target_files,
-            )
-            .with_failure_scope(scope));
+            hints.push(
+                CompilerHintRecord::new(
+                    CompilerHintKind::MissingEntrypoint,
+                    "compiler reports missing main entrypoint",
+                    "create src/main.rs with a valid main function or convert the crate to a library",
+                    target_files,
+                )
+                .with_failure_scope(scope),
+            );
             continue;
         }
         if let Some(symbol) = extract_unresolved_import_symbol(&text) {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::UnresolvedImport,
-                format!("compiler reports unresolved import `{symbol}`"),
-                "use semantic import repair to add or correct the import before cargo check",
-                target_files,
-            )
-            .with_failure_scope(scope));
+            hints.push(
+                CompilerHintRecord::new(
+                    CompilerHintKind::UnresolvedImport,
+                    format!("compiler reports unresolved import `{symbol}`"),
+                    "use semantic import repair to add or correct the import before cargo check",
+                    target_files,
+                )
+                .with_failure_scope(scope),
+            );
             continue;
         }
         if let Some(symbol) = extract_missing_symbol(&text) {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::MissingSymbol,
-                format!("compiler cannot find `{symbol}` in scope"),
-                "use semantic symbol definition or import repair before cargo check",
-                target_files,
-            )
-            .with_failure_scope(scope));
+            hints.push(
+                CompilerHintRecord::new(
+                    CompilerHintKind::MissingSymbol,
+                    format!("compiler cannot find `{symbol}` in scope"),
+                    "use semantic symbol definition or import repair before cargo check",
+                    target_files,
+                )
+                .with_failure_scope(scope),
+            );
             continue;
         }
         if let Some(symbol) = extract_duplicate_definition_symbol(&text) {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::DuplicateDefinition,
-                format!("compiler reports duplicate definition for `{symbol}`"),
-                "use semantic rename to resolve the duplicate definition before cargo check",
-                target_files,
-            )
-            .with_failure_scope(scope));
+            hints.push(
+                CompilerHintRecord::new(
+                    CompilerHintKind::DuplicateDefinition,
+                    format!("compiler reports duplicate definition for `{symbol}`"),
+                    "use semantic rename to resolve the duplicate definition before cargo check",
+                    target_files,
+                )
+                .with_failure_scope(scope),
+            );
             continue;
         }
         if let Some(bound) = extract_trait_bound_summary(&text) {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::TraitBoundFailure,
-                format!("compiler reports unsatisfied trait bound `{bound}`"),
-                "edit the local type, impl, or call site to satisfy the required trait bound",
-                target_files,
-            )
-            .with_failure_scope(scope));
+            hints.push(
+                CompilerHintRecord::new(
+                    CompilerHintKind::TraitBoundFailure,
+                    format!("compiler reports unsatisfied trait bound `{bound}`"),
+                    "edit the local type, impl, or call site to satisfy the required trait bound",
+                    target_files,
+                )
+                .with_failure_scope(scope),
+            );
             continue;
         }
-        if text.contains("target path does not exist")
-            || text.contains("could not find `Cargo.toml`")
-            || text.contains("failed to load manifest")
-            || text.contains("manifest path")
-        {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::GenericCompilerFailure,
-                truncate(&text, 140),
-                "repair or refresh the workspace/bootstrap state before cargo check",
-                target_files,
-            )
-            .with_failure_scope(FailureScopeKind::Workspace));
+        if text.contains("target path does not exist") || text.contains("could not find `Cargo.toml`") || text.contains("failed to load manifest") || text.contains("manifest path") {
+            hints.push(
+                CompilerHintRecord::new(CompilerHintKind::GenericCompilerFailure, truncate(&text, 140), "repair or refresh the workspace/bootstrap state before cargo check", target_files)
+                    .with_failure_scope(FailureScopeKind::Workspace),
+            );
             continue;
         }
         if text.contains("error[E") || text.contains("could not compile") {
-            hints.push(CompilerHintRecord::new(
-                CompilerHintKind::GenericCompilerFailure,
-                truncate(&text, 140),
-                "address the cited compiler error directly before adding more edits",
-                target_files,
-            )
-            .with_failure_scope(scope));
+            hints.push(
+                CompilerHintRecord::new(CompilerHintKind::GenericCompilerFailure, truncate(&text, 140), "address the cited compiler error directly before adding more edits", target_files)
+                    .with_failure_scope(scope),
+            );
         }
     }
     dedup_hints(hints)
@@ -130,10 +134,7 @@ pub fn classify_failure_scope(text: &str, target_files: &[String]) -> FailureSco
 
 pub fn classify_failure_metadata(text: &str) -> (FailureClassKind, FailureScopeKind) {
     let target_files = extract_target_files(text);
-    (
-        classify_failure_class(text),
-        classify_failure_scope(text, &target_files),
-    )
+    (classify_failure_class(text), classify_failure_scope(text, &target_files))
 }
 
 pub fn classify_failure_class(text: &str) -> FailureClassKind {
@@ -169,11 +170,7 @@ fn extract_error_texts(errors: &[serde_json::Value]) -> Vec<String> {
             }
             continue;
         }
-        if let Some(message) = value
-            .get("message")
-            .and_then(|v| v.get("message"))
-            .and_then(|v| v.as_str())
-        {
+        if let Some(message) = value.get("message").and_then(|v| v.get("message")).and_then(|v| v.as_str()) {
             if !message.trim().is_empty() {
                 out.push(message.trim().to_string());
             }
@@ -212,8 +209,7 @@ fn extract_missing_symbol(text: &str) -> Option<String> {
 }
 
 fn extract_duplicate_definition_symbol(text: &str) -> Option<String> {
-    extract_backticked_after(text, "the name `")
-        .or_else(|| extract_backticked_after(text, "duplicate definitions with name `"))
+    extract_backticked_after(text, "the name `").or_else(|| extract_backticked_after(text, "duplicate definitions with name `"))
 }
 
 fn extract_trait_bound_summary(text: &str) -> Option<String> {
@@ -222,7 +218,11 @@ fn extract_trait_bound_summary(text: &str) -> Option<String> {
     let tail = &text[start..];
     let end = tail.find('`')?;
     let bound = tail[..end].trim();
-    if bound.is_empty() { None } else { Some(bound.to_string()) }
+    if bound.is_empty() {
+        None
+    } else {
+        Some(bound.to_string())
+    }
 }
 
 fn extract_backticked_after(text: &str, marker: &str) -> Option<String> {
@@ -230,7 +230,11 @@ fn extract_backticked_after(text: &str, marker: &str) -> Option<String> {
     let tail = &text[start..];
     let end = tail.find('`')?;
     let value = tail[..end].trim();
-    if value.is_empty() { None } else { Some(value.to_string()) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 fn extract_target_files(text: &str) -> Vec<String> {
@@ -286,9 +290,7 @@ mod tests {
         let errors = vec![serde_json::json!("error[E0453]: allow(dead_code) incompatible with previous forbid")];
         let lines = planner_lines(&errors);
         assert!(lines.iter().any(|line| line.suggested_repair.contains("remove allow(dead_code)")));
-        assert!(lines
-            .iter()
-            .any(|line| line.failure_scope_enum() == Some(FailureScopeKind::Workspace)));
+        assert!(lines.iter().any(|line| line.failure_scope_enum() == Some(FailureScopeKind::Workspace)));
     }
 
     #[test]
@@ -296,9 +298,7 @@ mod tests {
         let errors = vec![serde_json::json!("error[E0432]: unresolved import `crate::foo`\n --> src/lib.rs:1:5")];
         let hints = extract_compiler_hints(&errors);
         assert!(hints.iter().any(|h| h.kind_enum() == Some(CompilerHintKind::UnresolvedImport)));
-        assert!(hints
-            .iter()
-            .any(|h| h.failure_scope_enum() == Some(FailureScopeKind::Localized)));
+        assert!(hints.iter().any(|h| h.failure_scope_enum() == Some(FailureScopeKind::Localized)));
     }
 
     #[test]

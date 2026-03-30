@@ -43,4 +43,3 @@ impl Reducer for Determinism {
         *self = Self::default();
     }
 }
-

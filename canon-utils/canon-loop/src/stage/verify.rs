@@ -2,8 +2,8 @@ use std::path::Path;
 use std::process::Command;
 
 use canon_event::{events::VerifierPolicyUpdated, LoopVerified, RouteSelected, RuntimeEvent};
-use canon_invariant::meta_invariant_all_results_update_policy;
 use canon_goal::parse_agent_goal_markdown;
+use canon_invariant::meta_invariant_all_results_update_policy;
 use canon_semantic_state::FailureScopeKind;
 
 use crate::{context::LoopContext, result::LoopStageResult};
@@ -33,17 +33,8 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
         diagnostics.push("cargo_check_failed".into());
         let hints = crate::compiler_hints::planner_lines(&[serde_json::Value::String(stderr.clone())]);
         let (fallback_class, fallback_scope) = crate::compiler_hints::classify_failure_metadata(&stderr);
-        let failure_class = hints
-            .iter()
-            .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()))
-            .unwrap_or_else(|| fallback_class.as_str().to_string());
-        let failure_scope = hints
-            .iter()
-            .filter_map(|hint| hint.failure_scope_enum())
-            .find(|scope| *scope != FailureScopeKind::None)
-            .unwrap_or(fallback_scope)
-            .as_str()
-            .to_string();
+        let failure_class = hints.iter().find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string())).unwrap_or_else(|| fallback_class.as_str().to_string());
+        let failure_scope = hints.iter().filter_map(|hint| hint.failure_scope_enum()).find(|scope| *scope != FailureScopeKind::None).unwrap_or(fallback_scope).as_str().to_string();
         diagnostics.push(format!("failure_class={failure_class}"));
         diagnostics.push(format!("failure_scope={failure_scope}"));
         diagnostics.push(stderr);
@@ -67,11 +58,7 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
         diagnostics,
         passed,
     };
-    let policy_update = meta_invariant_all_results_update_policy(
-        verified.passed,
-        verified.compiler_clean,
-        &verified.diagnostics,
-    );
+    let policy_update = meta_invariant_all_results_update_policy(verified.passed, verified.compiler_clean, &verified.diagnostics);
     let verifier_policy_updated = VerifierPolicyUpdated {
         tick: rs.tick,
         verifier_outcome: policy_update.verifier_outcome.as_str().to_string(),
@@ -83,10 +70,7 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
         span_id: verified.span_id.clone(),
         parent_span_id: verified.parent_span_id.clone(),
     };
-    Ok(LoopStageResult::EmitMany(vec![
-        RuntimeEvent::LoopVerified(verified),
-        RuntimeEvent::VerifierPolicyUpdated(verifier_policy_updated),
-    ]))
+    Ok(LoopStageResult::EmitMany(vec![RuntimeEvent::LoopVerified(verified), RuntimeEvent::VerifierPolicyUpdated(verifier_policy_updated)]))
 }
 
 fn run_cargo_check(workspace: &Path) -> anyhow::Result<(bool, String)> {
@@ -110,17 +94,9 @@ mod tests {
     fn verify_emits_verifier_policy_updated_event() {
         let workspace = std::env::temp_dir().join(format!("canon_verify_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).unwrap();
-        std::fs::write(
-            workspace.join("Cargo.toml"),
-            "[package]\nname = \"verify_smoke\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
+        std::fs::write(workspace.join("Cargo.toml"), "[package]\nname = \"verify_smoke\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
         std::fs::create_dir_all(workspace.join("src")).unwrap();
-        std::fs::write(
-            workspace.join("src/main.rs"),
-            "fn main() { println!(\"ok\"); }\n",
-        )
-        .unwrap();
+        std::fs::write(workspace.join("src/main.rs"), "fn main() { println!(\"ok\"); }\n").unwrap();
 
         let mut ctx = LoopContext::new(workspace.clone(), PathBuf::from("/tmp/test.tlog"));
         ctx.last_acted = Some(canon_event::LoopActed {

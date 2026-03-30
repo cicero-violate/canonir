@@ -1,5 +1,5 @@
-use canon_event::{CapabilityCompleted, CapabilityResult, EventId, RuntimeEvent, RouteSelected, RequestDispatch, LlmCall, GoalNodeCreated, GoalEdgeDefined};
 use crate::{context::LoopContext, result::LoopStageResult};
+use canon_event::{CapabilityCompleted, CapabilityResult, EventId, GoalEdgeDefined, GoalNodeCreated, LlmCall, RequestDispatch, RouteSelected, RuntimeEvent};
 use uuid::Uuid;
 
 /// Called when RouteSelected { route: "decompose" } arrives.
@@ -10,8 +10,7 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) ->
     if ctx.pending_decompose_request_id.is_some() {
         return Ok(LoopStageResult::Noop);
     }
-    let goal = ctx.goal_text.clone()
-        .or_else(|| ctx.last_observed.as_ref().and_then(|o| o.goal_text.clone()));
+    let goal = ctx.goal_text.clone().or_else(|| ctx.last_observed.as_ref().and_then(|o| o.goal_text.clone()));
     let Some(goal_text) = goal else {
         return Ok(LoopStageResult::Noop);
     };
@@ -23,19 +22,24 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) ->
     let prompt = build_decompose_prompt(&goal_text);
     ctx.pending_decompose_request_id = Some(request_id.clone());
 
-    emitter.emit_with_parents(RuntimeEvent::Llm(LlmCall {
-        request_id,
-        prompt,
-        role: Some("decompose".to_string()),
-        agent_id: ctx.agent_id.clone(),
-        dispatched: true,
-        system: None,
-        system_prompt_id: None,
-        context_base: None,
-        context_base_id: None,
-        prompt_base_id: None,
-        prev_prompt_id: None,
-    }), vec![trigger_id], file!(), line!());
+    emitter.emit_with_parents(
+        RuntimeEvent::Llm(LlmCall {
+            request_id,
+            prompt,
+            role: Some("decompose".to_string()),
+            agent_id: ctx.agent_id.clone(),
+            dispatched: true,
+            system: None,
+            system_prompt_id: None,
+            context_base: None,
+            context_base_id: None,
+            prompt_base_id: None,
+            prev_prompt_id: None,
+        }),
+        vec![trigger_id],
+        file!(),
+        line!(),
+    );
 
     let _ = rs; // tick used for tracing only
     Ok(LoopStageResult::Deferred)
@@ -70,21 +74,17 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
     let mut events: Vec<RuntimeEvent> = Vec::new();
     for dispatch in &dispatches {
         events.push(RuntimeEvent::GoalNodeCreated(GoalNodeCreated {
-            node_id:     dispatch.dispatch_id.clone(),
+            node_id: dispatch.dispatch_id.clone(),
             description: dispatch.task_prompt.clone(),
-            deps:        dispatch.deps.clone(),
-            caps:        vec![dispatch.task_kind.clone()],
-            node_type:   "sub_task".to_string(),
-            priority:    128,
-            budget:      None,
-            created:     true,
+            deps: dispatch.deps.clone(),
+            caps: vec![dispatch.task_kind.clone()],
+            node_type: "sub_task".to_string(),
+            priority: 128,
+            budget: None,
+            created: true,
         }));
         for dep_id in &dispatch.deps {
-            events.push(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined {
-                from_node_id: dep_id.clone(),
-                to_node_id:   dispatch.dispatch_id.clone(),
-                created:      true,
-            }));
+            events.push(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep_id.clone(), to_node_id: dispatch.dispatch_id.clone(), created: true }));
         }
         events.push(RuntimeEvent::RequestDispatch(dispatch.clone()));
     }
@@ -143,32 +143,21 @@ fn parse_decompose_tasks(response: &str, parent_request_id: &str) -> Vec<Request
     // First pass: generate dispatch IDs so we can resolve index-based deps.
     let ids: Vec<String> = arr.iter().map(|_| Uuid::new_v4().to_string()).collect();
 
-    arr.iter().enumerate().filter_map(|(i, item)| {
-        let agent_id = item.get("agent_id")?.as_str()?.to_string();
-        let task_kind = item.get("task_kind").and_then(|v| v.as_str()).unwrap_or("task").to_string();
-        let task_prompt = item.get("task_prompt")?.as_str()?.to_string();
-        let deps: Vec<String> = item.get("deps")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|d| d.as_u64().map(|idx| idx as usize))
-                    .filter(|&idx| idx < ids.len() && idx != i)
-                    .map(|idx| ids[idx].clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+    arr.iter()
+        .enumerate()
+        .filter_map(|(i, item)| {
+            let agent_id = item.get("agent_id")?.as_str()?.to_string();
+            let task_kind = item.get("task_kind").and_then(|v| v.as_str()).unwrap_or("task").to_string();
+            let task_prompt = item.get("task_prompt")?.as_str()?.to_string();
+            let deps: Vec<String> = item
+                .get("deps")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|d| d.as_u64().map(|idx| idx as usize)).filter(|&idx| idx < ids.len() && idx != i).map(|idx| ids[idx].clone()).collect())
+                .unwrap_or_default();
 
-        Some(RequestDispatch {
-            dispatch_id: ids[i].clone(),
-            parent_request_id: parent_request_id.to_string(),
-            agent_id,
-            task_prompt,
-            task_kind,
-            deps,
-            workspace_scope: None,
-            dispatched: true,
+            Some(RequestDispatch { dispatch_id: ids[i].clone(), parent_request_id: parent_request_id.to_string(), agent_id, task_prompt, task_kind, deps, workspace_scope: None, dispatched: true })
         })
-    }).collect()
+        .collect()
 }
 
 fn fallback_dispatch(goal: &str, parent_request_id: &str) -> RequestDispatch {

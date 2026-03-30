@@ -1,14 +1,12 @@
+use crate::causal::update_causal_graph;
 use canon_decision::JournalLine;
 use canon_event::{LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, RuntimeEvent, SubTaskResult, ToolCall, ToolResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
-use canon_semantic_state::{
-    classify_planned_action_intents, derive_objective_trend_state, derive_self_development_objective_state,
-    execution_results_for_action, LlmSemanticContext, ObjectiveTrendState, SemanticActionIntent,
-    SemanticExecutionResultRecord, SemanticStateSummary, primary_development_objective_kind,
-    semantic_no_progress_streak, semantic_progress_rate,
-};
-use crate::causal::update_causal_graph;
 use canon_judgment::{LlmSignals, RuntimeSignals};
+use canon_semantic_state::{
+    classify_planned_action_intents, derive_objective_trend_state, derive_self_development_objective_state, execution_results_for_action, primary_development_objective_kind,
+    semantic_no_progress_streak, semantic_progress_rate, LlmSemanticContext, ObjectiveTrendState, SemanticActionIntent, SemanticExecutionResultRecord, SemanticStateSummary,
+};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -128,11 +126,7 @@ impl RouteContext {
 
     pub fn snapshot_text(&self) -> String {
         let objective_state = self.objective_state();
-        let primary_objective = primary_development_objective_kind(
-            &objective_state,
-            &self.objective_trend_state,
-            &self.semantic_summary,
-        );
+        let primary_objective = primary_development_objective_kind(&objective_state, &self.objective_trend_state, &self.semantic_summary);
         format!(
             "tick={tick}\ncontext_ready={context}\nworkspace_dirty={dirty}\nplanned_pending={pending}\nacted_unverified={unverified}\nfinish_ready={finish}\nlast_action_kind={action}\ngoodness={goodness}\ndelta_g={delta_g}\nconsecutive_invalid_plan_batches={invalid_count}\nlast_invalid_plan_planned_count={invalid_planned}\nlast_invalid_plan_reason={invalid_reason}\ntarget_workspace_missing={target_missing}\ntarget_workspace_path={target_path}\nplanning_preconditions={planning_preconditions}\nvalidation_blocked_by_preconditions={validation_blocked}\ncompiler_repair_required={compiler_repair}\nprimary_development_objective={primary_objective}\nmisalignment_pressure_score={misalignment_pressure}\nsemantic_summary_version={semantic_version}\nsemantic_summary_complete={semantic_complete}\nsemantic_progress_rate={semantic_progress_rate:.2}\nsemantic_no_progress_streak={semantic_no_progress_streak}\nhalted={halted}\nlast_halt_reason={halt_reason}",
             tick = self.scheduler_tick,
@@ -174,18 +168,9 @@ impl RouteContext {
     }
 
     pub fn llm_semantic_context(&self) -> LlmSemanticContext {
-        let objective_state = derive_self_development_objective_state(
-            &self.semantic_summary,
-            self.consecutive_invalid_plan_batches,
-            &self.recent_execution_results,
-            &self.objective_trend_state,
-        );
+        let objective_state = derive_self_development_objective_state(&self.semantic_summary, self.consecutive_invalid_plan_batches, &self.recent_execution_results, &self.objective_trend_state);
         LlmSemanticContext {
-            mission_summary: if self.mission_summary.is_empty() {
-                None
-            } else {
-                Some(self.mission_summary.clone())
-            },
+            mission_summary: if self.mission_summary.is_empty() { None } else { Some(self.mission_summary.clone()) },
             semantic_summary: self.semantic_summary.clone(),
             objective_state,
             objective_trend_state: self.objective_trend_state.clone(),
@@ -208,22 +193,12 @@ impl RouteContext {
     }
 
     pub fn objective_state(&self) -> canon_semantic_state::SelfDevelopmentObjectiveState {
-        derive_self_development_objective_state(
-            &self.semantic_summary,
-            self.consecutive_invalid_plan_batches,
-            &self.recent_execution_results,
-            &self.objective_trend_state,
-        )
+        derive_self_development_objective_state(&self.semantic_summary, self.consecutive_invalid_plan_batches, &self.recent_execution_results, &self.objective_trend_state)
     }
 
     pub fn refresh_objective_trend_state(&mut self) {
-        self.objective_trend_state = derive_objective_trend_state(
-            self.objective_trend_state.planning_attempts,
-            self.objective_trend_state.invalid_plan_events,
-            self.goodness,
-            self.delta_g,
-            &self.recent_execution_results,
-        );
+        self.objective_trend_state =
+            derive_objective_trend_state(self.objective_trend_state.planning_attempts, self.objective_trend_state.invalid_plan_events, self.goodness, self.delta_g, &self.recent_execution_results);
     }
 
     pub fn push_journal(&mut self, lane: impl Into<String>, summary: impl Into<String>) {
@@ -250,42 +225,24 @@ impl RouteContext {
                     "observe",
                     format!(
                         "rustc_graph_artifact_written crate={} artifact_id={} files={} nodes={} edges={}",
-                        written.crate_name,
-                        written.artifact_id,
-                        written.file_count,
-                        written.node_count,
-                        written.edge_count
+                        written.crate_name, written.artifact_id, written.file_count, written.node_count, written.edge_count
                     ),
                 );
             }
             RuntimeEvent::RustcCaptureCompleted(completed) => {
-                self.push_journal(
-                    "observe",
-                    format!(
-                        "rustc_capture_completed crate={} artifact_id={}",
-                        completed.crate_name, completed.artifact_id
-                    ),
-                );
+                self.push_journal("observe", format!("rustc_capture_completed crate={} artifact_id={}", completed.crate_name, completed.artifact_id));
             }
             RuntimeEvent::RustcCaptureFailed(failed) => {
                 self.context_ready = true;
-                self.semantic_summary
-                    .apply_rustc_capture_failure(&failed.message);
-                self.push_journal(
-                    "observe",
-                    format!("rustc_capture_failed crate={} message={}", failed.crate_name, failed.message),
-                );
+                self.semantic_summary.apply_rustc_capture_failure(&failed.message);
+                self.push_journal("observe", format!("rustc_capture_failed crate={} message={}", failed.crate_name, failed.message));
             }
             RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, semantic_summary, .. }) => {
-                let goal_present = goal_text
-                    .as_ref()
-                    .map(|v| !Self::goal_is_placeholder(v))
-                    .unwrap_or(false);
+                let goal_present = goal_text.as_ref().map(|v| !Self::goal_is_placeholder(v)).unwrap_or(false);
                 self.context_ready = goal_present || *error_count > 0;
                 self.bootstrap_refresh_required = false;
                 self.semantic_summary = semantic_summary.clone();
-                self.objective_trend_state
-                    .record_observation(*error_count, &self.semantic_summary);
+                self.objective_trend_state.record_observation(*error_count, &self.semantic_summary);
                 if let Some(goal_text) = goal_text {
                     if !Self::goal_is_placeholder(goal_text) {
                         self.mission_raw = goal_text.clone();
@@ -308,9 +265,7 @@ impl RouteContext {
                     self.action_meta.insert(aid.clone(), (action_kind.clone(), llm_request_id.clone()));
                     let target_root = self.semantic_summary.target_root.as_deref().map(Path::new);
                     let intents = match event {
-                        RuntimeEvent::LoopPlanned(planned) => {
-                            classify_planned_action_intents(&planned.action_kind, &planned.action_payload, target_root)
-                        }
+                        RuntimeEvent::LoopPlanned(planned) => classify_planned_action_intents(&planned.action_kind, &planned.action_payload, target_root),
                         _ => Vec::new(),
                     };
                     self.action_semantic_intents.insert(aid.clone(), intents);
@@ -381,14 +336,11 @@ impl RouteContext {
                 self.acted_unverified = false;
                 self.verify_seen = true;
                 self.last_verify_diagnostics = diagnostics.clone();
-                self.semantic_summary.compiler_repair_required = diagnostics.iter().any(|d| {
-                    d.contains("allow(dead_code) incompatible with previous forbid")
-                        || d.contains("file not found for module `")
-                });
+                self.semantic_summary.compiler_repair_required =
+                    diagnostics.iter().any(|d| d.contains("allow(dead_code) incompatible with previous forbid") || d.contains("file not found for module `"));
                 self.workspace_dirty_tracker.mark_verified("orchestrator");
                 let done_action = self.last_action_kind == "done";
-                let system_satisfied = done_action && *passed
-                    || crate::helpers::evaluate_goal_satisfied(self.mission_goal_spec.as_ref(), workspace);
+                let system_satisfied = done_action && *passed || crate::helpers::evaluate_goal_satisfied(self.mission_goal_spec.as_ref(), workspace);
                 self.finish_ready = *compiler_clean && system_satisfied;
                 self.push_journal("verify", format!("passed={} done_action={done_action} system_satisfied={} diagnostics={}", compiler_clean, system_satisfied, diagnostics.join("|")));
             }
@@ -401,10 +353,7 @@ impl RouteContext {
                     "policy_update",
                     format!(
                         "verifier_outcome={} retry_policy={} reward_bias={} actionable_failure={}",
-                        updated.verifier_outcome,
-                        updated.retry_policy,
-                        updated.reward_bias,
-                        updated.actionable_failure
+                        updated.verifier_outcome, updated.retry_policy, updated.reward_bias, updated.actionable_failure
                     ),
                 );
             }
@@ -430,19 +379,13 @@ impl RouteContext {
                 self.consecutive_invalid_plan_batches = self.consecutive_invalid_plan_batches.saturating_add(1);
                 self.objective_trend_state.record_invalid_plan_event();
                 self.last_invalid_plan_reason = Some(err.message.clone());
-                self.last_invalid_plan_planned_count = err
-                    .context
-                    .get("planned_count")
-                    .and_then(|v| v.as_u64())
-                    .map(|v| v as usize);
+                self.last_invalid_plan_planned_count = err.context.get("planned_count").and_then(|v| v.as_u64()).map(|v| v as usize);
                 self.push_journal(
                     "plan",
                     format!(
                         "invalid_plan_batch count={} planned_count={} reason={}",
                         self.consecutive_invalid_plan_batches,
-                        self.last_invalid_plan_planned_count
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "NA".to_string()),
+                        self.last_invalid_plan_planned_count.map(|v| v.to_string()).unwrap_or_else(|| "NA".to_string()),
                         err.message
                     ),
                 );
@@ -495,9 +438,7 @@ impl RouteContext {
                     output_text.truncate(512);
                     output_text.push_str("...<truncated>");
                 }
-                let (action_kind, llm_request_id) = self.action_meta.get(node_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let (action_kind, llm_request_id) = self.action_meta.get(node_id).cloned().unwrap_or_default();
                 self.recent_tool_results.push(json!({
                     "node_id": node_id,
                     "kind": kind,
@@ -523,11 +464,7 @@ impl RouteContext {
             RuntimeEvent::RuntimeStateUpdated(updated) => {
                 if updated.payload.get("fatal_invariant").and_then(|v| v.as_bool()).unwrap_or(false) {
                     self.halted = true;
-                    self.last_halt_reason = updated
-                        .payload
-                        .get("fatal_invariant_reason")
-                        .and_then(|v| v.as_str())
-                        .map(|v| v.to_string());
+                    self.last_halt_reason = updated.payload.get("fatal_invariant_reason").and_then(|v| v.as_str()).map(|v| v.to_string());
                     if let Some(reason) = updated.payload.get("fatal_invariant_reason").and_then(|v| v.as_str()) {
                         self.push_journal("runtime", format!("fatal_invariant_halt reason={reason}"));
                     }
@@ -764,9 +701,7 @@ mod tests {
                     complete: true,
                     target_root: Some("/tmp/example".into()),
                     path_exists: false,
-                    planning_preconditions: vec![
-                        "must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".into(),
-                    ],
+                    planning_preconditions: vec!["must_bootstrap_workspace=true repair=cargo_init_or_create_workspace".into()],
                     validation_blocked_by_preconditions: true,
                     compiler_repair_required: false,
                     ..SemanticStateSummary::default()
@@ -787,8 +722,7 @@ mod tests {
         ctx.semantic_summary.complete = true;
         ctx.semantic_summary.path_exists = false;
         ctx.semantic_summary.target_root = Some("/tmp/semantic".into());
-        ctx.semantic_summary.planning_preconditions =
-            vec!["must_create_missing_modules=true".into()];
+        ctx.semantic_summary.planning_preconditions = vec!["must_create_missing_modules=true".into()];
         ctx.semantic_summary.validation_blocked_by_preconditions = true;
         ctx.semantic_summary.compiler_repair_required = true;
 
@@ -805,21 +739,10 @@ mod tests {
         let workspace = Path::new("/tmp");
 
         ctx.update_from_event(
-            &RuntimeEvent::Debug(canon_event::DebugEvent {
-                source: "route_executor".into(),
-                kind: "route_objective_contradiction".into(),
-                payload: serde_json::json!({}),
-            }),
+            &RuntimeEvent::Debug(canon_event::DebugEvent { source: "route_executor".into(), kind: "route_objective_contradiction".into(), payload: serde_json::json!({}) }),
             workspace,
         );
-        ctx.update_from_event(
-            &RuntimeEvent::Debug(canon_event::DebugEvent {
-                source: "goal_gen_consumer".into(),
-                kind: "goal_objective_drift".into(),
-                payload: serde_json::json!({}),
-            }),
-            workspace,
-        );
+        ctx.update_from_event(&RuntimeEvent::Debug(canon_event::DebugEvent { source: "goal_gen_consumer".into(), kind: "goal_objective_drift".into(), payload: serde_json::json!({}) }), workspace);
 
         assert_eq!(ctx.objective_trend_state.route_objective_contradiction_events, 1);
         assert_eq!(ctx.objective_trend_state.goal_objective_drift_events, 1);

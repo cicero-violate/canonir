@@ -10,9 +10,9 @@ pub mod symbol_index;
 pub mod tlog;
 pub mod verify;
 
+use std::fs as stdfs;
 use std::path::Path;
 use std::sync::Arc;
-use std::fs as stdfs;
 
 use anyhow::anyhow;
 
@@ -52,27 +52,15 @@ pub fn rename_symbol_pairs(project: &Path, renames: &[(String, String)]) -> Rena
     rename_symbol_pairs_with_session(project, session, renames)
 }
 
-pub fn rename_symbol_pairs_from_graph_candidates(
-    project: &Path,
-    candidates: &[canon_analysis::GraphRenameCandidate],
-) -> RenameRunReport {
-    let renames: Vec<(String, String)> = candidates
-        .iter()
-        .map(|candidate| (candidate.symbol_path.clone(), candidate.suggested_path.clone()))
-        .collect();
+pub fn rename_symbol_pairs_from_graph_candidates(project: &Path, candidates: &[canon_analysis::GraphRenameCandidate]) -> RenameRunReport {
+    let renames: Vec<(String, String)> = candidates.iter().map(|candidate| (candidate.symbol_path.clone(), candidate.suggested_path.clone())).collect();
     rename_symbol_pairs(project, &renames)
 }
 
-pub fn rename_duplicate_symbols_from_latest_graph(
-    project: &Path,
-    limit: usize,
-) -> RenameRunReport {
+pub fn rename_duplicate_symbols_from_latest_graph(project: &Path, limit: usize) -> RenameRunReport {
     match canon_analysis::graph_backed_rename_candidates(project, limit) {
         Ok(candidates) => rename_symbol_pairs_from_graph_candidates(project, &candidates),
-        Err(err) => RenameRunReport {
-            error: Some(format!("{err:?}")),
-            ..RenameRunReport::default()
-        },
+        Err(err) => RenameRunReport { error: Some(format!("{err:?}")), ..RenameRunReport::default() },
     }
 }
 
@@ -86,12 +74,7 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
         }
     };
     if let Err(err) = session.validate_invariants() {
-        publish_invariant_error(
-            project,
-            "move_symbol_index",
-            &err.to_string(),
-            serde_json::json!({ "moves": moves }),
-        );
+        publish_invariant_error(project, "move_symbol_index", &err.to_string(), serde_json::json!({ "moves": moves }));
         report.error = Some(err.to_string());
         return report;
     }
@@ -105,34 +88,16 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
     let mut move_verifications = Vec::new();
 
     for (symbol_id, new_module_path) in moves {
-        let canonical_symbol_id = editor
-            .session
-            .as_ref()
-            .map(|index| index.resolve_symbol_id(symbol_id))
-            .unwrap_or_else(|| symbol_id.clone());
-        if !editor
-            .session
-            .as_ref()
-            .is_some_and(|index| index.contains(symbol_id))
-        {
+        let canonical_symbol_id = editor.session.as_ref().map(|index| index.resolve_symbol_id(symbol_id)).unwrap_or_else(|| symbol_id.clone());
+        if !editor.session.as_ref().is_some_and(|index| index.contains(symbol_id)) {
             let message = format!("preflight invariant: move symbol not in index: {symbol_id}");
-            publish_invariant_error(
-                project,
-                "move_symbol_preflight",
-                &message,
-                serde_json::json!({ "symbol_id": symbol_id, "new_module_path": new_module_path }),
-            );
+            publish_invariant_error(project, "move_symbol_preflight", &message, serde_json::json!({ "symbol_id": symbol_id, "new_module_path": new_module_path }));
             report.error = Some(message);
             return report;
         }
         if !editor.registry.module_files.contains_key(new_module_path) {
             let message = format!("preflight invariant: target module not in index: {new_module_path}");
-            publish_invariant_error(
-                project,
-                "move_symbol_preflight",
-                &message,
-                serde_json::json!({ "symbol_id": symbol_id, "new_module_path": new_module_path }),
-            );
+            publish_invariant_error(project, "move_symbol_preflight", &message, serde_json::json!({ "symbol_id": symbol_id, "new_module_path": new_module_path }));
             report.error = Some(message);
             return report;
         }
@@ -147,23 +112,13 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
             Some(path) => path,
             None => {
                 let message = format!("preflight invariant: target module not in index: {new_module_path}");
-                publish_invariant_error(
-                    project,
-                    "move_symbol_preflight",
-                    &message,
-                    serde_json::json!({ "symbol_id": canonical_symbol_id, "new_module_path": new_module_path }),
-                );
+                publish_invariant_error(project, "move_symbol_preflight", &message, serde_json::json!({ "symbol_id": canonical_symbol_id, "new_module_path": new_module_path }));
                 report.error = Some(message);
                 return report;
             }
         };
         move_verifications.push((canonical_symbol_id.clone(), handle.file.clone(), target_file, new_module_path.clone()));
-        let op = EditOp::MoveSymbol {
-            handle,
-            symbol_id: canonical_symbol_id.clone(),
-            new_module_path: new_module_path.clone(),
-            new_crate: None,
-        };
+        let op = EditOp::MoveSymbol { handle, symbol_id: canonical_symbol_id.clone(), new_module_path: new_module_path.clone(), new_crate: None };
         if let Err(err) = editor.queue(&canonical_symbol_id, op) {
             report.error = Some(format!("{err:?}"));
             return report;
@@ -214,24 +169,15 @@ pub fn move_symbol_pairs(project: &Path, moves: &[(String, String)]) -> RenameRu
     report
 }
 
-pub fn move_symbols_from_graph_candidates(
-    project: &Path,
-    candidates: &[canon_analysis::GraphModuleMoveCandidate],
-) -> RenameRunReport {
-    let moves: Vec<(String, String)> = candidates
-        .iter()
-        .map(|candidate| (candidate.symbol_path.clone(), candidate.to_module_path.clone()))
-        .collect();
+pub fn move_symbols_from_graph_candidates(project: &Path, candidates: &[canon_analysis::GraphModuleMoveCandidate]) -> RenameRunReport {
+    let moves: Vec<(String, String)> = candidates.iter().map(|candidate| (candidate.symbol_path.clone(), candidate.to_module_path.clone())).collect();
     move_symbol_pairs(project, &moves)
 }
 
 pub fn restructure_modules_from_latest_graph(project: &Path, limit: usize) -> RenameRunReport {
     match canon_analysis::graph_backed_module_moves(project, limit) {
         Ok(candidates) => move_symbols_from_graph_candidates(project, &candidates),
-        Err(err) => RenameRunReport {
-            error: Some(format!("{err:?}")),
-            ..RenameRunReport::default()
-        },
+        Err(err) => RenameRunReport { error: Some(format!("{err:?}")), ..RenameRunReport::default() },
     }
 }
 
@@ -241,12 +187,7 @@ pub fn add_import_paths(project: &Path, imports: &[(String, String)]) -> RenameR
         let full_path = project.join(path);
         if !full_path.exists() {
             let message = format!("preflight invariant: import target file missing: {}", full_path.display());
-            publish_invariant_error(
-                project,
-                "add_import_preflight",
-                &message,
-                serde_json::json!({ "path": path, "import": import_path }),
-            );
+            publish_invariant_error(project, "add_import_preflight", &message, serde_json::json!({ "path": path, "import": import_path }));
             report.error = Some(message);
             return report;
         }
@@ -254,12 +195,7 @@ pub fn add_import_paths(project: &Path, imports: &[(String, String)]) -> RenameR
             Ok(path) => path,
             Err(err) => {
                 let message = format!("preflight invariant: import path is not canonical: {import_path}: {err}");
-                publish_invariant_error(
-                    project,
-                    "add_import_preflight",
-                    &message,
-                    serde_json::json!({ "path": path, "import": import_path }),
-                );
+                publish_invariant_error(project, "add_import_preflight", &message, serde_json::json!({ "path": path, "import": import_path }));
                 report.error = Some(message);
                 return report;
             }
@@ -273,12 +209,7 @@ pub fn add_import_paths(project: &Path, imports: &[(String, String)]) -> RenameR
             Ok(content) if content.lines().any(|line| line.trim() == import_line) => {}
             _ => {
                 let message = format!("post invariant: import not present after apply: {canonical_import_path}");
-                publish_invariant_error(
-                    project,
-                    "add_import_post",
-                    &message,
-                    serde_json::json!({ "path": path, "import": canonical_import_path }),
-                );
+                publish_invariant_error(project, "add_import_post", &message, serde_json::json!({ "path": path, "import": canonical_import_path }));
                 report.error = Some(message);
                 return report;
             }
@@ -293,11 +224,7 @@ fn canonicalize_import_path(project: &Path, importer_path: &str, import_path: &s
     if trimmed.is_empty() {
         return Err(anyhow!("empty import path"));
     }
-    let (target, alias_suffix) = if let Some((target, alias)) = trimmed.split_once(" as ") {
-        (target.trim(), Some(alias.trim()))
-    } else {
-        (trimmed, None)
-    };
+    let (target, alias_suffix) = if let Some((target, alias)) = trimmed.split_once(" as ") { (target.trim(), Some(alias.trim())) } else { (trimmed, None) };
     let target = if target.starts_with("crate::")
         || target.starts_with("self::")
         || target.starts_with("super::")
@@ -322,10 +249,7 @@ fn canonicalize_import_path(project: &Path, importer_path: &str, import_path: &s
                 Ok(resolved.canonical_path)
             }
         }
-        Ok(None) if canonical_target.starts_with("std::")
-            || canonical_target.starts_with("core::")
-            || canonical_target.starts_with("alloc::") =>
-        {
+        Ok(None) if canonical_target.starts_with("std::") || canonical_target.starts_with("core::") || canonical_target.starts_with("alloc::") => {
             if let Some(alias) = alias_suffix {
                 Ok(format!("{canonical_target} as {alias}"))
             } else {
@@ -345,11 +269,7 @@ fn canonicalize_import_path(project: &Path, importer_path: &str, import_path: &s
 
 fn resolve_relative_import_target(importer_path: &str, target: &str) -> anyhow::Result<String> {
     let importer_module = module_path_from_relative_path(importer_path)?;
-    let mut segments = importer_module
-        .split("::")
-        .filter(|segment| !segment.is_empty())
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
+    let mut segments = importer_module.split("::").filter(|segment| !segment.is_empty()).map(ToString::to_string).collect::<Vec<_>>();
     let mut target_segments = target.split("::");
     match target_segments.next() {
         Some("self") => {}
@@ -385,10 +305,7 @@ fn resolve_relative_import_target(importer_path: &str, target: &str) -> anyhow::
 fn module_path_from_relative_path(path: &str) -> anyhow::Result<String> {
     let path = Path::new(path);
     let rel = path.strip_prefix("src").ok().unwrap_or(path);
-    let mut segments = rel
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>();
+    let mut segments = rel.components().filter_map(|component| component.as_os_str().to_str()).collect::<Vec<_>>();
     let Some(filename) = segments.pop() else {
         return Err(anyhow!("cannot derive module path from {path:?}"));
     };
@@ -407,10 +324,7 @@ fn module_path_from_relative_path(path: &str) -> anyhow::Result<String> {
     Ok(module_segments.join("::"))
 }
 
-pub fn define_symbol_stubs(
-    project: &Path,
-    stubs: &[(String, String, String)],
-) -> RenameRunReport {
+pub fn define_symbol_stubs(project: &Path, stubs: &[(String, String, String)]) -> RenameRunReport {
     let mut report = RenameRunReport::default();
     for (path, symbol, kind) in stubs {
         let full_path = project.join(path);
@@ -423,21 +337,13 @@ pub fn define_symbol_stubs(
     report
 }
 
-pub fn create_module_files(
-    project: &Path,
-    modules: &[(String, Option<String>)],
-) -> RenameRunReport {
+pub fn create_module_files(project: &Path, modules: &[(String, Option<String>)]) -> RenameRunReport {
     let mut report = RenameRunReport::default();
     for (path, module_name) in modules {
         let full_path = project.join(path);
         if full_path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
             let message = format!("preflight invariant: module path must be a Rust source file: {}", full_path.display());
-            publish_invariant_error(
-                project,
-                "create_module_preflight",
-                &message,
-                serde_json::json!({ "path": path, "module": module_name }),
-            );
+            publish_invariant_error(project, "create_module_preflight", &message, serde_json::json!({ "path": path, "module": module_name }));
             report.error = Some(message);
             return report;
         }
@@ -447,12 +353,7 @@ pub fn create_module_files(
         }
         if !full_path.exists() {
             let message = format!("post invariant: module file not created: {}", full_path.display());
-            publish_invariant_error(
-                project,
-                "create_module_post",
-                &message,
-                serde_json::json!({ "path": path, "module": module_name }),
-            );
+            publish_invariant_error(project, "create_module_post", &message, serde_json::json!({ "path": path, "module": module_name }));
             report.error = Some(message);
             return report;
         }
@@ -464,12 +365,7 @@ pub fn create_module_files(
 pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex>, renames: &[(String, String)]) -> RenameRunReport {
     let mut report = RenameRunReport::default();
     if let Err(err) = session.validate_invariants() {
-        publish_invariant_error(
-            project,
-            "rename_symbol_index",
-            &err.to_string(),
-            serde_json::json!({ "renames": renames }),
-        );
+        publish_invariant_error(project, "rename_symbol_index", &err.to_string(), serde_json::json!({ "renames": renames }));
         report.error = Some(err.to_string());
         return report;
     }
@@ -482,50 +378,22 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
     };
 
     for (old_symbol, new_symbol) in renames {
-        let canonical_old_symbol = editor
-            .session
-            .as_ref()
-            .map(|index| index.resolve_symbol_id(old_symbol))
-            .unwrap_or_else(|| old_symbol.clone());
-        if !editor
-            .session
-            .as_ref()
-            .is_some_and(|index| index.contains(old_symbol))
-        {
+        let canonical_old_symbol = editor.session.as_ref().map(|index| index.resolve_symbol_id(old_symbol)).unwrap_or_else(|| old_symbol.clone());
+        if !editor.session.as_ref().is_some_and(|index| index.contains(old_symbol)) {
             let message = format!("preflight invariant: symbol not in index: {old_symbol}");
-            publish_invariant_error(
-                project,
-                "rename_symbol_preflight",
-                &message,
-                serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }),
-            );
+            publish_invariant_error(project, "rename_symbol_preflight", &message, serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }));
             report.error = Some(message);
             return report;
         }
-        if old_symbol != new_symbol
-            && editor
-                .session
-                .as_ref()
-                .is_some_and(|index| index.contains(new_symbol) || index.contains(&index.resolve_symbol_id(new_symbol)))
-        {
+        if old_symbol != new_symbol && editor.session.as_ref().is_some_and(|index| index.contains(new_symbol) || index.contains(&index.resolve_symbol_id(new_symbol))) {
             let message = format!("preflight invariant: target symbol already exists: {new_symbol}");
-            publish_invariant_error(
-                project,
-                "rename_symbol_preflight",
-                &message,
-                serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }),
-            );
+            publish_invariant_error(project, "rename_symbol_preflight", &message, serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }));
             report.error = Some(message);
             return report;
         }
         let Some(handle) = editor.registry.handles.get(&canonical_old_symbol).cloned() else {
             let message = format!("preflight invariant: symbol not found in registry: {old_symbol}");
-            publish_invariant_error(
-                project,
-                "rename_symbol_preflight",
-                &message,
-                serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }),
-            );
+            publish_invariant_error(project, "rename_symbol_preflight", &message, serde_json::json!({ "old_symbol": old_symbol, "new_symbol": new_symbol }));
             report.error = Some(message);
             return report;
         };
@@ -556,21 +424,9 @@ pub fn rename_symbol_pairs_with_session(project: &Path, session: Arc<SymbolIndex
         return report;
     }
 
-    let verify = verify_renames_applied(
-        editor
-            .session
-            .as_ref()
-            .expect("editor session must exist for rename verification"),
-        &editor,
-        renames,
-    );
+    let verify = verify_renames_applied(editor.session.as_ref().expect("editor session must exist for rename verification"), &editor, renames);
     if verify.pairs_checked != renames.len() || verify.pairs_changed != renames.len() {
-        let message = format!(
-            "post invariant: rename verification mismatch checked={} changed={} expected={}",
-            verify.pairs_checked,
-            verify.pairs_changed,
-            renames.len()
-        );
+        let message = format!("post invariant: rename verification mismatch checked={} changed={} expected={}", verify.pairs_checked, verify.pairs_changed, renames.len());
         publish_invariant_error(
             project,
             "rename_symbol_post",
@@ -594,22 +450,14 @@ fn add_import_path(file_path: &Path, import_path: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     let parsed = syn::parse_str::<syn::ItemUse>(&import_line)?;
-    let rendered = prettyplease::unparse(&syn::File {
-        shebang: None,
-        attrs: Vec::new(),
-        items: vec![syn::Item::Use(parsed)],
-    });
+    let rendered = prettyplease::unparse(&syn::File { shebang: None, attrs: Vec::new(), items: vec![syn::Item::Use(parsed)] });
     let insert_at = import_insertion_offset(&content);
     content.insert_str(insert_at, &(rendered + "\n"));
     stdfs::write(file_path, content)?;
     Ok(())
 }
 
-fn source_file_contains_symbol(
-    sources: &std::collections::HashMap<std::path::PathBuf, String>,
-    file: &Path,
-    symbol_name: &str,
-) -> bool {
+fn source_file_contains_symbol(sources: &std::collections::HashMap<std::path::PathBuf, String>, file: &Path, symbol_name: &str) -> bool {
     let Some(content) = sources.get(file) else {
         return false;
     };
@@ -659,9 +507,7 @@ fn create_module_file(file_path: &Path, module_name: Option<&str>) -> anyhow::Re
     if let Some(parent) = file_path.parent() {
         stdfs::create_dir_all(parent)?;
     }
-    let module_name = module_name
-        .or_else(|| file_path.file_stem().and_then(|stem| stem.to_str()))
-        .unwrap_or("module");
+    let module_name = module_name.or_else(|| file_path.file_stem().and_then(|stem| stem.to_str())).unwrap_or("module");
     let content = format!("// module: {module_name}\n");
     stdfs::write(file_path, content)?;
     Ok(())
@@ -716,10 +562,7 @@ mod tests {
         fs::create_dir_all(&src).unwrap();
         let file = src.join("lib.rs");
         fs::write(&file, "pub fn existing() {}\n").unwrap();
-        let report = define_symbol_stubs(
-            dir.path(),
-            &[("src/lib.rs".into(), "run".into(), "fn".into())],
-        );
+        let report = define_symbol_stubs(dir.path(), &[("src/lib.rs".into(), "run".into(), "fn".into())]);
         assert!(report.error.is_none());
         let updated = fs::read_to_string(file).unwrap();
         assert!(updated.contains("pub fn run()"));
@@ -728,10 +571,7 @@ mod tests {
     #[test]
     fn create_module_files_writes_missing_module() {
         let dir = tempfile::tempdir().unwrap();
-        let report = create_module_files(
-            dir.path(),
-            &[("src/merge.rs".into(), Some("merge".into()))],
-        );
+        let report = create_module_files(dir.path(), &[("src/merge.rs".into(), Some("merge".into()))]);
         assert!(report.error.is_none());
         let created = fs::read_to_string(dir.path().join("src/merge.rs")).unwrap();
         assert!(created.contains("module: merge"));

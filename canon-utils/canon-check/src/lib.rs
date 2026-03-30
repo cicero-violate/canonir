@@ -160,6 +160,10 @@ impl Check for MetaFieldsCheck {
             warnings.push(CheckWarning { check: self.name(), message: "meta.line is missing or zero".into() });
         }
 
-        if warnings.is_empty() { CheckResult::Ok } else { CheckResult::Warn(warnings) }
+        if warnings.is_empty() {
+            CheckResult::Ok
+        } else {
+            CheckResult::Warn(warnings)
+        }
     }
 }

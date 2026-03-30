@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use canon_event::{EventId, RuntimeEvent, CapabilityResult, EventEmitter, EventEmitterHandle, LlmCall};
+use canon_event::{CapabilityResult, EventEmitter, EventEmitterHandle, EventId, LlmCall, RuntimeEvent};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use canon_goal::GoalSpec;
 use crossbeam_channel as cc;
@@ -48,14 +48,21 @@ impl EventEmitter for DirectEventEmitter {
     }
 }
 
-pub fn request_route_via_llm_call(
-    workspace: &Path,
-    prompt: String,
-    timeout: Duration,
-    _last_tool_result: Option<serde_json::Value>,
-) -> Result<String> {
+pub fn request_route_via_llm_call(workspace: &Path, prompt: String, timeout: Duration, _last_tool_result: Option<serde_json::Value>) -> Result<String> {
     let request_id = format!("route-{}", uuid::Uuid::new_v4());
-    let event = RuntimeEvent::Llm(LlmCall { request_id: request_id.clone(), prompt: prompt.clone(), role: Some("router".to_string()), agent_id: None, dispatched: true, system: None, system_prompt_id: None, context_base: None, context_base_id: None, prompt_base_id: None, prev_prompt_id: None });
+    let event = RuntimeEvent::Llm(LlmCall {
+        request_id: request_id.clone(),
+        prompt: prompt.clone(),
+        role: Some("router".to_string()),
+        agent_id: None,
+        dispatched: true,
+        system: None,
+        system_prompt_id: None,
+        context_base: None,
+        context_base_id: None,
+        prompt_base_id: None,
+        prev_prompt_id: None,
+    });
     let (tx, rx) = cc::unbounded::<RuntimeEvent>();
     let emitter: EventEmitterHandle = std::sync::Arc::new(DirectEventEmitter { tx });
     let trigger_id = EventId::new("root");
@@ -113,14 +120,17 @@ fn count_loc(dir: &Path) -> usize {
 }
 
 fn extract_loc_requirement(spec: &GoalSpec) -> usize {
-    spec.requirements.iter().find_map(|req| {
-        if req.to_ascii_lowercase().contains("loc") {
-            let digits: String = req.chars().filter(|c| c.is_ascii_digit()).collect();
-            digits.parse::<usize>().ok()
-        } else {
-            None
-        }
-    }).unwrap_or(0)
+    spec.requirements
+        .iter()
+        .find_map(|req| {
+            if req.to_ascii_lowercase().contains("loc") {
+                let digits: String = req.chars().filter(|c| c.is_ascii_digit()).collect();
+                digits.parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
 }
 
 pub fn evaluate_goal_satisfied(spec: Option<&GoalSpec>, workspace: &Path) -> bool {

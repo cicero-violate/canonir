@@ -40,4 +40,3 @@ impl Reducer for Efficiency {
         *self = Self::default();
     }
 }
-

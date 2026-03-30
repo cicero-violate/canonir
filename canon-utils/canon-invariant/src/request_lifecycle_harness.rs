@@ -101,9 +101,7 @@ impl RetrySequenceDecision {
     }
 }
 
-pub fn project_request_lifecycle_observation(
-    observation: RequestLifecycleObservation,
-) -> RequestLifecycleState {
+pub fn project_request_lifecycle_observation(observation: RequestLifecycleObservation) -> RequestLifecycleState {
     RequestLifecycleState {
         pending_request: observation.request_dispatched,
         artifact_pending: observation.artifact_status_pending,
@@ -118,21 +116,15 @@ pub fn project_request_lifecycle_observation(
     }
 }
 
-pub fn evaluate_retry_sequence(
-    observation: RetrySequenceObservation,
-) -> RetrySequenceDecision {
+pub fn evaluate_retry_sequence(observation: RetrySequenceObservation) -> RetrySequenceDecision {
     if observation.attempts_dispatched == 0 {
         return RetrySequenceDecision::Suppress("no_attempts_dispatched");
     }
     if observation.duplicate_terminal_event {
-        return RetrySequenceDecision::InvariantViolation(
-            "retry_sequence_duplicate_terminal_event",
-        );
+        return RetrySequenceDecision::InvariantViolation("retry_sequence_duplicate_terminal_event");
     }
     if observation.prior_attempt_completed_valid && observation.current_attempt_completed_valid {
-        return RetrySequenceDecision::InvariantViolation(
-            "retry_sequence_multiple_valid_completions",
-        );
+        return RetrySequenceDecision::InvariantViolation("retry_sequence_multiple_valid_completions");
     }
     if observation.prior_attempt_completed_valid {
         return RetrySequenceDecision::AcceptPriorSalvagedAttempt;
@@ -148,9 +140,7 @@ pub fn evaluate_retry_sequence(
             return RetrySequenceDecision::IgnorePriorMetadataOnly;
         }
         if observation.timeout_elapsed {
-            return RetrySequenceDecision::InvariantViolation(
-                "retry_sequence_timeout_without_terminal_current_attempt",
-            );
+            return RetrySequenceDecision::InvariantViolation("retry_sequence_timeout_without_terminal_current_attempt");
         }
     }
     if observation.current_attempt_completed_valid {
@@ -160,9 +150,7 @@ pub fn evaluate_retry_sequence(
         return RetrySequenceDecision::AcceptFailedCurrentAttempt;
     }
     if observation.timeout_elapsed && observation.current_attempt_pending {
-        return RetrySequenceDecision::InvariantViolation(
-            "retry_sequence_timeout_without_terminal_current_attempt",
-        );
+        return RetrySequenceDecision::InvariantViolation("retry_sequence_timeout_without_terminal_current_attempt");
     }
     if observation.current_attempt_pending {
         return RetrySequenceDecision::AwaitCurrentAttempt;
@@ -170,35 +158,25 @@ pub fn evaluate_retry_sequence(
     RetrySequenceDecision::Suppress("retry_sequence_idle")
 }
 
-pub fn evaluate_request_lifecycle_state(
-    state: RequestLifecycleState,
-) -> RequestLifecycleDecision {
+pub fn evaluate_request_lifecycle_state(state: RequestLifecycleState) -> RequestLifecycleDecision {
     if !state.pending_request {
         return RequestLifecycleDecision::Suppress("idle");
     }
     if state.completed_received && state.failed_received {
-        return RequestLifecycleDecision::InvariantViolation(
-            "multiple_terminal_results_for_same_request",
-        );
+        return RequestLifecycleDecision::InvariantViolation("multiple_terminal_results_for_same_request");
     }
     if state.duplicate_terminal_event && (state.completed_received || state.failed_received) {
         return RequestLifecycleDecision::InvariantViolation("duplicate_terminal_event");
     }
     if state.artifact_finalized && !state.completed_received && !state.failed_received {
-        return RequestLifecycleDecision::InvariantViolation(
-            "artifact_finalized_without_terminal_event",
-        );
+        return RequestLifecycleDecision::InvariantViolation("artifact_finalized_without_terminal_event");
     }
     if state.completed_received {
         if !state.artifact_finalized {
-            return RequestLifecycleDecision::InvariantViolation(
-                "completed_without_artifact_finalization",
-            );
+            return RequestLifecycleDecision::InvariantViolation("completed_without_artifact_finalization");
         }
         if state.payload_metadata_only && state.payload_valid_actions {
-            return RequestLifecycleDecision::InvariantViolation(
-                "metadata_only_payload_cannot_also_be_valid_actions",
-            );
+            return RequestLifecycleDecision::InvariantViolation("metadata_only_payload_cannot_also_be_valid_actions");
         }
         if state.payload_valid_actions {
             if state.matched_request_id {
@@ -209,23 +187,17 @@ pub fn evaluate_request_lifecycle_state(
         if state.payload_metadata_only {
             return RequestLifecycleDecision::IgnoreMetadataOnly;
         }
-        return RequestLifecycleDecision::InvariantViolation(
-            "completed_without_actionable_payload",
-        );
+        return RequestLifecycleDecision::InvariantViolation("completed_without_actionable_payload");
     }
     if state.failed_received {
         if !state.artifact_finalized {
-            return RequestLifecycleDecision::InvariantViolation(
-                "failed_without_artifact_finalization",
-            );
+            return RequestLifecycleDecision::InvariantViolation("failed_without_artifact_finalization");
         }
         return RequestLifecycleDecision::AcceptFailure;
     }
     if state.timeout_elapsed {
         if state.artifact_pending || !state.artifact_finalized {
-            return RequestLifecycleDecision::InvariantViolation(
-                "timeout_must_finalize_request",
-            );
+            return RequestLifecycleDecision::InvariantViolation("timeout_must_finalize_request");
         }
         return RequestLifecycleDecision::AcceptFailure;
     }
@@ -248,23 +220,13 @@ fn synthetic_request_lifecycle_seed_space() -> Vec<RequestLifecycleState> {
             duplicate_terminal_event: bits & (1 << 9) != 0,
         };
 
-        if !state.pending_request
-            && (state.artifact_pending
-                || state.artifact_finalized
-                || state.completed_received
-                || state.failed_received
-                || state.timeout_elapsed)
-        {
+        if !state.pending_request && (state.artifact_pending || state.artifact_finalized || state.completed_received || state.failed_received || state.timeout_elapsed) {
             continue;
         }
         if state.artifact_pending && state.artifact_finalized {
             continue;
         }
-        if !state.completed_received
-            && (state.matched_request_id
-                || state.payload_metadata_only
-                || state.payload_valid_actions)
-        {
+        if !state.completed_received && (state.matched_request_id || state.payload_metadata_only || state.payload_valid_actions) {
             continue;
         }
         if state.failed_received && (state.payload_metadata_only || state.payload_valid_actions) {
@@ -287,16 +249,10 @@ pub fn synthetic_request_lifecycle_metrics() -> SyntheticRequestLifecycleMetrics
             RequestLifecycleDecision::Suppress(_) => metrics.suppressed += 1,
             RequestLifecycleDecision::Await => metrics.awaiting += 1,
             RequestLifecycleDecision::AcceptCompleted => metrics.accepted_completed += 1,
-            RequestLifecycleDecision::AcceptSalvagedCompleted => {
-                metrics.accepted_salvaged_completed += 1
-            }
-            RequestLifecycleDecision::IgnoreMetadataOnly => {
-                metrics.ignored_metadata_only += 1
-            }
+            RequestLifecycleDecision::AcceptSalvagedCompleted => metrics.accepted_salvaged_completed += 1,
+            RequestLifecycleDecision::IgnoreMetadataOnly => metrics.ignored_metadata_only += 1,
             RequestLifecycleDecision::AcceptFailure => metrics.accepted_failures += 1,
-            RequestLifecycleDecision::InvariantViolation(_) => {
-                metrics.invariant_violations += 1
-            }
+            RequestLifecycleDecision::InvariantViolation(_) => metrics.invariant_violations += 1,
         }
     }
     metrics
@@ -305,30 +261,18 @@ pub fn synthetic_request_lifecycle_metrics() -> SyntheticRequestLifecycleMetrics
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluate_request_lifecycle_state, evaluate_retry_sequence,
-        project_request_lifecycle_observation, synthetic_request_lifecycle_metrics,
-        RequestLifecycleDecision, RequestLifecycleObservation, RequestLifecycleState,
-        RetrySequenceDecision, RetrySequenceObservation,
+        evaluate_request_lifecycle_state, evaluate_retry_sequence, project_request_lifecycle_observation, synthetic_request_lifecycle_metrics, RequestLifecycleDecision, RequestLifecycleObservation,
+        RequestLifecycleState, RetrySequenceDecision, RetrySequenceObservation,
     };
 
     #[test]
     fn request_lifecycle_idle_is_suppressed() {
-        assert_eq!(
-            evaluate_request_lifecycle_state(RequestLifecycleState::default()),
-            RequestLifecycleDecision::Suppress("idle"),
-        );
+        assert_eq!(evaluate_request_lifecycle_state(RequestLifecycleState::default()), RequestLifecycleDecision::Suppress("idle"),);
     }
 
     #[test]
     fn request_lifecycle_pending_request_awaits() {
-        assert_eq!(
-            evaluate_request_lifecycle_state(RequestLifecycleState {
-                pending_request: true,
-                artifact_pending: true,
-                ..RequestLifecycleState::default()
-            }),
-            RequestLifecycleDecision::Await,
-        );
+        assert_eq!(evaluate_request_lifecycle_state(RequestLifecycleState { pending_request: true, artifact_pending: true, ..RequestLifecycleState::default() }), RequestLifecycleDecision::Await,);
     }
 
     #[test]
@@ -377,41 +321,23 @@ mod tests {
     #[test]
     fn request_lifecycle_timeout_without_terminal_close_is_violation() {
         assert_eq!(
-            evaluate_request_lifecycle_state(RequestLifecycleState {
-                pending_request: true,
-                artifact_pending: true,
-                timeout_elapsed: true,
-                ..RequestLifecycleState::default()
-            }),
-            RequestLifecycleDecision::InvariantViolation(
-                "timeout_must_finalize_request",
-            ),
+            evaluate_request_lifecycle_state(RequestLifecycleState { pending_request: true, artifact_pending: true, timeout_elapsed: true, ..RequestLifecycleState::default() }),
+            RequestLifecycleDecision::InvariantViolation("timeout_must_finalize_request",),
         );
     }
 
     #[test]
     fn request_lifecycle_failure_requires_finalized_artifact() {
         assert_eq!(
-            evaluate_request_lifecycle_state(RequestLifecycleState {
-                pending_request: true,
-                failed_received: true,
-                ..RequestLifecycleState::default()
-            }),
-            RequestLifecycleDecision::InvariantViolation(
-                "failed_without_artifact_finalization",
-            ),
+            evaluate_request_lifecycle_state(RequestLifecycleState { pending_request: true, failed_received: true, ..RequestLifecycleState::default() }),
+            RequestLifecycleDecision::InvariantViolation("failed_without_artifact_finalization",),
         );
     }
 
     #[test]
     fn request_lifecycle_accepts_finalized_failure() {
         assert_eq!(
-            evaluate_request_lifecycle_state(RequestLifecycleState {
-                pending_request: true,
-                artifact_finalized: true,
-                failed_received: true,
-                ..RequestLifecycleState::default()
-            }),
+            evaluate_request_lifecycle_state(RequestLifecycleState { pending_request: true, artifact_finalized: true, failed_received: true, ..RequestLifecycleState::default() }),
             RequestLifecycleDecision::AcceptFailure,
         );
     }
@@ -461,10 +387,7 @@ mod tests {
             payload_valid_actions: true,
             ..RequestLifecycleObservation::default()
         });
-        assert_eq!(
-            evaluate_request_lifecycle_state(state),
-            RequestLifecycleDecision::AcceptCompleted,
-        );
+        assert_eq!(evaluate_request_lifecycle_state(state), RequestLifecycleDecision::AcceptCompleted,);
     }
 
     #[test]
@@ -477,10 +400,7 @@ mod tests {
             payload_valid_actions: true,
             ..RequestLifecycleObservation::default()
         });
-        assert_eq!(
-            evaluate_request_lifecycle_state(state),
-            RequestLifecycleDecision::AcceptSalvagedCompleted,
-        );
+        assert_eq!(evaluate_request_lifecycle_state(state), RequestLifecycleDecision::AcceptSalvagedCompleted,);
     }
 
     #[test]
@@ -492,10 +412,7 @@ mod tests {
             payload_metadata_only: true,
             ..RequestLifecycleObservation::default()
         });
-        assert_eq!(
-            evaluate_request_lifecycle_state(state),
-            RequestLifecycleDecision::IgnoreMetadataOnly,
-        );
+        assert_eq!(evaluate_request_lifecycle_state(state), RequestLifecycleDecision::IgnoreMetadataOnly,);
     }
 
     #[test]
@@ -506,10 +423,7 @@ mod tests {
             timeout_elapsed: true,
             ..RequestLifecycleObservation::default()
         });
-        assert_eq!(
-            evaluate_request_lifecycle_state(state),
-            RequestLifecycleDecision::InvariantViolation("timeout_must_finalize_request"),
-        );
+        assert_eq!(evaluate_request_lifecycle_state(state), RequestLifecycleDecision::InvariantViolation("timeout_must_finalize_request"),);
     }
 
     #[test]
@@ -520,10 +434,7 @@ mod tests {
             failed_received: true,
             ..RequestLifecycleObservation::default()
         });
-        assert_eq!(
-            evaluate_request_lifecycle_state(state),
-            RequestLifecycleDecision::AcceptFailure,
-        );
+        assert_eq!(evaluate_request_lifecycle_state(state), RequestLifecycleDecision::AcceptFailure,);
     }
 
     #[test]
@@ -537,21 +448,13 @@ mod tests {
             duplicate_terminal_event: true,
             ..RequestLifecycleObservation::default()
         });
-        assert_eq!(
-            evaluate_request_lifecycle_state(state),
-            RequestLifecycleDecision::InvariantViolation("duplicate_terminal_event"),
-        );
+        assert_eq!(evaluate_request_lifecycle_state(state), RequestLifecycleDecision::InvariantViolation("duplicate_terminal_event"),);
     }
 
     #[test]
     fn retry_sequence_accepts_prior_salvaged_attempt() {
         assert_eq!(
-            evaluate_retry_sequence(RetrySequenceObservation {
-                attempts_dispatched: 2,
-                current_attempt_pending: true,
-                prior_attempt_completed_valid: true,
-                ..RetrySequenceObservation::default()
-            }),
+            evaluate_retry_sequence(RetrySequenceObservation { attempts_dispatched: 2, current_attempt_pending: true, prior_attempt_completed_valid: true, ..RetrySequenceObservation::default() }),
             RetrySequenceDecision::AcceptPriorSalvagedAttempt,
         );
     }
@@ -559,12 +462,7 @@ mod tests {
     #[test]
     fn retry_sequence_ignores_prior_metadata_while_waiting_current_attempt() {
         assert_eq!(
-            evaluate_retry_sequence(RetrySequenceObservation {
-                attempts_dispatched: 2,
-                current_attempt_pending: true,
-                prior_attempt_metadata_only: true,
-                ..RetrySequenceObservation::default()
-            }),
+            evaluate_retry_sequence(RetrySequenceObservation { attempts_dispatched: 2, current_attempt_pending: true, prior_attempt_metadata_only: true, ..RetrySequenceObservation::default() }),
             RetrySequenceDecision::IgnorePriorMetadataOnly,
         );
     }
@@ -572,11 +470,7 @@ mod tests {
     #[test]
     fn retry_sequence_accepts_current_attempt_when_valid() {
         assert_eq!(
-            evaluate_retry_sequence(RetrySequenceObservation {
-                attempts_dispatched: 2,
-                current_attempt_completed_valid: true,
-                ..RetrySequenceObservation::default()
-            }),
+            evaluate_retry_sequence(RetrySequenceObservation { attempts_dispatched: 2, current_attempt_completed_valid: true, ..RetrySequenceObservation::default() }),
             RetrySequenceDecision::AcceptCurrentAttempt,
         );
     }
@@ -584,11 +478,7 @@ mod tests {
     #[test]
     fn retry_sequence_accepts_current_failed_attempt() {
         assert_eq!(
-            evaluate_retry_sequence(RetrySequenceObservation {
-                attempts_dispatched: 2,
-                current_attempt_failed: true,
-                ..RetrySequenceObservation::default()
-            }),
+            evaluate_retry_sequence(RetrySequenceObservation { attempts_dispatched: 2, current_attempt_failed: true, ..RetrySequenceObservation::default() }),
             RetrySequenceDecision::AcceptFailedCurrentAttempt,
         );
     }
@@ -596,15 +486,8 @@ mod tests {
     #[test]
     fn retry_sequence_rejects_timeout_on_pending_current_attempt() {
         assert_eq!(
-            evaluate_retry_sequence(RetrySequenceObservation {
-                attempts_dispatched: 2,
-                current_attempt_pending: true,
-                timeout_elapsed: true,
-                ..RetrySequenceObservation::default()
-            }),
-            RetrySequenceDecision::InvariantViolation(
-                "retry_sequence_timeout_without_terminal_current_attempt",
-            ),
+            evaluate_retry_sequence(RetrySequenceObservation { attempts_dispatched: 2, current_attempt_pending: true, timeout_elapsed: true, ..RetrySequenceObservation::default() }),
+            RetrySequenceDecision::InvariantViolation("retry_sequence_timeout_without_terminal_current_attempt",),
         );
     }
 
@@ -617,23 +500,15 @@ mod tests {
                 current_attempt_completed_valid: true,
                 ..RetrySequenceObservation::default()
             }),
-            RetrySequenceDecision::InvariantViolation(
-                "retry_sequence_multiple_valid_completions",
-            ),
+            RetrySequenceDecision::InvariantViolation("retry_sequence_multiple_valid_completions",),
         );
     }
 
     #[test]
     fn retry_sequence_rejects_duplicate_terminal_event() {
         assert_eq!(
-            evaluate_retry_sequence(RetrySequenceObservation {
-                attempts_dispatched: 2,
-                duplicate_terminal_event: true,
-                ..RetrySequenceObservation::default()
-            }),
-            RetrySequenceDecision::InvariantViolation(
-                "retry_sequence_duplicate_terminal_event",
-            ),
+            evaluate_retry_sequence(RetrySequenceObservation { attempts_dispatched: 2, duplicate_terminal_event: true, ..RetrySequenceObservation::default() }),
+            RetrySequenceDecision::InvariantViolation("retry_sequence_duplicate_terminal_event",),
         );
     }
 }

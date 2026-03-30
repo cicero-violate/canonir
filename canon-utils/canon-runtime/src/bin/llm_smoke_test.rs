@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use canon_event::{EventId, RuntimeEvent, LlmCall};
+use canon_event::{EventId, LlmCall, RuntimeEvent};
 use canon_exec::{ExecutableEvent, ExecutionContext, ExecutionResult};
 use std::path::PathBuf;
 

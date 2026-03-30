@@ -29,11 +29,7 @@ use ParseError::*;
 pub enum Hunk {
     AddFile { path: PathBuf, contents: String },
     DeleteFile { path: PathBuf },
-    UpdateFile {
-        path: PathBuf,
-        move_path: Option<PathBuf>,
-        chunks: Vec<UpdateFileChunk>,
-    },
+    UpdateFile { path: PathBuf, move_path: Option<PathBuf>, chunks: Vec<UpdateFileChunk> },
 }
 
 impl Hunk {
@@ -256,22 +252,12 @@ fn parse_update_chunk(lines: &[&str], starting_line_number: usize) -> Result<(Up
         consumed += 1;
     }
 
-    Ok((
-        UpdateFileChunk {
-            change_context,
-            old_lines,
-            new_lines,
-            is_end_of_file,
-        },
-        consumed,
-    ))
+    Ok((UpdateFileChunk { change_context, old_lines, new_lines, is_end_of_file }, consumed))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        parse_patch, Hunk, ParseError,
-    };
+    use super::{parse_patch, Hunk, ParseError};
 
     #[test]
     fn parse_patch_accepts_add_file_hunk() {
@@ -306,10 +292,7 @@ mod tests {
         match &parsed.hunks[0] {
             Hunk::UpdateFile { path, move_path, chunks } => {
                 assert_eq!(path.to_string_lossy(), "canon-utils/old.rs");
-                assert_eq!(
-                    move_path.as_ref().map(|value| value.to_string_lossy().to_string()),
-                    Some("canon-utils/new.rs".to_string())
-                );
+                assert_eq!(move_path.as_ref().map(|value| value.to_string_lossy().to_string()), Some("canon-utils/new.rs".to_string()));
                 assert_eq!(chunks.len(), 1);
             }
             other => panic!("expected update-file hunk, got {other:?}"),
@@ -318,8 +301,7 @@ mod tests {
 
     #[test]
     fn parse_patch_rejects_missing_boundary_markers() {
-        let err = parse_patch("*** Update File: canon-utils/foo.rs")
-            .expect_err("patch without begin/end markers must fail");
+        let err = parse_patch("*** Update File: canon-utils/foo.rs").expect_err("patch without begin/end markers must fail");
         assert!(matches!(err, ParseError::InvalidPatchError(_)));
     }
 

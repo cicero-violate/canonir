@@ -1,7 +1,5 @@
 use canon_invariant::{
-    evaluate_constraint_context, meta_invariant_classify_bootstrap_tool, ConstraintAction,
-    ConstraintContext, ConstraintDecision, ConstraintState,
-    MetaInvariantBootstrapToolChoice,
+    evaluate_constraint_context, meta_invariant_classify_bootstrap_tool, ConstraintAction, ConstraintContext, ConstraintDecision, ConstraintState, MetaInvariantBootstrapToolChoice,
 };
 use canon_semantic_state::SemanticStateSummary;
 use std::path::{Path, PathBuf};
@@ -26,8 +24,7 @@ pub struct ExecState {
 impl ExecState {
     pub fn from_semantic_summary(target_root: &Path, summary: &SemanticStateSummary) -> Self {
         let real_cargo_project = target_root.join("Cargo.toml").exists();
-        let real_entrypoint_missing =
-            !target_root.join("src/main.rs").exists() && !target_root.join("src/lib.rs").exists();
+        let real_entrypoint_missing = !target_root.join("src/main.rs").exists() && !target_root.join("src/lib.rs").exists();
         let failure_scope_localized = summary.failure_scope.as_deref() == Some("localized")
             || !summary.module_gaps.is_empty()
             || summary.compiler_hints.iter().any(|hint| {
@@ -42,10 +39,7 @@ impl ExecState {
                             | canon_semantic_state::CompilerHintKind::DuplicateDefinition
                             | canon_semantic_state::CompilerHintKind::TraitBoundFailure
                     )
-                }) && hint
-                    .target_files
-                    .iter()
-                    .any(|path| !path.trim().is_empty() && path != "none")
+                }) && hint.target_files.iter().any(|path| !path.trim().is_empty() && path != "none")
             });
         Self {
             target_root: target_root.to_path_buf(),
@@ -58,15 +52,9 @@ impl ExecState {
                 || !summary.planning_preconditions.is_empty()
                 || !summary.module_gaps.is_empty()
                 || summary.has_actionable_compiler_hints()
-                || summary
-                    .primary_failure_class()
-                    .as_deref()
-                    .is_some_and(|class| class != "no_actionable_failure"),
+                || summary.primary_failure_class().as_deref().is_some_and(|class| class != "no_actionable_failure"),
             validation_blocked: summary.validation_blocked_by_preconditions,
-            entrypoint_missing: matches!(summary.entrypoint_kind.as_deref(), Some("none") | None)
-                && summary.cargo_project
-                && real_cargo_project
-                && real_entrypoint_missing,
+            entrypoint_missing: matches!(summary.entrypoint_kind.as_deref(), Some("none") | None) && summary.cargo_project && real_cargo_project && real_entrypoint_missing,
             module_gaps_present: !summary.module_gaps.is_empty(),
             failure_class_no_actionable: summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
             failure_scope_localized,
@@ -104,21 +92,11 @@ pub enum ExecAction {
 impl ExecAction {
     pub fn from_planned(action_kind: &str, action_payload: &serde_json::Value) -> Self {
         if action_kind == "run_command" {
-            let cmd = action_payload
-                .get("cmd")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let cwd = action_payload
-                .get("cwd")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."));
+            let cmd = action_payload.get("cmd").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let cwd = action_payload.get("cwd").and_then(|v| v.as_str()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
             Self::RunCommand { cmd, cwd }
         } else {
-            Self::Other {
-                action_kind: action_kind.to_string(),
-            }
+            Self::Other { action_kind: action_kind.to_string() }
         }
     }
 }
@@ -135,19 +113,12 @@ pub fn validate_exec_action(state: &ExecState, action: &ExecAction) -> ExecDecis
         ExecAction::RunCommand { cmd, .. } => match meta_invariant_classify_bootstrap_tool(cmd) {
             Some(MetaInvariantBootstrapToolChoice::CargoInit) => Some(ConstraintAction::CargoInit),
             Some(MetaInvariantBootstrapToolChoice::CargoNew) => Some(ConstraintAction::CargoNew),
-            None if cmd.contains("cargo check") || cmd.contains("cargo build") || cmd.contains("cargo test") => {
-                Some(ConstraintAction::Validation)
-            }
+            None if cmd.contains("cargo check") || cmd.contains("cargo build") || cmd.contains("cargo test") => Some(ConstraintAction::Validation),
             None => Some(ConstraintAction::RepairWorkspace),
         },
         ExecAction::Other { .. } => Some(ConstraintAction::Other),
     };
-    match evaluate_constraint_context(&ConstraintContext {
-        state: state.constraint_state(),
-        route: None,
-        action: constraint_action,
-        deterministic_route: None,
-    }) {
+    match evaluate_constraint_context(&ConstraintContext { state: state.constraint_state(), route: None, action: constraint_action, deterministic_route: None }) {
         ConstraintDecision::Allow => ExecDecision::Allow,
         ConstraintDecision::Forbid(reason) => ExecDecision::Forbid(reason),
         ConstraintDecision::RewriteAction(ConstraintAction::CargoNew, reason) => {
@@ -155,14 +126,7 @@ pub fn validate_exec_action(state: &ExecState, action: &ExecAction) -> ExecDecis
                 return ExecDecision::Forbid(reason);
             };
             ExecDecision::Rewrite(
-                ExecAction::RunCommand {
-                    cmd: rewrite_cargo_init_to_new(cmd, &state.target_root),
-                    cwd: state
-                        .target_root
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_else(|| state.target_root.clone()),
-                },
+                ExecAction::RunCommand { cmd: rewrite_cargo_init_to_new(cmd, &state.target_root), cwd: state.target_root.parent().map(Path::to_path_buf).unwrap_or_else(|| state.target_root.clone()) },
                 reason,
             )
         }
@@ -170,13 +134,7 @@ pub fn validate_exec_action(state: &ExecState, action: &ExecAction) -> ExecDecis
             let ExecAction::RunCommand { cmd, .. } = action else {
                 return ExecDecision::Forbid(reason);
             };
-            ExecDecision::Rewrite(
-                ExecAction::RunCommand {
-                    cmd: rewrite_cargo_new_to_init(cmd),
-                    cwd: state.target_root.clone(),
-                },
-                reason,
-            )
+            ExecDecision::Rewrite(ExecAction::RunCommand { cmd: rewrite_cargo_new_to_init(cmd), cwd: state.target_root.clone() }, reason)
         }
         ConstraintDecision::RewriteAction(_, reason) => ExecDecision::Forbid(reason),
         ConstraintDecision::RewriteRoute(_, reason) => ExecDecision::Forbid(reason),
@@ -184,10 +142,7 @@ pub fn validate_exec_action(state: &ExecState, action: &ExecAction) -> ExecDecis
 }
 
 fn rewrite_cargo_init_to_new(cmd: &str, target_root: &Path) -> String {
-    let target_name = target_root
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or("workspace");
+    let target_name = target_root.file_name().and_then(|v| v.to_str()).unwrap_or("workspace");
     let mut parts = vec!["cargo".to_string(), "new".to_string()];
     if let Some(name) = extract_flag_value(cmd, "--name") {
         parts.push("--name".to_string());
@@ -283,11 +238,7 @@ mod tests {
             }
             RealWorkspaceState::ExistingCargo => {
                 std::fs::create_dir_all(root.join("src")).unwrap();
-                std::fs::write(
-                    root.join("Cargo.toml"),
-                    "[package]\nname = \"exec_constraints\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-                )
-                .unwrap();
+                std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"exec_constraints\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
                 std::fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
             }
         }
@@ -300,29 +251,14 @@ mod tests {
             SemanticWorkspaceState::ExistingNonCargo => (true, false, None),
             SemanticWorkspaceState::ExistingCargo => (true, true, Some("bin".to_string())),
         };
-        SemanticStateSummary {
-            complete: true,
-            path_exists,
-            cargo_project,
-            entrypoint_kind,
-            ..SemanticStateSummary::default()
-        }
+        SemanticStateSummary { complete: true, path_exists, cargo_project, entrypoint_kind, ..SemanticStateSummary::default() }
     }
 
     fn action(case: ActionCase, root: &Path) -> ExecAction {
         match case {
-            ActionCase::CargoInit => ExecAction::RunCommand {
-                cmd: "cargo init --name event_sim_coverage .".to_string(),
-                cwd: root.to_path_buf(),
-            },
-            ActionCase::CargoNew => ExecAction::RunCommand {
-                cmd: "cargo new event_sim_coverage".to_string(),
-                cwd: root.to_path_buf(),
-            },
-            ActionCase::CargoCheck => ExecAction::RunCommand {
-                cmd: "cargo check".to_string(),
-                cwd: root.to_path_buf(),
-            },
+            ActionCase::CargoInit => ExecAction::RunCommand { cmd: "cargo init --name event_sim_coverage .".to_string(), cwd: root.to_path_buf() },
+            ActionCase::CargoNew => ExecAction::RunCommand { cmd: "cargo new event_sim_coverage".to_string(), cwd: root.to_path_buf() },
+            ActionCase::CargoCheck => ExecAction::RunCommand { cmd: "cargo check".to_string(), cwd: root.to_path_buf() },
         }
     }
 

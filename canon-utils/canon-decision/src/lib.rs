@@ -62,34 +62,46 @@ pub fn compose_routing_prompt(input: &RoutingInput) -> String {
     let mission_summary = input.mission.lines().next().unwrap_or("(unknown goal)").trim();
 
     // Only describe routes that are actually available.
-    let route_descriptions = input.open_routes.iter().map(|r| match r {
-        RouteKind::Observe  => "- observe: gather context; do not plan or execute.",
-        RouteKind::Plan     => "- plan: ask the LLM to plan the next action.",
-        RouteKind::Act      => "- act: execute the queued planned actions. Only when planned_pending>0.",
-        RouteKind::Verify   => "- verify: run cargo check after execution.",
-        RouteKind::Conclude => "- conclude: terminate. Only when finish_ready=true.",
-        RouteKind::Decompose => "- decompose: split goal into parallel sub-tasks.",
-    }).collect::<Vec<_>>().join("\n");
+    let route_descriptions = input
+        .open_routes
+        .iter()
+        .map(|r| match r {
+            RouteKind::Observe => "- observe: gather context; do not plan or execute.",
+            RouteKind::Plan => "- plan: ask the LLM to plan the next action.",
+            RouteKind::Act => "- act: execute the queued planned actions. Only when planned_pending>0.",
+            RouteKind::Verify => "- verify: run cargo check after execution.",
+            RouteKind::Conclude => "- conclude: terminate. Only when finish_ready=true.",
+            RouteKind::Decompose => "- decompose: split goal into parallel sub-tasks.",
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     // Strip internal tracking IDs; skip empty llm.plan entries.
     const STRIP_KEYS: &[&str] = &["tool_call_id", "tool_result_id", "node_id", "llm_request_id", "request_id"];
     let recent_tool_results_text = {
-        let entries: Vec<String> = input.recent_tool_results.iter().enumerate().filter_map(|(i, value)| {
-            if value.get("kind").and_then(|v| v.as_str()) == Some("llm.plan") {
-                return None;
-            }
-            let slim: serde_json::Map<String, serde_json::Value> = value
-                .as_object()
-                .map(|m| m.iter().filter(|(k, _)| !STRIP_KEYS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect())
-                .unwrap_or_default();
-            let mut text = serde_json::to_string_pretty(&serde_json::Value::Object(slim)).unwrap_or_else(|_| value.to_string());
-            if text.len() > 600 {
-                text.truncate(600);
-                text.push_str("\n...<truncated>");
-            }
-            Some(format!("[{}] {}", i + 1, text))
-        }).collect();
-        if entries.is_empty() { "(none)".to_string() } else { entries.join("\n") }
+        let entries: Vec<String> = input
+            .recent_tool_results
+            .iter()
+            .enumerate()
+            .filter_map(|(i, value)| {
+                if value.get("kind").and_then(|v| v.as_str()) == Some("llm.plan") {
+                    return None;
+                }
+                let slim: serde_json::Map<String, serde_json::Value> =
+                    value.as_object().map(|m| m.iter().filter(|(k, _)| !STRIP_KEYS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()).unwrap_or_default();
+                let mut text = serde_json::to_string_pretty(&serde_json::Value::Object(slim)).unwrap_or_else(|_| value.to_string());
+                if text.len() > 600 {
+                    text.truncate(600);
+                    text.push_str("\n...<truncated>");
+                }
+                Some(format!("[{}] {}", i + 1, text))
+            })
+            .collect();
+        if entries.is_empty() {
+            "(none)".to_string()
+        } else {
+            entries.join("\n")
+        }
     };
 
     format!(

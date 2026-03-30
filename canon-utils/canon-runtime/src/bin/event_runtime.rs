@@ -1,16 +1,13 @@
 use anyhow::{anyhow, Result};
-use canon_event::{
-    EVENT_SCHEMA_VERSION, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome,
-    RuntimeEvent,
-};
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RuntimeEvent, EVENT_SCHEMA_VERSION};
 use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
 use canon_llm::repair_server::{repair_client_submit, RepairJobRequest, REPAIR_SERVER_ADDR};
 use canon_loop::LoopStageExecutor;
+use canon_prompt_events::runtime_goal_prompt_loaded;
 use canon_route::RouteExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
-use canon_prompt_events::runtime_goal_prompt_loaded;
 use canon_runtime::consumers::agent_registry::{AgentRegistryConsumer, AgentRegistryHandle};
 use canon_runtime::consumers::analyst_consumer::AnalystConsumer;
 use canon_runtime::consumers::capability_executor::CapabilityExecutor;
@@ -148,15 +145,12 @@ struct EventRepairTriggerConsumer {
 
 impl EventRepairTriggerConsumer {
     fn new(workspace: PathBuf) -> Self {
-        let server_addr =
-            env::var("CANON_REPAIR_SERVER_ADDR").unwrap_or_else(|_| REPAIR_SERVER_ADDR.to_string());
+        let server_addr = env::var("CANON_REPAIR_SERVER_ADDR").unwrap_or_else(|_| REPAIR_SERVER_ADDR.to_string());
         Self { workspace, server_addr, last_submit: None }
     }
 
     fn cooldown_active(&self) -> bool {
-        self.last_submit
-            .map(|t| t.elapsed() < Duration::from_secs(30))
-            .unwrap_or(false)
+        self.last_submit.map(|t| t.elapsed() < Duration::from_secs(30)).unwrap_or(false)
     }
 
     fn submit_repair_job(&mut self, failure_output: String, incident_context: String) {
@@ -174,28 +168,24 @@ impl EventRepairTriggerConsumer {
             max_steps: 30,
             workspace: self.workspace.display().to_string(),
         };
-        eprintln!(
-            "[event_repair_trigger] submitting workspace repair job to {}",
-            server_addr
-        );
-        std::thread::spawn(move || {
-            match repair_client_submit(&server_addr, &req) {
-                Ok(result) => eprintln!(
-                    "[event_repair_trigger] result success={} steps_taken={} error={}",
-                    result.success,
-                    result.steps_taken,
-                    result.error.as_deref().unwrap_or("none")
-                ),
-                Err(err) => eprintln!("[event_repair_trigger] submit failed: {}", err),
-            }
+        eprintln!("[event_repair_trigger] submitting workspace repair job to {}", server_addr);
+        std::thread::spawn(move || match repair_client_submit(&server_addr, &req) {
+            Ok(result) => eprintln!("[event_repair_trigger] result success={} steps_taken={} error={}", result.success, result.steps_taken, result.error.as_deref().unwrap_or("none")),
+            Err(err) => eprintln!("[event_repair_trigger] submit failed: {}", err),
         });
     }
 }
 
 impl EventConsumer for EventRepairTriggerConsumer {
-    fn filter(&self) -> EventFilter { EventFilter::All }
-    fn is_synchronous(&self) -> bool { true }
-    fn consumer_name(&self) -> &'static str { "event_repair_trigger_consumer" }
+    fn filter(&self) -> EventFilter {
+        EventFilter::All
+    }
+    fn is_synchronous(&self) -> bool {
+        true
+    }
+    fn consumer_name(&self) -> &'static str {
+        "event_repair_trigger_consumer"
+    }
     fn set_emitter(&mut self, _emitter: EventEmitterHandle) {}
 
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
@@ -204,10 +194,7 @@ impl EventConsumer for EventRepairTriggerConsumer {
                 let src = e.source.as_str();
                 let kind = e.kind.as_str();
                 let msg = e.message.to_ascii_lowercase();
-                if msg.contains("missing required successor")
-                    || msg.contains("got=route_selected")
-                    || msg.contains("expected=planning_completed")
-                {
+                if msg.contains("missing required successor") || msg.contains("got=route_selected") || msg.contains("expected=planning_completed") {
                     return EventOutcome::NoOp("event_repair_trigger_skip_control_fsm_violation");
                 }
                 if msg.contains("llm call timed out")
@@ -219,33 +206,15 @@ impl EventConsumer for EventRepairTriggerConsumer {
                     || msg.contains("scheduler is empty")
                     || src.contains("constraint")
                 {
-                    let failure_output = format!(
-                        "AUTO-TRIGGERED WORKSPACE REPAIR\nreason=error_occurred\nkind={}\nsource={}\nmessage={}",
-                        e.kind,
-                        e.source,
-                        e.message
-                    );
-                    let incident_context = format!(
-                        "incident_kind=auto_error_trigger\nkind={}\nsource={}\nmessage={}\nworkspace={}",
-                        e.kind,
-                        e.source,
-                        e.message,
-                        self.workspace.display()
-                    );
+                    let failure_output = format!("AUTO-TRIGGERED WORKSPACE REPAIR\nreason=error_occurred\nkind={}\nsource={}\nmessage={}", e.kind, e.source, e.message);
+                    let incident_context = format!("incident_kind=auto_error_trigger\nkind={}\nsource={}\nmessage={}\nworkspace={}", e.kind, e.source, e.message, self.workspace.display());
                     self.submit_repair_job(failure_output, incident_context);
                 }
             }
             RuntimeEvent::PlanningCompleted(e) => {
                 if e.status == "llm_failed" {
-                    let failure_output = format!(
-                        "AUTO-TRIGGERED WORKSPACE REPAIR\nreason=planning_completed_llm_failed\ntick={}",
-                        e.tick
-                    );
-                    let incident_context = format!(
-                        "incident_kind=auto_planning_failed_trigger\nstatus={}\nworkspace={}",
-                        e.status,
-                        self.workspace.display()
-                    );
+                    let failure_output = format!("AUTO-TRIGGERED WORKSPACE REPAIR\nreason=planning_completed_llm_failed\ntick={}", e.tick);
+                    let incident_context = format!("incident_kind=auto_planning_failed_trigger\nstatus={}\nworkspace={}", e.status, self.workspace.display());
                     self.submit_repair_job(failure_output, incident_context);
                 }
             }
@@ -255,7 +224,6 @@ impl EventConsumer for EventRepairTriggerConsumer {
         EventOutcome::NoOp("event_repair_trigger_noop")
     }
 }
-
 
 fn is_kernel_canon_event(event: &AnyEvent) -> bool {
     if let AnyEvent::Canon(canon) = event {
@@ -294,7 +262,6 @@ fn handle_event_msg(
     }
     Ok(())
 }
-
 
 // ---------------------------------------------------------------------------
 // main

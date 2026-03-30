@@ -156,12 +156,7 @@ impl BinarySegmentWriter {
             base_seq = found;
         }
         let (mut files, recovered_seq, last_event) = recover_segment(dir, base_seq, &config)?;
-        let pending = last_event.as_ref().and_then(invariants::required_successor).map(|p| PendingState {
-            expected: p.expected,
-            parent: p.parent,
-            source_kind: p.source_kind,
-            note: p.note,
-        });
+        let pending = last_event.as_ref().and_then(invariants::required_successor).map(|p| PendingState { expected: p.expected, parent: p.parent, source_kind: p.source_kind, note: p.note });
         let next_seq = recovered_seq.map(|s| s.saturating_add(1)).unwrap_or(base_seq);
         if files.size >= config.max_bytes {
             files = open_new_segment_files(dir, next_seq)?;
@@ -196,17 +191,8 @@ impl BinarySegmentWriter {
         if event.kind.class() != EventClass::Control {
             return;
         }
-        let next_pending = invariants::required_successor(event).map(|p| PendingState {
-            expected: p.expected,
-            parent: p.parent,
-            source_kind: p.source_kind,
-            note: p.note,
-        });
-        eprintln!(
-            "[tlog][notify_replayed] kind={} id={} actor={} next_expected={:?}",
-            event.kind, event.id, event.actor,
-            next_pending.as_ref().map(|p| p.expected.to_string())
-        );
+        let next_pending = invariants::required_successor(event).map(|p| PendingState { expected: p.expected, parent: p.parent, source_kind: p.source_kind, note: p.note });
+        eprintln!("[tlog][notify_replayed] kind={} id={} actor={} next_expected={:?}", event.kind, event.id, event.actor, next_pending.as_ref().map(|p| p.expected.to_string()));
         *self.pending.lock().expect("pending poisoned") = next_pending;
     }
 
@@ -240,8 +226,7 @@ impl BinarySegmentWriter {
                 } else if event.kind != req.expected {
                     eprintln!(
                         "[tlog][pending_violation] got={} id={} actor={} expected={} after={} parent={} note={}",
-                        event.kind, event.id, event.actor,
-                        req.expected, req.source_kind, req.parent, req.note
+                        event.kind, event.id, event.actor, req.expected, req.source_kind, req.parent, req.note
                     );
                     let err = anyhow::anyhow!(
                         "invariant violation: missing required successor after {} id={}; expected={}; got={}; note={}",
@@ -255,10 +240,7 @@ impl BinarySegmentWriter {
                     *pending = None;
                     return Err(err);
                 } else {
-                    eprintln!(
-                        "[tlog][pending_discharged] kind={} id={} discharged_expected={} after={}",
-                        event.kind, event.id, req.expected, req.source_kind
-                    );
+                    eprintln!("[tlog][pending_discharged] kind={} id={} discharged_expected={} after={}", event.kind, event.id, req.expected, req.source_kind);
                     required_successor_override = true;
                     *pending = None;
                 }
@@ -269,15 +251,8 @@ impl BinarySegmentWriter {
             let content_hash = event_content_hash(event);
             let mut dedup = self.dedup.lock().expect("dedup cache poisoned");
             if !dedup.insert_if_new(content_hash) {
-                eprintln!(
-                    "[tlog][dedup_reject] kind={} id={} actor={} content_hash_collision",
-                    event.kind, event.id, event.actor
-                );
-                let err = anyhow::anyhow!(
-                    "invariant violation: duplicate event within dedup window kind={}; id={}",
-                    event.kind,
-                    event.id
-                );
+                eprintln!("[tlog][dedup_reject] kind={} id={} actor={} content_hash_collision", event.kind, event.id, event.actor);
+                let err = anyhow::anyhow!("invariant violation: duplicate event within dedup window kind={}; id={}", event.kind, event.id);
                 self.record_rejected_edge(event, &err.to_string(), None)?;
                 return Err(err);
             }
@@ -285,24 +260,14 @@ impl BinarySegmentWriter {
 
         self.write_canon_event_inner(event)?;
         if event.kind.class() == EventClass::Control {
-            let next = invariants::required_successor(event).map(|p| PendingState {
-                expected: p.expected,
-                parent: p.parent,
-                source_kind: p.source_kind,
-                note: p.note,
-            });
-            eprintln!(
-                "[tlog][pending_set] after_kind={} after_id={} next_expected={:?}",
-                event.kind, event.id,
-                next.as_ref().map(|p| p.expected.to_string())
-            );
+            let next = invariants::required_successor(event).map(|p| PendingState { expected: p.expected, parent: p.parent, source_kind: p.source_kind, note: p.note });
+            eprintln!("[tlog][pending_set] after_kind={} after_id={} next_expected={:?}", event.kind, event.id, next.as_ref().map(|p| p.expected.to_string()));
             *self.pending.lock().expect("pending poisoned") = next;
         }
         Ok(())
     }
 
     fn write_canon_event_inner(&self, event: &CanonEvent) -> Result<()> {
-
         let prev = self.last_ts.fetch_max(event.ts, Ordering::Relaxed);
         if event.ts < prev {
             return Err(anyhow::anyhow!("non-monotonic timestamp: {} < prev {}", event.ts, prev));
@@ -367,18 +332,10 @@ impl BinarySegmentWriter {
         let Some(parent) = event.parent_ids.first() else {
             return Ok(None);
         };
-        let edge = RejectedEdge {
-            parent: parent.to_string(),
-            kind: event.kind.to_string(),
-            fingerprint: event_content_hash(event),
-        };
+        let edge = RejectedEdge { parent: parent.to_string(), kind: event.kind.to_string(), fingerprint: event_content_hash(event) };
         let rejected = self.rejected_edges.lock().expect("rejected_edges poisoned");
         if rejected.seen.contains(&edge) {
-            let err = anyhow::anyhow!(
-                "invariant violation: invalid_retry parent={}; kind={}; blocked until recovery_event/reset_event/override_event",
-                parent,
-                event.kind
-            );
+            let err = anyhow::anyhow!("invariant violation: invalid_retry parent={}; kind={}; blocked until recovery_event/reset_event/override_event", parent, event.kind);
             drop(rejected);
             self.record_rejected_edge(event, &err.to_string(), Some(parent.clone()))?;
             return Ok(Some(err));
@@ -390,11 +347,7 @@ impl BinarySegmentWriter {
         if !self.is_invariant_violation_event(event) {
             let parent_for_violation = parent.unwrap_or_else(|| event.parent_ids.first().cloned().unwrap_or_else(|| EventId::new(crate::new_event_id())));
             let violation = self.build_invariant_violation_event_with_parent(event, message, parent_for_violation)?;
-            let edge = RejectedEdge {
-                parent: violation.parent_ids.first().map(ToString::to_string).unwrap_or_default(),
-                kind: event.kind.to_string(),
-                fingerprint: event_content_hash(event),
-            };
+            let edge = RejectedEdge { parent: violation.parent_ids.first().map(ToString::to_string).unwrap_or_default(), kind: event.kind.to_string(), fingerprint: event_content_hash(event) };
             let mut rejected = self.rejected_edges.lock().expect("rejected_edges poisoned");
             let is_new = rejected.insert_if_new(edge);
             drop(rejected);
@@ -408,12 +361,7 @@ impl BinarySegmentWriter {
     fn build_invariant_violation_event_with_parent(&self, rejected: &CanonEvent, message: &str, parent: EventId) -> Result<CanonEvent> {
         let full_message = format!(
             "{}; rejected_kind={}; rejected_id={}; rejected_actor={}; rejected_meta_file={}; rejected_meta_line={}",
-            message,
-            rejected.kind,
-            rejected.id,
-            rejected.actor,
-            rejected.payload.meta.file,
-            rejected.payload.meta.line
+            message, rejected.kind, rejected.id, rejected.actor, rejected.payload.meta.file, rejected.payload.meta.line
         );
         let delta = invariant_violation_delta(full_message);
         let state = invariant_violation_state();
@@ -434,28 +382,12 @@ impl BinarySegmentWriter {
                 "state": serde_json::to_value(&state)?,
             }),
         };
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        Ok(CanonEvent::new(
-            EventId::new(crate::new_event_id()),
-            vec![parent],
-            "writer",
-            EventKind::Code,
-            ts,
-            payload,
-            true,
-        ))
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        Ok(CanonEvent::new(EventId::new(crate::new_event_id()), vec![parent], "writer", EventKind::Code, ts, payload, true))
     }
 
     fn is_invariant_violation_event(&self, event: &CanonEvent) -> bool {
-        matches!(
-            event.payload.data.get("delta")
-                .and_then(|d| d.get("event"))
-                .and_then(|e| e.get("InvariantViolation")),
-            Some(_)
-        )
+        matches!(event.payload.data.get("delta").and_then(|d| d.get("event")).and_then(|e| e.get("InvariantViolation")), Some(_))
     }
 
     pub fn path(&self) -> &Path {
@@ -631,13 +563,7 @@ mod tests {
     }
 
     fn payload(data: serde_json::Value, delta: serde_json::Value) -> CanonPayload {
-        CanonPayload {
-            input: json!({"x": 1}),
-            output: json!({"y": 1}),
-            delta,
-            meta: CanonPayloadMeta { file: "test".to_string(), line: 1 },
-            data,
-        }
+        CanonPayload { input: json!({"x": 1}), output: json!({"y": 1}), delta, meta: CanonPayloadMeta { file: "test".to_string(), line: 1 }, data }
     }
 
     fn event(id: &str, kind: EventKind, ts: u64, data: serde_json::Value, delta: serde_json::Value) -> CanonEvent {
@@ -649,31 +575,13 @@ mod tests {
         let dir = temp_dir("effect_neutral");
         let writer = BinarySegmentWriter::open(&dir).unwrap();
 
-        let route = event(
-            "route-1",
-            EventKind::RouteSelected,
-            1,
-            json!({"approved_route":"observe","suggested_route":"observe"}),
-            json!({"gate_changed": false}),
-        );
+        let route = event("route-1", EventKind::RouteSelected, 1, json!({"approved_route":"observe","suggested_route":"observe"}), json!({"gate_changed": false}));
         writer.write_canon_event(&route).unwrap();
 
-        let debug = event(
-            "debug-1",
-            EventKind::Debug,
-            2,
-            json!({"kind":"note"}),
-            json!({"payload":"side-effect"}),
-        );
+        let debug = event("debug-1", EventKind::Debug, 2, json!({"kind":"note"}), json!({"payload":"side-effect"}));
         writer.write_canon_event(&debug).unwrap();
 
-        let observed = event(
-            "obs-1",
-            EventKind::LoopObserved,
-            3,
-            json!({"goal_text":"g"}),
-            json!({"compiler_errors":[]}),
-        );
+        let observed = event("obs-1", EventKind::LoopObserved, 3, json!({"goal_text":"g"}), json!({"compiler_errors":[]}));
         writer.write_canon_event(&observed).unwrap();
     }
 
@@ -682,22 +590,10 @@ mod tests {
         let dir = temp_dir("strict_obligation");
         let writer = BinarySegmentWriter::open(&dir).unwrap();
 
-        let route = event(
-            "route-1",
-            EventKind::RouteSelected,
-            1,
-            json!({"approved_route":"observe","suggested_route":"observe"}),
-            json!({"gate_changed": false}),
-        );
+        let route = event("route-1", EventKind::RouteSelected, 1, json!({"approved_route":"observe","suggested_route":"observe"}), json!({"gate_changed": false}));
         writer.write_canon_event(&route).unwrap();
 
-        let acted = event(
-            "act-1",
-            EventKind::LoopActed,
-            2,
-            json!({"action_kind":"noop"}),
-            json!({"success": true}),
-        );
+        let acted = event("act-1", EventKind::LoopActed, 2, json!({"action_kind":"noop"}), json!({"success": true}));
         let err = writer.write_canon_event(&acted).unwrap_err().to_string();
         assert!(err.contains("missing required successor"));
         assert!(err.contains("expected=loop_observed"));
@@ -709,31 +605,13 @@ mod tests {
         let dir = temp_dir("chain_progression");
         let writer = BinarySegmentWriter::open(&dir).unwrap();
 
-        let route_plan = event(
-            "route-1",
-            EventKind::RouteSelected,
-            1,
-            json!({"approved_route":"plan","suggested_route":"plan"}),
-            json!({"gate_changed": false}),
-        );
+        let route_plan = event("route-1", EventKind::RouteSelected, 1, json!({"approved_route":"plan","suggested_route":"plan"}), json!({"gate_changed": false}));
         writer.write_canon_event(&route_plan).unwrap();
 
-        let capability_done = event(
-            "cap-1",
-            EventKind::CapabilityCompleted,
-            2,
-            json!({"request_id":"planner-1","capability":"llm.call"}),
-            json!({"result":{"Llm":{"success":true}}}),
-        );
+        let capability_done = event("cap-1", EventKind::CapabilityCompleted, 2, json!({"request_id":"planner-1","capability":"llm.call"}), json!({"result":{"Llm":{"success":true}}}));
         writer.write_canon_event(&capability_done).unwrap();
 
-        let loop_planned = event(
-            "planned-1",
-            EventKind::LoopPlanned,
-            3,
-            json!({"action_kind":"noop"}),
-            json!({"signals": {}}),
-        );
+        let loop_planned = event("planned-1", EventKind::LoopPlanned, 3, json!({"action_kind":"noop"}), json!({"signals": {}}));
         writer.write_canon_event(&loop_planned).unwrap();
     }
 }

@@ -1,4 +1,4 @@
-use canon_event::{Tick, RuntimeEvent};
+use canon_event::{RuntimeEvent, Tick};
 
 use crate::Reducer;
 
@@ -58,4 +58,3 @@ impl Learning {
         }
     }
 }
-

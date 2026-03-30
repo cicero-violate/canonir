@@ -1,6 +1,6 @@
+use canon_event::SubTaskResult;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use canon_event::SubTaskResult;
 
 #[derive(Default, Clone)]
 pub struct FileWriteTracker {
@@ -46,13 +46,7 @@ impl ContextMerger {
         if self.merged_actions.is_empty() {
             return String::new();
         }
-        let lines: Vec<String> = self
-            .merged_actions
-            .iter()
-            .rev()
-            .take(8)
-            .map(|m| format!("- agent={} success={} kind={} note={}", m.agent_id, m.success, m.action_kind, m.stdout_summary))
-            .collect();
+        let lines: Vec<String> = self.merged_actions.iter().rev().take(8).map(|m| format!("- agent={} success={} kind={} note={}", m.agent_id, m.success, m.action_kind, m.stdout_summary)).collect();
         format!("Recent sub-agent actions:\n{}\n", lines.join("\n"))
     }
 }

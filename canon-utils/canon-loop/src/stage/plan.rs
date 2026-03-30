@@ -1,23 +1,23 @@
 use std::path::Path;
 
 use canon_analysis::{graph_backed_module_moves, graph_backed_rename_candidates};
-use canon_event::{new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall, ToolResult};
+use canon_event::{
+    new_error_occurred, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, LlmCall, LoopActed, LoopObserved, LoopPlanned, PlanningCompleted, RouteSelected, RuntimeEvent, ToolCall,
+    ToolResult,
+};
 use canon_goal::parse_agent_goal_markdown;
 use canon_invariant::{
-    decision_trace_payload, meta_invariant_action_must_declare_verifier,
-    meta_invariant_all_failures_typed, meta_invariant_any_action_cites_failure,
-    meta_invariant_expected_verifier, meta_invariant_has_actionable_failure,
-    meta_invariant_is_mutating_action, observe_failure_fingerprint, drain_persisted_store_events,
-    ConstraintRoute, ConstraintState, FailureFingerprint, PersistedInvariantStoreEventKind,
+    decision_trace_payload, drain_persisted_store_events, meta_invariant_action_must_declare_verifier, meta_invariant_all_failures_typed, meta_invariant_any_action_cites_failure,
+    meta_invariant_expected_verifier, meta_invariant_has_actionable_failure, meta_invariant_is_mutating_action, observe_failure_fingerprint, ConstraintRoute, ConstraintState, FailureFingerprint,
+    PersistedInvariantStoreEventKind,
 };
 use canon_semantic_state::{
-    derive_self_development_objective_state, primary_development_objective_kind,
-    primary_development_strategy_kind, DevelopmentObjectiveKind, DevelopmentStrategyKind,
-    LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
+    derive_self_development_objective_state, primary_development_objective_kind, primary_development_strategy_kind, DevelopmentObjectiveKind, DevelopmentStrategyKind, LlmSemanticContext,
+    ObjectiveTrendState, SemanticStateSummary,
 };
 use canon_skills::global_registry;
-use canon_tools_search::search_files;
 use canon_tools_patch::parse_patch;
+use canon_tools_search::search_files;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -27,10 +27,7 @@ use crate::{
     context::{LoopContext, PendingPlan},
     env_model::{select_bootstrap_command, BootstrapCommandChoice},
     planning_preconditions,
-    policy::{
-        planner_hint_lines, retry_policy_for_planning_context, semantic_planner_hint_lines,
-        RetryPolicy,
-    },
+    policy::{planner_hint_lines, retry_policy_for_planning_context, semantic_planner_hint_lines, RetryPolicy},
     result::LoopStageResult,
 };
 
@@ -39,16 +36,13 @@ const PLACEHOLDER_GOAL: &str = "goal-pending";
 
 fn retry_policy_text(policy: RetryPolicy, contextualized: bool) -> &'static str {
     match (policy, contextualized) {
-        (RetryPolicy::DiscoveryOnly, _) =>
-            "Retry policy: discovery-only. Emit ONLY list_dir/read_file on the next batch.",
-        (RetryPolicy::SinglePatchOnly, _) =>
-            "Retry policy: single-patch-only. Emit exactly one apply_patch action and nothing else on the next batch.",
-        (RetryPolicy::CorrectiveRetry, true) =>
-            "Retry policy: corrective retry. Fix the specific invalid-plan issue and retry directly; discovery is not required unless you are missing file context.",
-        (RetryPolicy::CorrectiveRetry, false) =>
-            "Retry policy: corrective retry. Change the repair strategy before retrying.",
-        (RetryPolicy::None, _) =>
-            "Retry policy: none.",
+        (RetryPolicy::DiscoveryOnly, _) => "Retry policy: discovery-only. Emit ONLY list_dir/read_file on the next batch.",
+        (RetryPolicy::SinglePatchOnly, _) => "Retry policy: single-patch-only. Emit exactly one apply_patch action and nothing else on the next batch.",
+        (RetryPolicy::CorrectiveRetry, true) => {
+            "Retry policy: corrective retry. Fix the specific invalid-plan issue and retry directly; discovery is not required unless you are missing file context."
+        }
+        (RetryPolicy::CorrectiveRetry, false) => "Retry policy: corrective retry. Change the repair strategy before retrying.",
+        (RetryPolicy::None, _) => "Retry policy: none.",
     }
 }
 
@@ -86,12 +80,7 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
                 }),
                 None,
             )),
-            RuntimeEvent::PlanningCompleted(PlanningCompleted {
-                tick,
-                llm_request_id: None,
-                planned_count: 0,
-                status: "missing_observed_context".to_string(),
-            }),
+            RuntimeEvent::PlanningCompleted(PlanningCompleted { tick, llm_request_id: None, planned_count: 0, status: "missing_observed_context".to_string() }),
         ]));
     };
     if let Some(result) = deterministic_bootstrap_plan(&rs, ctx, &observed)? {
@@ -105,16 +94,10 @@ fn is_placeholder_goal(goal: &str) -> bool {
     trimmed.is_empty() || trimmed.contains(PLACEHOLDER_GOAL)
 }
 
-fn deterministic_bootstrap_plan(
-    rs: &RouteSelected,
-    ctx: &mut LoopContext,
-    observed: &LoopObserved,
-) -> anyhow::Result<Option<LoopStageResult>> {
+fn deterministic_bootstrap_plan(rs: &RouteSelected, ctx: &mut LoopContext, observed: &LoopObserved) -> anyhow::Result<Option<LoopStageResult>> {
     use planning_preconditions::PlanningPrecondition;
 
-    let preconditions = planning_preconditions::derive_preconditions_from_lines(
-        &observed.semantic_summary.planning_preconditions,
-    );
+    let preconditions = planning_preconditions::derive_preconditions_from_lines(&observed.semantic_summary.planning_preconditions);
     let needs_bootstrap = preconditions.contains(&PlanningPrecondition::MustBootstrapWorkspace);
     let needs_init = preconditions.contains(&PlanningPrecondition::MustInitCargoProject);
     if !needs_bootstrap && !needs_init {
@@ -126,52 +109,21 @@ fn deterministic_bootstrap_plan(
         .target_root
         .as_deref()
         .map(PathBuf::from)
-        .or_else(|| {
-            observed
-                .goal_text
-                .as_deref()
-                .and_then(|text| parse_agent_goal_markdown(text).target_path)
-        })
-        .or_else(|| {
-            ctx.goal_text
-                .as_deref()
-                .and_then(|text| parse_agent_goal_markdown(text).target_path)
-        });
+        .or_else(|| observed.goal_text.as_deref().and_then(|text| parse_agent_goal_markdown(text).target_path))
+        .or_else(|| ctx.goal_text.as_deref().and_then(|text| parse_agent_goal_markdown(text).target_path));
     let Some(target_root) = target_root else {
         return Ok(None);
     };
 
-    let bootstrap_choice = if needs_bootstrap {
-        select_bootstrap_command(&target_root)
-    } else {
-        BootstrapCommandChoice::CargoInit
-    };
+    let bootstrap_choice = if needs_bootstrap { select_bootstrap_command(&target_root) } else { BootstrapCommandChoice::CargoInit };
 
     let target_root_display = target_root.display().to_string();
-    let target_name = target_root
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("app");
-    let parent_cwd = target_root
-        .parent()
-        .unwrap_or_else(|| Path::new("/"))
-        .display()
-        .to_string();
+    let target_name = target_root.file_name().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).unwrap_or("app");
+    let parent_cwd = target_root.parent().unwrap_or_else(|| Path::new("/")).display().to_string();
 
     let (cmd, cwd, reason, status) = match bootstrap_choice {
-        BootstrapCommandChoice::CargoNew => (
-            format!("cargo new --bin {target_name}"),
-            parent_cwd,
-            "deterministic_bootstrap_workspace",
-            "deterministic_bootstrap_workspace",
-        ),
-        BootstrapCommandChoice::CargoInit => (
-            "cargo init --bin .".to_string(),
-            target_root_display.clone(),
-            "deterministic_init_cargo_project",
-            "deterministic_init_cargo_project",
-        ),
+        BootstrapCommandChoice::CargoNew => (format!("cargo new --bin {target_name}"), parent_cwd, "deterministic_bootstrap_workspace", "deterministic_bootstrap_workspace"),
+        BootstrapCommandChoice::CargoInit => ("cargo init --bin .".to_string(), target_root_display.clone(), "deterministic_init_cargo_project", "deterministic_init_cargo_project"),
         BootstrapCommandChoice::NoBootstrapNeeded => {
             return Ok(None);
         }
@@ -187,19 +139,8 @@ fn deterministic_bootstrap_plan(
         action_payload: {
             let mut payload = action_payload_with_cwd(cmd, Some(cwd));
             payload["verifier"] = serde_json::Value::String("cargo_check".to_string());
-            payload["failure_class"] = serde_json::Value::String(
-                observed
-                    .semantic_summary
-                    .primary_failure_class()
-                    .unwrap_or_else(|| "missing_target".to_string()),
-            );
-            payload["failure_scope"] = serde_json::Value::String(
-                observed
-                    .semantic_summary
-                    .failure_scope
-                    .clone()
-                    .unwrap_or_else(|| "workspace".to_string()),
-            );
+            payload["failure_class"] = serde_json::Value::String(observed.semantic_summary.primary_failure_class().unwrap_or_else(|| "missing_target".to_string()));
+            payload["failure_scope"] = serde_json::Value::String(observed.semantic_summary.failure_scope.clone().unwrap_or_else(|| "workspace".to_string()));
             payload
         },
         reason: reason.to_string(),
@@ -217,12 +158,7 @@ fn deterministic_bootstrap_plan(
 
     Ok(Some(LoopStageResult::EmitMany(vec![
         RuntimeEvent::LoopPlanned(planned),
-        RuntimeEvent::PlanningCompleted(PlanningCompleted {
-            tick: rs.tick,
-            llm_request_id: None,
-            planned_count: 1,
-            status: status.to_string(),
-        }),
+        RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: rs.tick, llm_request_id: None, planned_count: 1, status: status.to_string() }),
     ])))
 }
 
@@ -489,12 +425,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     if out.is_empty() {
         return Ok(LoopStageResult::Noop);
     }
-    let retry_policy = retry_policy_for_planning_context(
-        ctx.last_invalid_plan_reason.as_deref(),
-        ctx.consecutive_invalid_plan_batches,
-        &ctx.recent_execution_results,
-        &ctx.objective_trend_state,
-    );
+    let retry_policy = retry_policy_for_planning_context(ctx.last_invalid_plan_reason.as_deref(), ctx.consecutive_invalid_plan_batches, &ctx.recent_execution_results, &ctx.objective_trend_state);
     let semantic_summary = match planning_semantic_summary(ctx.last_observed.as_ref()) {
         Ok(summary) => summary,
         Err(message) => {
@@ -522,39 +453,25 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                     }),
                     None,
                 )),
-                RuntimeEvent::PlanningCompleted(PlanningCompleted {
-                    tick: pending.tick,
-                    llm_request_id: Some(req_id),
-                    planned_count: 0,
-                    status: "missing_semantic_context".to_string(),
-                }),
+                RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: pending.tick, llm_request_id: Some(req_id), planned_count: 0, status: "missing_semantic_context".to_string() }),
             ]));
         }
     };
-    let failure_scope = semantic_summary
-        .failure_scope
-        .clone()
-        .unwrap_or_else(|| "none".to_string());
+    let failure_scope = semantic_summary.failure_scope.clone().unwrap_or_else(|| "none".to_string());
     if let Some(failure_class) = semantic_summary.primary_failure_class() {
         for planned in &mut out {
             if planned.action_kind == "done" {
                 continue;
             }
             if planned.action_payload.get("failure_class").is_none() {
-                planned.action_payload["failure_class"] =
-                    serde_json::Value::String(failure_class.clone());
+                planned.action_payload["failure_class"] = serde_json::Value::String(failure_class.clone());
             }
             if planned.action_payload.get("failure_scope").is_none() {
-                planned.action_payload["failure_scope"] =
-                    serde_json::Value::String(failure_scope.clone());
+                planned.action_payload["failure_scope"] = serde_json::Value::String(failure_scope.clone());
             }
             if planned.action_payload.get("verifier").is_none() {
-                if let Some(verifier) = meta_invariant_expected_verifier(
-                    planned.action_kind.as_str(),
-                    &planned.action_payload,
-                ) {
-                    planned.action_payload["verifier"] =
-                        serde_json::Value::String(verifier.to_string());
+                if let Some(verifier) = meta_invariant_expected_verifier(planned.action_kind.as_str(), &planned.action_payload) {
+                    planned.action_payload["verifier"] = serde_json::Value::String(verifier.to_string());
                 }
             }
         }
@@ -564,35 +481,18 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                 continue;
             }
             if planned.action_payload.get("verifier").is_none() {
-                if let Some(verifier) = meta_invariant_expected_verifier(
-                    planned.action_kind.as_str(),
-                    &planned.action_payload,
-                ) {
-                    planned.action_payload["verifier"] =
-                        serde_json::Value::String(verifier.to_string());
+                if let Some(verifier) = meta_invariant_expected_verifier(planned.action_kind.as_str(), &planned.action_payload) {
+                    planned.action_payload["verifier"] = serde_json::Value::String(verifier.to_string());
                 }
             }
         }
     }
-    if let Err(message) = validate_action_batch(
-        &out,
-        retry_policy,
-        &semantic_summary,
-        &ctx.objective_trend_state,
-        &ctx.recent_execution_results,
-        ctx.forced_primary_objective,
-        ctx.forced_primary_strategy,
-    ) {
-        let promoted_invariant = observe_failure_fingerprint(FailureFingerprint::invalid_plan_batch(
-            Some(ConstraintRoute::Plan),
-            planning_constraint_state(&semantic_summary),
-        ));
+    if let Err(message) =
+        validate_action_batch(&out, retry_policy, &semantic_summary, &ctx.objective_trend_state, &ctx.recent_execution_results, ctx.forced_primary_objective, ctx.forced_primary_strategy)
+    {
+        let promoted_invariant = observe_failure_fingerprint(FailureFingerprint::invalid_plan_batch(Some(ConstraintRoute::Plan), planning_constraint_state(&semantic_summary)));
         ctx.last_planned_observed_tick = None;
-        let mut events = vec![RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
-                feature: "invalid_plan_batch".to_string(),
-                confidence: 1.0,
-                support: 1,
-            })];
+        let mut events = vec![RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered { feature: "invalid_plan_batch".to_string(), confidence: 1.0, support: 1 })];
         if let Some(promotion) = promoted_invariant {
             events.push(RuntimeEvent::InvariantDiscovered(canon_event::InvariantDiscovered {
                 feature: promotion.invariant.feature_name().to_string(),
@@ -604,12 +504,8 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
             events.push(RuntimeEvent::Debug(canon_event::DebugEvent {
                 source: "invariant_store".to_string(),
                 kind: match persisted.kind {
-                    PersistedInvariantStoreEventKind::Loaded => {
-                        "persisted_invariants_loaded".to_string()
-                    }
-                    PersistedInvariantStoreEventKind::Updated => {
-                        "persisted_invariants_updated".to_string()
-                    }
+                    PersistedInvariantStoreEventKind::Loaded => "persisted_invariants_loaded".to_string(),
+                    PersistedInvariantStoreEventKind::Updated => "persisted_invariants_updated".to_string(),
                 },
                 payload: serde_json::json!({
                     "path": persisted.path,
@@ -644,12 +540,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                 }),
                 None,
             )),
-            RuntimeEvent::PlanningCompleted(PlanningCompleted {
-                tick: pending.tick,
-                llm_request_id: Some(req_id),
-                planned_count: 0,
-                status: "invalid_plan".to_string(),
-            }),
+            RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: pending.tick, llm_request_id: Some(req_id), planned_count: 0, status: "invalid_plan".to_string() }),
         ]);
         return Ok(LoopStageResult::EmitMany(events));
     }
@@ -669,34 +560,20 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     }
     ctx.last_emitted_plan_hash = Some(action_batch_hash);
     let mut events: Vec<RuntimeEvent> = out.into_iter().map(RuntimeEvent::LoopPlanned).collect();
-    events.push(RuntimeEvent::PlanningCompleted(PlanningCompleted {
-        tick: pending.tick,
-        llm_request_id: Some(req_id),
-        planned_count: events.len(),
-        status: "planned".to_string(),
-    }));
+    events.push(RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: pending.tick, llm_request_id: Some(req_id), planned_count: events.len(), status: "planned".to_string() }));
     Ok(LoopStageResult::EmitMany(events))
 }
 
 fn validate_action_batch(
-    actions: &[LoopPlanned],
-    retry_policy: RetryPolicy,
-    semantic_summary: &SemanticStateSummary,
-    objective_trend_state: &ObjectiveTrendState,
-    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
-    forced_primary_objective: Option<DevelopmentObjectiveKind>,
+    actions: &[LoopPlanned], retry_policy: RetryPolicy, semantic_summary: &SemanticStateSummary, objective_trend_state: &ObjectiveTrendState,
+    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord], forced_primary_objective: Option<DevelopmentObjectiveKind>,
     forced_primary_strategy: Option<DevelopmentStrategyKind>,
 ) -> Result<(), String> {
     if !semantic_summary.complete {
         return Err("semantic summary is incomplete".to_string());
     }
-    let target_root = semantic_summary
-        .target_root
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| "semantic summary is missing target_root".to_string())?;
-    let preconditions =
-        planning_preconditions::derive_preconditions_from_lines(&semantic_summary.planning_preconditions);
+    let target_root = semantic_summary.target_root.as_ref().map(std::path::PathBuf::from).ok_or_else(|| "semantic summary is missing target_root".to_string())?;
+    let preconditions = planning_preconditions::derive_preconditions_from_lines(&semantic_summary.planning_preconditions);
     let has_discovery = actions.iter().any(|a| matches!(a.action_kind.as_str(), "list_dir" | "read_file"));
     let has_execution = actions.iter().any(|a| {
         matches!(
@@ -714,51 +591,28 @@ fn validate_action_batch(
         )
     });
     if retry_policy == RetryPolicy::DiscoveryOnly && has_execution {
-        return Err(
-            "discovery-only retry required after invalid plan batch; execution/edit actions are not allowed yet"
-                .to_string(),
-        );
+        return Err("discovery-only retry required after invalid plan batch; execution/edit actions are not allowed yet".to_string());
     }
     if retry_policy == RetryPolicy::SinglePatchOnly {
         let apply_patch_count = actions.iter().filter(|a| a.action_kind == "apply_patch").count();
         let has_non_patch = actions.iter().any(|a| a.action_kind != "apply_patch");
         if apply_patch_count != 1 || has_non_patch {
-            return Err(
-                "single-patch retry required after apply_patch failure; emit exactly one apply_patch action and nothing else"
-                    .to_string(),
-            );
+            return Err("single-patch retry required after apply_patch failure; emit exactly one apply_patch action and nothing else".to_string());
         }
     }
     if has_discovery && has_execution {
-        return Err(
-            "mixed discovery actions with execution/edit actions in one plan batch".to_string(),
-        );
+        return Err("mixed discovery actions with execution/edit actions in one plan batch".to_string());
     }
 
-    if semantic_summary.primary_failure_class().is_some()
-        && !meta_invariant_all_failures_typed(
-            semantic_summary.failure_class.as_deref(),
-            semantic_summary.failure_scope.as_deref(),
-        )
-    {
-        return Err(
-            "meta_invariant_all_failures_typed violated: active semantic failure must include both failure_class and failure_scope"
-                .to_string(),
-        );
+    if semantic_summary.primary_failure_class().is_some() && !meta_invariant_all_failures_typed(semantic_summary.failure_class.as_deref(), semantic_summary.failure_scope.as_deref()) {
+        return Err("meta_invariant_all_failures_typed violated: active semantic failure must include both failure_class and failure_scope".to_string());
     }
 
     for action in actions {
         if let Some(expected_failure_class) = semantic_summary.primary_failure_class() {
             if action.action_kind != "done" {
-                if !meta_invariant_any_action_cites_failure(
-                    &action.action_payload,
-                    Some(expected_failure_class.as_str()),
-                ) {
-                    let cited_failure_class = action
-                        .action_payload
-                        .get("failure_class")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("<missing>");
+                if !meta_invariant_any_action_cites_failure(&action.action_payload, Some(expected_failure_class.as_str())) {
+                    let cited_failure_class = action.action_payload.get("failure_class").and_then(|v| v.as_str()).unwrap_or("<missing>");
                     return Err(format!(
                         "meta_invariant_plan_must_cite_failure violated: {} cites failure_class={} but active failure_class={}",
                         action.action_kind, cited_failure_class, expected_failure_class
@@ -766,21 +620,9 @@ fn validate_action_batch(
                 }
             }
         }
-        if meta_invariant_is_mutating_action(action.action_kind.as_str(), &action.action_payload)
-            && !meta_invariant_action_must_declare_verifier(
-                action.action_kind.as_str(),
-                &action.action_payload,
-            )
-        {
-            let expected = meta_invariant_expected_verifier(
-                action.action_kind.as_str(),
-                &action.action_payload,
-            )
-            .unwrap_or("unknown");
-            return Err(format!(
-                "meta_invariant_action_must_declare_verifier violated: {} must declare verifier={expected}",
-                action.action_kind
-            ));
+        if meta_invariant_is_mutating_action(action.action_kind.as_str(), &action.action_payload) && !meta_invariant_action_must_declare_verifier(action.action_kind.as_str(), &action.action_payload) {
+            let expected = meta_invariant_expected_verifier(action.action_kind.as_str(), &action.action_payload).unwrap_or("unknown");
+            return Err(format!("meta_invariant_action_must_declare_verifier violated: {} must declare verifier={expected}", action.action_kind));
         }
         match action.action_kind.as_str() {
             "apply_patch" => {
@@ -794,10 +636,7 @@ fn validate_action_batch(
             "run_command" => {
                 let cwd = action.action_payload.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
                 if cwd.is_empty() || !Path::new(cwd).is_absolute() {
-                    return Err(format!(
-                        "run_command requires an absolute cwd; got {:?}",
-                        if cwd.is_empty() { "<empty>" } else { cwd }
-                    ));
+                    return Err(format!("run_command requires an absolute cwd; got {:?}", if cwd.is_empty() { "<empty>" } else { cwd }));
                 }
             }
             "edit.rename_symbol" => {
@@ -813,8 +652,7 @@ fn validate_action_batch(
                 if old.trim().is_empty() || new.trim().is_empty() {
                     return Err("edit.rename_symbol requires non-empty old and new symbol paths".to_string());
                 }
-                validate_workspace_relative_path(path, &target_root)
-                    .map_err(|e| format!("edit.rename_symbol path is invalid: {e}"))?;
+                validate_workspace_relative_path(path, &target_root).map_err(|e| format!("edit.rename_symbol path is invalid: {e}"))?;
             }
             "edit.move_symbol" => {
                 let Some(symbol_id) = action.action_payload.get("symbol_id").and_then(|v| v.as_str()) else {
@@ -829,8 +667,7 @@ fn validate_action_batch(
                 if symbol_id.trim().is_empty() || new_module_path.trim().is_empty() {
                     return Err("edit.move_symbol requires non-empty symbol_id and new_module_path".to_string());
                 }
-                validate_workspace_relative_path(path, &target_root)
-                    .map_err(|e| format!("edit.move_symbol path is invalid: {e}"))?;
+                validate_workspace_relative_path(path, &target_root).map_err(|e| format!("edit.move_symbol path is invalid: {e}"))?;
             }
             "edit.add_import" => {
                 let Some(import) = action.action_payload.get("import").and_then(|v| v.as_str()) else {
@@ -842,8 +679,7 @@ fn validate_action_batch(
                 if import.trim().is_empty() {
                     return Err("edit.add_import requires non-empty import path".to_string());
                 }
-                validate_workspace_relative_path(path, &target_root)
-                    .map_err(|e| format!("edit.add_import path is invalid: {e}"))?;
+                validate_workspace_relative_path(path, &target_root).map_err(|e| format!("edit.add_import path is invalid: {e}"))?;
             }
             "edit.define_symbol_stub" => {
                 let Some(symbol) = action.action_payload.get("symbol").and_then(|v| v.as_str()) else {
@@ -855,22 +691,19 @@ fn validate_action_batch(
                 if symbol.trim().is_empty() {
                     return Err("edit.define_symbol_stub requires non-empty symbol".to_string());
                 }
-                validate_workspace_relative_path(path, &target_root)
-                    .map_err(|e| format!("edit.define_symbol_stub path is invalid: {e}"))?;
+                validate_workspace_relative_path(path, &target_root).map_err(|e| format!("edit.define_symbol_stub path is invalid: {e}"))?;
             }
             "edit.create_module_file" => {
                 let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
                     return Err("edit.create_module_file missing path payload".to_string());
                 };
-                validate_workspace_relative_path(path, &target_root)
-                    .map_err(|e| format!("edit.create_module_file path is invalid: {e}"))?;
+                validate_workspace_relative_path(path, &target_root).map_err(|e| format!("edit.create_module_file path is invalid: {e}"))?;
             }
             "read_file" | "list_dir" | "write_file" | "patch_file" => {
                 let Some(path) = action.action_payload.get("path").and_then(|v| v.as_str()) else {
                     return Err(format!("{} missing path payload", action.action_kind));
                 };
-                validate_workspace_relative_path(path, &target_root)
-                    .map_err(|e| format!("{} path is invalid: {e}", action.action_kind))?;
+                validate_workspace_relative_path(path, &target_root).map_err(|e| format!("{} path is invalid: {e}", action.action_kind))?;
             }
             "done" => {}
             other => {
@@ -879,58 +712,20 @@ fn validate_action_batch(
         }
     }
 
-    planning_preconditions::validate_preconditions(
-        actions,
-        &target_root,
-        &preconditions,
-        semantic_summary,
-    )?;
-    let objective_state = derive_self_development_objective_state(
-        semantic_summary,
-        0,
-        recent_execution_results,
-        objective_trend_state,
-    );
-    let effective_primary_objective = forced_primary_objective
-        .unwrap_or_else(|| {
-            primary_development_objective_kind(&objective_state, objective_trend_state, semantic_summary)
-        })
-        .focus_text();
-    let effective_primary_strategy = forced_primary_strategy
-        .unwrap_or_else(|| {
-            primary_development_strategy_kind(&objective_state, objective_trend_state, semantic_summary)
-        });
+    planning_preconditions::validate_preconditions(actions, &target_root, &preconditions, semantic_summary)?;
+    let objective_state = derive_self_development_objective_state(semantic_summary, 0, recent_execution_results, objective_trend_state);
+    let effective_primary_objective = forced_primary_objective.unwrap_or_else(|| primary_development_objective_kind(&objective_state, objective_trend_state, semantic_summary)).focus_text();
+    let effective_primary_strategy = forced_primary_strategy.unwrap_or_else(|| primary_development_strategy_kind(&objective_state, objective_trend_state, semantic_summary));
 
-    planning_preconditions::validate_objective_route_plan_alignment(
-        actions,
-        &target_root,
-        "plan",
-        effective_primary_objective,
-        semantic_summary,
-    )?;
-    planning_preconditions::validate_trend_intent_alignment(
-        actions,
-        &target_root,
-        recent_execution_results,
-        objective_trend_state,
-    )?;
-    planning_preconditions::validate_development_strategy_alignment(
-        actions,
-        &target_root,
-        semantic_summary,
-        &objective_state,
-        objective_trend_state,
-        Some(effective_primary_strategy),
-    )?;
+    planning_preconditions::validate_objective_route_plan_alignment(actions, &target_root, "plan", effective_primary_objective, semantic_summary)?;
+    planning_preconditions::validate_trend_intent_alignment(actions, &target_root, recent_execution_results, objective_trend_state)?;
+    planning_preconditions::validate_development_strategy_alignment(actions, &target_root, semantic_summary, &objective_state, objective_trend_state, Some(effective_primary_strategy))?;
 
     Ok(())
 }
 
 fn planning_constraint_state(semantic_summary: &SemanticStateSummary) -> ConstraintState {
-    let target_root = semantic_summary
-        .target_root
-        .as_deref()
-        .map(Path::new);
+    let target_root = semantic_summary.target_root.as_deref().map(Path::new);
     let real_path_exists = target_root.is_some_and(|path| path.exists());
     let real_cargo_project = target_root.is_some_and(|path| path.join("Cargo.toml").exists());
     let failure_scope_localized = semantic_summary.failure_scope.as_deref() == Some("localized");
@@ -949,12 +744,10 @@ fn planning_constraint_state(semantic_summary: &SemanticStateSummary) -> Constra
             semantic_summary.module_gaps.len(),
         ),
         validation_blocked: semantic_summary.validation_blocked_by_preconditions,
-        entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None)
-            && semantic_summary.cargo_project,
+        entrypoint_missing: matches!(semantic_summary.entrypoint_kind.as_deref(), Some("none") | None) && semantic_summary.cargo_project,
         module_gaps_present: !semantic_summary.module_gaps.is_empty(),
         recent_no_semantic_progress: false,
-        failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref()
-            == Some("no_actionable_failure"),
+        failure_class_no_actionable: semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure"),
         failure_scope_localized,
         failure_scope_workspace,
         failure_scope_tooling,
@@ -994,21 +787,10 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: Ev
         return Ok(LoopStageResult::Noop);
     }
     emit_tool_result(ctx, &pending.plan_tool_call_id, &pending.request_id, false, &trigger_id)?;
-    Ok(LoopStageResult::Emit(RuntimeEvent::PlanningCompleted(PlanningCompleted {
-        tick: pending.tick,
-        llm_request_id: Some(pending.request_id),
-        planned_count: 0,
-        status: "llm_failed".to_string(),
-    })))
+    Ok(LoopStageResult::Emit(RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: pending.tick, llm_request_id: Some(pending.request_id), planned_count: 0, status: "llm_failed".to_string() })))
 }
 
-fn handle_observed(
-    ctx: &mut LoopContext,
-    observed: &LoopObserved,
-    trigger_id: EventId,
-    route_rationale: Option<String>,
-    route_confidence: Option<f32>,
-) -> anyhow::Result<LoopStageResult> {
+fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: EventId, route_rationale: Option<String>, route_confidence: Option<f32>) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_plan.is_some() || ctx.last_planned_observed_tick == Some(observed.tick) {
         return Ok(LoopStageResult::Noop);
     }
@@ -1040,12 +822,7 @@ fn handle_observed(
                     }),
                     None,
                 )),
-                RuntimeEvent::PlanningCompleted(PlanningCompleted {
-                    tick: observed.tick,
-                    llm_request_id: None,
-                    planned_count: 0,
-                    status: "missing_semantic_context".to_string(),
-                }),
+                RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: observed.tick, llm_request_id: None, planned_count: 0, status: "missing_semantic_context".to_string() }),
             ]));
         }
     };
@@ -1062,12 +839,7 @@ fn handle_observed(
     }
     if observed.error_count == 0 && ctx.last_done_goal.is_some() && ctx.last_done_goal == observed.goal_text {
         if requirements_satisfied(ctx, observed) {
-            return Ok(LoopStageResult::Emit(RuntimeEvent::PlanningCompleted(PlanningCompleted {
-                tick: observed.tick,
-                llm_request_id: None,
-                planned_count: 0,
-                status: "goal_complete".to_string(),
-            })));
+            return Ok(LoopStageResult::Emit(RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: observed.tick, llm_request_id: None, planned_count: 0, status: "goal_complete".to_string() })));
         }
         ctx.last_done_goal = None;
     }
@@ -1079,10 +851,7 @@ fn handle_observed(
     // Tier 3 (prompt / delta): LOC, errors, recent actions/results — sent every call.
     let sub_agent_section = ctx.context_merger.prompt_section();
     let workspace_clone = ctx.workspace.clone();
-    let target_workspace = semantic_summary
-        .target_root
-        .clone()
-        .unwrap_or_else(|| workspace_clone.display().to_string());
+    let target_workspace = semantic_summary.target_root.clone().unwrap_or_else(|| workspace_clone.display().to_string());
     const HEURISTIC_RATIONALE: &str = "heuristic proposal from runtime state";
     let (rationale_for_prompt, confidence_for_prompt) = match (route_rationale.as_deref(), route_confidence) {
         (Some(r), c) if !r.is_empty() && r != HEURISTIC_RATIONALE => (Some(r), c.map(|v| v as f64)),
@@ -1107,12 +876,7 @@ fn handle_observed(
     let context_base = build_context_base(observed, &workspace_clone, &sub_agent_section, &llm_semantic_context);
     let context_base_hash = hash_str(&context_base);
 
-    let context_delta = build_context_delta(
-        &llm_semantic_context,
-        &ctx.batch_acted,
-        ctx.last_invalid_plan_reason.as_deref(),
-        ctx.consecutive_invalid_plan_batches,
-    );
+    let context_delta = build_context_delta(&llm_semantic_context, &ctx.batch_acted, ctx.last_invalid_plan_reason.as_deref(), ctx.consecutive_invalid_plan_batches);
 
     let system_id = *PLANNER_SYSTEM_PROMPT_ID;
     let send_system = ctx.last_system_prompt_id != Some(system_id);
@@ -1156,30 +920,40 @@ fn handle_observed(
     ctx.last_planned_observed_tick = Some(observed.tick);
 
     if let Some(emitter) = ctx.emitter.as_ref() {
-        emitter.emit_with_parents(RuntimeEvent::ToolCall(ToolCall {
-            node_id: "plan_consumer".to_string(),
-            tool_call_id: plan_tool_call_id,
-            request_id: request_id.clone(),
-            kind: "llm.plan".to_string(),
-            payload: serde_json::json!({"role": "planner"}),
-            accepted: true,
-        }), vec![trigger_id.clone()], file!(), line!());
-        emitter.emit_with_parents(RuntimeEvent::Llm(LlmCall {
-            request_id,
-            // Fast-changing delta only — GOAL and workspace live in context_base / executor cache.
-            prompt: context_delta,
-            role: Some("planner".to_string()),
-            agent_id: ctx.agent_id.clone(),
-            dispatched: true,
-            // Tier 1: static system instructions — sent only on first call or session reset.
-            system: send_system.then(|| PLANNER_SYSTEM_INSTRUCTIONS.to_string()),
-            system_prompt_id: Some(system_id.to_string()),
-            // Tier 2: slow-changing context base — sent only when changed.
-            context_base: send_base.then_some(context_base),
-            context_base_id: Some(context_base_hash.to_string()),
-            prompt_base_id: Some(system_id.to_string()),
-            prev_prompt_id,
-        }), vec![trigger_id.clone()], file!(), line!());
+        emitter.emit_with_parents(
+            RuntimeEvent::ToolCall(ToolCall {
+                node_id: "plan_consumer".to_string(),
+                tool_call_id: plan_tool_call_id,
+                request_id: request_id.clone(),
+                kind: "llm.plan".to_string(),
+                payload: serde_json::json!({"role": "planner"}),
+                accepted: true,
+            }),
+            vec![trigger_id.clone()],
+            file!(),
+            line!(),
+        );
+        emitter.emit_with_parents(
+            RuntimeEvent::Llm(LlmCall {
+                request_id,
+                // Fast-changing delta only — GOAL and workspace live in context_base / executor cache.
+                prompt: context_delta,
+                role: Some("planner".to_string()),
+                agent_id: ctx.agent_id.clone(),
+                dispatched: true,
+                // Tier 1: static system instructions — sent only on first call or session reset.
+                system: send_system.then(|| PLANNER_SYSTEM_INSTRUCTIONS.to_string()),
+                system_prompt_id: Some(system_id.to_string()),
+                // Tier 2: slow-changing context base — sent only when changed.
+                context_base: send_base.then_some(context_base),
+                context_base_id: Some(context_base_hash.to_string()),
+                prompt_base_id: Some(system_id.to_string()),
+                prev_prompt_id,
+            }),
+            vec![trigger_id.clone()],
+            file!(),
+            line!(),
+        );
     }
 
     Ok(LoopStageResult::Deferred)
@@ -1217,25 +991,25 @@ fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) -> Option<Plannin
     }
     let tick = pending.tick;
     ctx.pending_plan = None;
-    Some(PlanningCompleted {
-        tick,
-        llm_request_id: None,
-        planned_count: 0,
-        status: "llm_timeout".to_string(),
-    })
+    Some(PlanningCompleted { tick, llm_request_id: None, planned_count: 0, status: "llm_timeout".to_string() })
 }
 
 fn emit_tool_result(ctx: &LoopContext, tool_call_id: &str, request_id: &str, success: bool, trigger_id: &EventId) -> anyhow::Result<()> {
     if let Some(emitter) = ctx.emitter.as_ref() {
-        emitter.emit_with_parents(RuntimeEvent::ToolResult(ToolResult {
-            node_id: "plan_consumer".to_string(),
-            tool_call_id: tool_call_id.to_string(),
-            tool_result_id: Uuid::new_v4().to_string(),
-            request_id: request_id.to_string(),
-            kind: "llm.plan".to_string(),
-            output: serde_json::json!({}),
-            success,
-        }), vec![trigger_id.clone()], file!(), line!());
+        emitter.emit_with_parents(
+            RuntimeEvent::ToolResult(ToolResult {
+                node_id: "plan_consumer".to_string(),
+                tool_call_id: tool_call_id.to_string(),
+                tool_result_id: Uuid::new_v4().to_string(),
+                request_id: request_id.to_string(),
+                kind: "llm.plan".to_string(),
+                output: serde_json::json!({}),
+                success,
+            }),
+            vec![trigger_id.clone()],
+            file!(),
+            line!(),
+        );
     }
     Ok(())
 }
@@ -1383,25 +1157,15 @@ No prose outside the code block."#;
 
 /// Computed once at startup from the hash of the static system instructions.
 /// Used as the cache key sent in every `LlmCall.system_prompt_id`.
-static PLANNER_SYSTEM_PROMPT_ID: std::sync::LazyLock<u64> =
-    std::sync::LazyLock::new(|| hash_str(PLANNER_SYSTEM_INSTRUCTIONS));
+static PLANNER_SYSTEM_PROMPT_ID: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| hash_str(PLANNER_SYSTEM_INSTRUCTIONS));
 
 /// Tier-2 context: slow-changing section containing GOAL and workspace state.
 /// Sent only when its hash differs from `ctx.last_context_base_id`. For stateful
 /// endpoints the LLM already has this in session history; for stateless endpoints
 /// the executor worker reconstructs it from its cache before each API call.
-fn build_context_base(
-    observed: &LoopObserved,
-    workspace: &Path,
-    sub_agent_section: &str,
-    llm_semantic_context: &LlmSemanticContext,
-) -> String {
+fn build_context_base(observed: &LoopObserved, workspace: &Path, sub_agent_section: &str, llm_semantic_context: &LlmSemanticContext) -> String {
     let goal_text = observed.goal_text.clone().unwrap_or_else(|| "<no goal provided>".to_string());
-    let target_workspace = llm_semantic_context
-        .target_workspace
-        .clone()
-        .or_else(|| llm_semantic_context.semantic_summary.target_root.clone())
-        .unwrap_or_else(|| workspace.display().to_string());
+    let target_workspace = llm_semantic_context.target_workspace.clone().or_else(|| llm_semantic_context.semantic_summary.target_root.clone()).unwrap_or_else(|| workspace.display().to_string());
     let semantic_planner_block = llm_semantic_context.render_planner_base_block();
     let planner_skill_block = build_planner_skill_block(llm_semantic_context);
     let graph_strategy_block = build_graph_strategy_block(llm_semantic_context);
@@ -1442,16 +1206,8 @@ Relevant files:{search_hints}
 }
 
 fn build_planner_skill_block(llm_semantic_context: &LlmSemanticContext) -> String {
-    let objective = primary_development_objective_kind(
-        &llm_semantic_context.objective_state,
-        &llm_semantic_context.objective_trend_state,
-        &llm_semantic_context.semantic_summary,
-    );
-    let strategy = primary_development_strategy_kind(
-        &llm_semantic_context.objective_state,
-        &llm_semantic_context.objective_trend_state,
-        &llm_semantic_context.semantic_summary,
-    );
+    let objective = primary_development_objective_kind(&llm_semantic_context.objective_state, &llm_semantic_context.objective_trend_state, &llm_semantic_context.semantic_summary);
+    let strategy = primary_development_strategy_kind(&llm_semantic_context.objective_state, &llm_semantic_context.objective_trend_state, &llm_semantic_context.semantic_summary);
     let registry = global_registry();
     let Ok(skills) = registry.select_for_scope("planner", objective, strategy) else {
         return "Planner skills:\n- none".to_string();
@@ -1459,75 +1215,51 @@ fn build_planner_skill_block(llm_semantic_context: &LlmSemanticContext) -> Strin
     if skills.is_empty() {
         return "Planner skills:\n- none".to_string();
     }
-    let rendered = skills
-        .into_iter()
-        .map(|skill| format!("### Skill: {}\n{}", skill.name, skill.prompt.trim()))
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    let rendered = skills.into_iter().map(|skill| format!("### Skill: {}\n{}", skill.name, skill.prompt.trim())).collect::<Vec<_>>().join("\n\n");
     format!("Planner skills:\n{rendered}")
 }
 
 fn build_graph_strategy_block(llm_semantic_context: &LlmSemanticContext) -> String {
-    let strategy = primary_development_strategy_kind(
-        &llm_semantic_context.objective_state,
-        &llm_semantic_context.objective_trend_state,
-        &llm_semantic_context.semantic_summary,
-    );
-    let Some(target_workspace) = llm_semantic_context
-        .target_workspace
-        .as_deref()
-        .or(llm_semantic_context.semantic_summary.target_root.as_deref())
-    else {
+    let strategy = primary_development_strategy_kind(&llm_semantic_context.objective_state, &llm_semantic_context.objective_trend_state, &llm_semantic_context.semantic_summary);
+    let Some(target_workspace) = llm_semantic_context.target_workspace.as_deref().or(llm_semantic_context.semantic_summary.target_root.as_deref()) else {
         return "Graph strategy hints:\n- none".to_string();
     };
     let workspace = Path::new(target_workspace);
     match strategy {
-        canon_semantic_state::DevelopmentStrategyKind::PlanSymbolAwareRename => {
-            match graph_backed_rename_candidates(workspace, 3) {
-                Ok(candidates) if !candidates.is_empty() => {
-                    let lines = candidates
-                        .into_iter()
-                        .map(|candidate| {
-                            let path = candidate.file_path.unwrap_or_else(|| "src/lib.rs".to_string());
-                            format!(
-                                "- rename candidate: `{}` -> `{}`\n  suggested action: {{\"action\":\"edit.rename_symbol\",\"old\":\"{}\",\"new\":\"{}\",\"path\":\"{}\"}}",
-                                candidate.symbol_path,
-                                candidate.suggested_path,
-                                candidate.symbol_path,
-                                candidate.suggested_path,
-                                path
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    format!("Graph strategy hints:\n{lines}")
-                }
-                _ => "Graph strategy hints:\n- none".to_string(),
+        canon_semantic_state::DevelopmentStrategyKind::PlanSymbolAwareRename => match graph_backed_rename_candidates(workspace, 3) {
+            Ok(candidates) if !candidates.is_empty() => {
+                let lines = candidates
+                    .into_iter()
+                    .map(|candidate| {
+                        let path = candidate.file_path.unwrap_or_else(|| "src/lib.rs".to_string());
+                        format!(
+                            "- rename candidate: `{}` -> `{}`\n  suggested action: {{\"action\":\"edit.rename_symbol\",\"old\":\"{}\",\"new\":\"{}\",\"path\":\"{}\"}}",
+                            candidate.symbol_path, candidate.suggested_path, candidate.symbol_path, candidate.suggested_path, path
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("Graph strategy hints:\n{lines}")
             }
-        }
-        canon_semantic_state::DevelopmentStrategyKind::RestructureModules => {
-            match graph_backed_module_moves(workspace, 3) {
-                Ok(candidates) if !candidates.is_empty() => {
-                    let lines = candidates
-                        .into_iter()
-                        .map(|candidate| {
-                            let path = candidate.file_path.unwrap_or_else(|| "src/lib.rs".to_string());
-                            format!(
-                                "- module hotspot move: `{}` -> `{}`\n  suggested action: {{\"action\":\"edit.move_symbol\",\"symbol_id\":\"{}\",\"new_module_path\":\"{}\",\"path\":\"{}\"}}",
-                                candidate.symbol_path,
-                                candidate.to_module_path,
-                                candidate.symbol_path,
-                                candidate.to_module_path,
-                                path
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    format!("Graph strategy hints:\n{lines}")
-                }
-                _ => "Graph strategy hints:\n- none".to_string(),
+            _ => "Graph strategy hints:\n- none".to_string(),
+        },
+        canon_semantic_state::DevelopmentStrategyKind::RestructureModules => match graph_backed_module_moves(workspace, 3) {
+            Ok(candidates) if !candidates.is_empty() => {
+                let lines = candidates
+                    .into_iter()
+                    .map(|candidate| {
+                        let path = candidate.file_path.unwrap_or_else(|| "src/lib.rs".to_string());
+                        format!(
+                            "- module hotspot move: `{}` -> `{}`\n  suggested action: {{\"action\":\"edit.move_symbol\",\"symbol_id\":\"{}\",\"new_module_path\":\"{}\",\"path\":\"{}\"}}",
+                            candidate.symbol_path, candidate.to_module_path, candidate.symbol_path, candidate.to_module_path, path
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("Graph strategy hints:\n{lines}")
             }
-        }
+            _ => "Graph strategy hints:\n- none".to_string(),
+        },
         _ => "Graph strategy hints:\n- none".to_string(),
     }
 }
@@ -1536,12 +1268,7 @@ fn build_semantic_repair_block(llm_semantic_context: &LlmSemanticContext) -> Str
     let mut lines = Vec::new();
     for gap in &llm_semantic_context.semantic_summary.module_gaps {
         if let Some((module, path)) = gap.split_once(" -> ") {
-            lines.push(format!(
-                "- missing module `{}`\n  suggested action: {{\"action\":\"edit.create_module_file\",\"module\":\"{}\",\"path\":\"{}\"}}",
-                module.trim(),
-                module.trim(),
-                path.trim()
-            ));
+            lines.push(format!("- missing module `{}`\n  suggested action: {{\"action\":\"edit.create_module_file\",\"module\":\"{}\",\"path\":\"{}\"}}", module.trim(), module.trim(), path.trim()));
         }
     }
 
@@ -1552,10 +1279,7 @@ fn build_semantic_repair_block(llm_semantic_context: &LlmSemanticContext) -> Str
         match hint.kind_enum() {
             Some(canon_semantic_state::CompilerHintKind::UnresolvedImport) => {
                 if let Some(import_path) = extract_backticked_symbol(&hint.summary) {
-                    lines.push(format!(
-                        "- unresolved import `{}`\n  suggested action: {{\"action\":\"edit.add_import\",\"import\":\"{}\",\"path\":\"{}\"}}",
-                        import_path, import_path, target
-                    ));
+                    lines.push(format!("- unresolved import `{}`\n  suggested action: {{\"action\":\"edit.add_import\",\"import\":\"{}\",\"path\":\"{}\"}}", import_path, import_path, target));
                 }
             }
             Some(canon_semantic_state::CompilerHintKind::MissingSymbol) => {
@@ -1592,43 +1316,20 @@ fn extract_backticked_symbol(text: &str) -> Option<String> {
 /// Tier-3 context: fast-changing delta sent on every planning call.
 /// Contains only the fields that change after each action: LOC, error counts,
 /// recent actions and tool results. Does NOT include GOAL or workspace tree.
-fn build_context_delta(
-    llm_semantic_context: &LlmSemanticContext,
-    batch_acted: &[LoopActed],
-    last_invalid_plan_reason: Option<&str>,
-    consecutive_invalid_plan_batches: u32,
-) -> String {
+fn build_context_delta(llm_semantic_context: &LlmSemanticContext, batch_acted: &[LoopActed], last_invalid_plan_reason: Option<&str>, consecutive_invalid_plan_batches: u32) -> String {
     let destructive_warning = batch_acted.iter().any(|a| a.stderr.trim() == "rejected_destructive_command");
-    let destructive_note = if destructive_warning {
-        "WARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n"
-    } else {
-        ""
-    };
+    let destructive_note = if destructive_warning { "WARNING: A previous plan was blocked as destructive. Do NOT include destructive commands; they will fail.\n" } else { "" };
 
     let invalid_plan_section = match last_invalid_plan_reason {
         Some(reason) => {
-            let policy = retry_policy_for_planning_context(
-                Some(reason),
-                consecutive_invalid_plan_batches,
-                &llm_semantic_context.recent_execution_results,
-                &llm_semantic_context.objective_trend_state,
-            );
+            let policy = retry_policy_for_planning_context(Some(reason), consecutive_invalid_plan_batches, &llm_semantic_context.recent_execution_results, &llm_semantic_context.objective_trend_state);
             let policy_text = retry_policy_text(policy, true);
             format!("{}\n{policy_text}", llm_semantic_context.render_planner_delta_block())
         }
         None => {
-            let policy = retry_policy_for_planning_context(
-                None,
-                consecutive_invalid_plan_batches,
-                &llm_semantic_context.recent_execution_results,
-                &llm_semantic_context.objective_trend_state,
-            );
+            let policy = retry_policy_for_planning_context(None, consecutive_invalid_plan_batches, &llm_semantic_context.recent_execution_results, &llm_semantic_context.objective_trend_state);
             if policy == RetryPolicy::CorrectiveRetry {
-                format!(
-                    "{}\n{}",
-                    llm_semantic_context.render_planner_delta_block()
-                    ,retry_policy_text(policy, false)
-                )
+                format!("{}\n{}", llm_semantic_context.render_planner_delta_block(), retry_policy_text(policy, false))
             } else {
                 llm_semantic_context.render_planner_delta_block()
             }
@@ -1658,28 +1359,17 @@ Planner hint:
 }
 
 fn build_llm_semantic_context(
-    semantic_summary: &SemanticStateSummary,
-    observed: &LoopObserved,
-    batch_acted: &[LoopActed],
-    batch_tool_results: &[ToolResult],
-    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
-    target_workspace: &str,
-    route_rationale: Option<&str>,
-    route_confidence: Option<f64>,
-    last_invalid_plan_reason: Option<&str>,
-    last_invalid_plan_planned_count: Option<usize>,
-    consecutive_invalid_plan_batches: u32,
-    objective_trend_state: &ObjectiveTrendState,
-    forced_primary_objective: Option<DevelopmentObjectiveKind>,
-    forced_primary_strategy: Option<DevelopmentStrategyKind>,
+    semantic_summary: &SemanticStateSummary, observed: &LoopObserved, batch_acted: &[LoopActed], batch_tool_results: &[ToolResult],
+    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord], target_workspace: &str, route_rationale: Option<&str>, route_confidence: Option<f64>,
+    last_invalid_plan_reason: Option<&str>, last_invalid_plan_planned_count: Option<usize>, consecutive_invalid_plan_batches: u32, objective_trend_state: &ObjectiveTrendState,
+    forced_primary_objective: Option<DevelopmentObjectiveKind>, forced_primary_strategy: Option<DevelopmentStrategyKind>,
 ) -> LlmSemanticContext {
     let recent_actions = batch_acted
         .iter()
         .rev()
         .take(24)
         .map(|action| {
-            let mut entry =
-                format!("- action={} success={} exit_code={:?}", action.action_kind, action.success, action.exit_code);
+            let mut entry = format!("- action={} success={} exit_code={:?}", action.action_kind, action.success, action.exit_code);
             let stdout = action.stdout.trim();
             let stderr = action.stderr.trim();
             if !stdout.is_empty() {
@@ -1698,25 +1388,15 @@ fn build_llm_semantic_context(
         .rev()
         .take(12)
         .map(|result| {
-            let content =
-                serde_json::to_string_pretty(&result.output).unwrap_or_else(|_| result.output.to_string());
+            let content = serde_json::to_string_pretty(&result.output).unwrap_or_else(|_| result.output.to_string());
             let truncated = if content.len() > 600 { &content[..600] } else { &content };
             format!("- kind={} success={}\n  output: {}", result.kind, result.success, truncated)
         })
         .collect::<Vec<_>>();
     LlmSemanticContext {
-        mission_summary: observed
-            .goal_text
-            .as_deref()
-            .map(parse_agent_goal_markdown)
-            .map(|goal| canon_goal::summarize_goal(&goal)),
+        mission_summary: observed.goal_text.as_deref().map(parse_agent_goal_markdown).map(|goal| canon_goal::summarize_goal(&goal)),
         semantic_summary: semantic_summary.clone(),
-        objective_state: derive_self_development_objective_state(
-            semantic_summary,
-            consecutive_invalid_plan_batches,
-            recent_execution_results,
-            objective_trend_state,
-        ),
+        objective_state: derive_self_development_objective_state(semantic_summary, consecutive_invalid_plan_batches, recent_execution_results, objective_trend_state),
         objective_trend_state: objective_trend_state.clone(),
         forced_primary_objective,
         forced_primary_strategy,
@@ -1737,28 +1417,15 @@ fn build_llm_semantic_context(
 }
 
 fn build_planner_hint(
-    batch_acted: &[LoopActed],
-    last_invalid_plan_reason: Option<&str>,
-    consecutive_invalid_plan_batches: u32,
-    recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
-    objective_trend_state: &ObjectiveTrendState,
-    semantic_summary: &SemanticStateSummary,
+    batch_acted: &[LoopActed], last_invalid_plan_reason: Option<&str>, consecutive_invalid_plan_batches: u32, recent_execution_results: &[canon_semantic_state::SemanticExecutionResultRecord],
+    objective_trend_state: &ObjectiveTrendState, semantic_summary: &SemanticStateSummary,
 ) -> String {
     let last_failure = if recent_execution_results.is_empty() {
         batch_acted
             .iter()
             .rev()
             .find(|a| !a.success && (!a.stderr.trim().is_empty() || !a.stdout.trim().is_empty()))
-            .map(|a| {
-                (
-                    a.action_kind.clone(),
-                    if !a.stderr.trim().is_empty() {
-                        a.stderr.clone()
-                    } else {
-                        a.stdout.clone()
-                    },
-                )
-            })
+            .map(|a| (a.action_kind.clone(), if !a.stderr.trim().is_empty() { a.stderr.clone() } else { a.stdout.clone() }))
     } else {
         None
     };
@@ -1768,15 +1435,9 @@ fn build_planner_hint(
         recent_execution_results,
         objective_trend_state,
         last_failure.as_ref().map(|(kind, _)| kind.as_str()),
-        last_failure
-            .as_ref()
-            .map(|(_, text)| truncate_hint_text(text, 240))
-            .as_deref(),
+        last_failure.as_ref().map(|(_, text)| truncate_hint_text(text, 240)).as_deref(),
     );
-    hint_lines.extend(semantic_planner_hint_lines(
-        semantic_summary.primary_failure_class().as_deref(),
-        semantic_summary.failure_scope.as_deref(),
-    ));
+    hint_lines.extend(semantic_planner_hint_lines(semantic_summary.primary_failure_class().as_deref(), semantic_summary.failure_scope.as_deref()));
     if hint_lines.is_empty() {
         "none".to_string()
     } else {
@@ -1921,9 +1582,7 @@ fn count_loc_in_workspace(dir: &Path) -> usize {
         let path = entry.path();
         if path.is_dir() {
             // Skip build artifact and hidden directories.
-            let skip = path.file_name().and_then(|n| n.to_str()).map(|n| {
-                matches!(n, "target" | ".git" | "node_modules" | ".cargo")
-            }).unwrap_or(false);
+            let skip = path.file_name().and_then(|n| n.to_str()).map(|n| matches!(n, "target" | ".git" | "node_modules" | ".cargo")).unwrap_or(false);
             if !skip {
                 total += count_loc_in_workspace(&path);
             }
@@ -2049,62 +1708,29 @@ fn parse_value_to_action(value: serde_json::Value) -> Option<ActionPlan> {
                 let path = value.get("path").and_then(|v| v.as_str())?;
                 let old = value.get("old").and_then(|v| v.as_str())?;
                 let new = value.get("new").and_then(|v| v.as_str())?;
-                return Some(ActionPlan {
-                    action: LlmAction::RenameSymbol {
-                        path: path.to_string(),
-                        old: old.to_string(),
-                        new: new.to_string(),
-                    },
-                    depends_on,
-                });
+                return Some(ActionPlan { action: LlmAction::RenameSymbol { path: path.to_string(), old: old.to_string(), new: new.to_string() }, depends_on });
             }
             "edit.move_symbol" => {
                 let path = value.get("path").and_then(|v| v.as_str())?;
                 let symbol_id = value.get("symbol_id").and_then(|v| v.as_str())?;
                 let new_module_path = value.get("new_module_path").and_then(|v| v.as_str())?;
-                return Some(ActionPlan {
-                    action: LlmAction::MoveSymbol {
-                        path: path.to_string(),
-                        symbol_id: symbol_id.to_string(),
-                        new_module_path: new_module_path.to_string(),
-                    },
-                    depends_on,
-                });
+                return Some(ActionPlan { action: LlmAction::MoveSymbol { path: path.to_string(), symbol_id: symbol_id.to_string(), new_module_path: new_module_path.to_string() }, depends_on });
             }
             "edit.add_import" => {
                 let path = value.get("path").and_then(|v| v.as_str())?;
                 let import = value.get("import").and_then(|v| v.as_str())?;
-                return Some(ActionPlan {
-                    action: LlmAction::AddImport {
-                        path: path.to_string(),
-                        import: import.to_string(),
-                    },
-                    depends_on,
-                });
+                return Some(ActionPlan { action: LlmAction::AddImport { path: path.to_string(), import: import.to_string() }, depends_on });
             }
             "edit.define_symbol_stub" => {
                 let path = value.get("path").and_then(|v| v.as_str())?;
                 let symbol = value.get("symbol").and_then(|v| v.as_str())?;
                 let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("fn");
-                return Some(ActionPlan {
-                    action: LlmAction::DefineSymbolStub {
-                        path: path.to_string(),
-                        symbol: symbol.to_string(),
-                        kind: kind.to_string(),
-                    },
-                    depends_on,
-                });
+                return Some(ActionPlan { action: LlmAction::DefineSymbolStub { path: path.to_string(), symbol: symbol.to_string(), kind: kind.to_string() }, depends_on });
             }
             "edit.create_module_file" => {
                 let path = value.get("path").and_then(|v| v.as_str())?;
                 let module = value.get("module").and_then(|v| v.as_str()).map(ToString::to_string);
-                return Some(ActionPlan {
-                    action: LlmAction::CreateModuleFile {
-                        path: path.to_string(),
-                        module,
-                    },
-                    depends_on,
-                });
+                return Some(ActionPlan { action: LlmAction::CreateModuleFile { path: path.to_string(), module }, depends_on });
             }
             _ => return None,
         }
@@ -2140,10 +1766,7 @@ mod tests {
     use super::{build_graph_strategy_block, build_semantic_repair_block, validate_action_batch};
     use canon_event::LoopPlanned;
     use canon_ir::{csr_graph::CsrGraph, CanonIR, CanonNodeKind};
-    use canon_semantic_state::{
-        derive_self_development_objective_state, CompilerHintKind, CompilerHintRecord,
-        DevelopmentStrategyKind, LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary,
-    };
+    use canon_semantic_state::{derive_self_development_objective_state, CompilerHintKind, CompilerHintRecord, DevelopmentStrategyKind, LlmSemanticContext, ObjectiveTrendState, SemanticStateSummary};
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -2173,24 +1796,10 @@ mod tests {
             module_edge_count: ir.module_graph.edge_count(),
             cfg_edge_count: ir.cfg_graph.edge_count(),
         };
-        let index = canon_analysis::GraphArtifactIndex {
-            latest_workspace: summary.clone(),
-        };
-        fs::write(
-            artifact_dir.join("index").join("latest_workspace.json"),
-            serde_json::to_vec(&index).unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            artifact_dir.join("index").join("by_crate").join("example.json"),
-            serde_json::to_vec(&summary).unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            artifact_dir.join("index").join("by_hash").join(format!("{artifact_id}.json")),
-            serde_json::to_vec(&summary).unwrap(),
-        )
-        .unwrap();
+        let index = canon_analysis::GraphArtifactIndex { latest_workspace: summary.clone() };
+        fs::write(artifact_dir.join("index").join("latest_workspace.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+        fs::write(artifact_dir.join("index").join("by_crate").join("example.json"), serde_json::to_vec(&summary).unwrap()).unwrap();
+        fs::write(artifact_dir.join("index").join("by_hash").join(format!("{artifact_id}.json")), serde_json::to_vec(&summary).unwrap()).unwrap();
     }
 
     fn rename_ir() -> CanonIR {
@@ -2200,32 +1809,10 @@ mod tests {
         let foo = ir.intern_name("Foo");
         let alpha_id = ir.push_node(CanonNodeKind::Module { path_id: mod_alpha, flags: 0 });
         let beta_id = ir.push_node(CanonNodeKind::Module { path_id: mod_beta, flags: 0 });
-        let foo_alpha = ir.push_node(CanonNodeKind::Struct {
-            name_id: foo,
-            generics: Vec::new(),
-            fields: Vec::new(),
-            derives: Vec::new(),
-            attrs: Vec::new(),
-            flags: 0,
-            struct_kind: 0,
-        });
-        let foo_beta = ir.push_node(CanonNodeKind::Struct {
-            name_id: foo,
-            generics: Vec::new(),
-            fields: Vec::new(),
-            derives: Vec::new(),
-            attrs: Vec::new(),
-            flags: 0,
-            struct_kind: 0,
-        });
+        let foo_alpha = ir.push_node(CanonNodeKind::Struct { name_id: foo, generics: Vec::new(), fields: Vec::new(), derives: Vec::new(), attrs: Vec::new(), flags: 0, struct_kind: 0 });
+        let foo_beta = ir.push_node(CanonNodeKind::Struct { name_id: foo, generics: Vec::new(), fields: Vec::new(), derives: Vec::new(), attrs: Vec::new(), flags: 0, struct_kind: 0 });
         let node_data = ir.nodes.iter().map(|node| node.id).collect::<Vec<_>>();
-        ir.module_graph = CsrGraph::from_edges(
-            node_data.clone(),
-            vec![
-                (alpha_id.0, foo_alpha.0, canon_ir::EdgeKind::Contains),
-                (beta_id.0, foo_beta.0, canon_ir::EdgeKind::Contains),
-            ],
-        );
+        ir.module_graph = CsrGraph::from_edges(node_data.clone(), vec![(alpha_id.0, foo_alpha.0, canon_ir::EdgeKind::Contains), (beta_id.0, foo_beta.0, canon_ir::EdgeKind::Contains)]);
         ir.call_graph = CsrGraph::from_edges(node_data.clone(), Vec::new());
         ir.cfg_graph = CsrGraph::from_edges(node_data, Vec::new());
         ir
@@ -2239,22 +1826,8 @@ mod tests {
         let caller = ir.intern_name("call_worker");
         let alpha_id = ir.push_node(CanonNodeKind::Module { path_id: mod_alpha, flags: 0 });
         let beta_id = ir.push_node(CanonNodeKind::Module { path_id: mod_beta, flags: 0 });
-        let worker_id = ir.push_node(CanonNodeKind::Struct {
-            name_id: worker,
-            generics: Vec::new(),
-            fields: Vec::new(),
-            derives: Vec::new(),
-            attrs: Vec::new(),
-            flags: 0,
-            struct_kind: 0,
-        });
-        let caller_id = ir.push_node(CanonNodeKind::Fn {
-            name_id: caller,
-            sig_id: worker_id,
-            body: None,
-            attrs: Vec::new(),
-            flags: 0,
-        });
+        let worker_id = ir.push_node(CanonNodeKind::Struct { name_id: worker, generics: Vec::new(), fields: Vec::new(), derives: Vec::new(), attrs: Vec::new(), flags: 0, struct_kind: 0 });
+        let caller_id = ir.push_node(CanonNodeKind::Fn { name_id: caller, sig_id: worker_id, body: None, attrs: Vec::new(), flags: 0 });
         let node_data = ir.nodes.iter().map(|node| node.id).collect::<Vec<_>>();
         ir.module_graph = CsrGraph::from_edges(
             node_data.clone(),
@@ -2268,21 +1841,13 @@ mod tests {
                 (alpha_id.0, beta_id.0, canon_ir::EdgeKind::Reexports),
             ],
         );
-        ir.call_graph = CsrGraph::from_edges(
-            node_data.clone(),
-            vec![(caller_id.0, worker_id.0, canon_ir::EdgeKind::Calls)],
-        );
+        ir.call_graph = CsrGraph::from_edges(node_data.clone(), vec![(caller_id.0, worker_id.0, canon_ir::EdgeKind::Calls)]);
         ir.cfg_graph = CsrGraph::from_edges(node_data, Vec::new());
         ir
     }
 
-    fn context_for_strategy(
-        workspace: &Path,
-        semantic_summary: SemanticStateSummary,
-        trend: ObjectiveTrendState,
-    ) -> LlmSemanticContext {
-        let objective_state =
-            derive_self_development_objective_state(&semantic_summary, 0, &[], &trend);
+    fn context_for_strategy(workspace: &Path, semantic_summary: SemanticStateSummary, trend: ObjectiveTrendState) -> LlmSemanticContext {
+        let objective_state = derive_self_development_objective_state(&semantic_summary, 0, &[], &trend);
         LlmSemanticContext {
             mission_summary: None,
             semantic_summary,
@@ -2318,19 +1883,10 @@ mod tests {
             path_exists: true,
             cargo_project: true,
             graph_artifact_id: Some("artifact".into()),
-            compiler_hints: vec![CompilerHintRecord::new(
-                CompilerHintKind::DuplicateDefinition,
-                "duplicate definition",
-                "use semantic rename",
-                vec!["src/lib.rs".into()],
-            )],
+            compiler_hints: vec![CompilerHintRecord::new(CompilerHintKind::DuplicateDefinition, "duplicate definition", "use semantic rename", vec!["src/lib.rs".into()])],
             ..SemanticStateSummary::default()
         };
-        let block = build_graph_strategy_block(&context_for_strategy(
-            &workspace,
-            semantic_summary,
-            ObjectiveTrendState::default(),
-        ));
+        let block = build_graph_strategy_block(&context_for_strategy(&workspace, semantic_summary, ObjectiveTrendState::default()));
         assert!(block.contains("\"action\":\"edit.rename_symbol\""));
         assert!(!block.contains("\"action\":\"apply_patch\""));
         assert!(block.contains("\"path\":\"src/alpha.rs\"") || block.contains("\"path\":\"src/beta.rs\""));
@@ -2355,11 +1911,7 @@ mod tests {
             source_files: vec!["tests/cohesion_test.rs".into()],
             ..SemanticStateSummary::default()
         };
-        let trend = ObjectiveTrendState {
-            baseline_module_gap_count: Some(0),
-            current_module_gap_count: Some(3),
-            ..ObjectiveTrendState::default()
-        };
+        let trend = ObjectiveTrendState { baseline_module_gap_count: Some(0), current_module_gap_count: Some(3), ..ObjectiveTrendState::default() };
         let block = build_graph_strategy_block(&context_for_strategy(&workspace, semantic_summary, trend));
         assert!(block.contains("\"action\":\"edit.move_symbol\""));
         assert!(block.contains("\"new_module_path\":\"crate::beta\""));
@@ -2378,12 +1930,7 @@ mod tests {
             failure_class: Some("duplicate_definition".into()),
             failure_scope: Some("localized".into()),
             graph_artifact_id: Some("artifact".into()),
-            compiler_hints: vec![CompilerHintRecord::new(
-                CompilerHintKind::DuplicateDefinition,
-                "duplicate definition",
-                "rename duplicate",
-                vec!["src/alpha.rs".into()],
-            )],
+            compiler_hints: vec![CompilerHintRecord::new(CompilerHintKind::DuplicateDefinition, "duplicate definition", "rename duplicate", vec!["src/alpha.rs".into()])],
             ..SemanticStateSummary::default()
         };
         let rename = LoopPlanned {
@@ -2408,16 +1955,7 @@ mod tests {
             action_id: None,
             depends_on: Vec::new(),
         };
-        assert!(validate_action_batch(
-            &[rename],
-            crate::policy::RetryPolicy::CorrectiveRetry,
-            &semantic_summary,
-            &ObjectiveTrendState::default(),
-            &[],
-            None,
-            None,
-        )
-        .is_ok());
+        assert!(validate_action_batch(&[rename], crate::policy::RetryPolicy::CorrectiveRetry, &semantic_summary, &ObjectiveTrendState::default(), &[], None, None,).is_ok());
         let _ = fs::remove_dir_all(workspace);
     }
 
@@ -2438,11 +1976,7 @@ mod tests {
             source_files: vec!["tests/cohesion_test.rs".into()],
             ..SemanticStateSummary::default()
         };
-        let trend = ObjectiveTrendState {
-            baseline_module_gap_count: Some(0),
-            current_module_gap_count: Some(3),
-            ..ObjectiveTrendState::default()
-        };
+        let trend = ObjectiveTrendState { baseline_module_gap_count: Some(0), current_module_gap_count: Some(3), ..ObjectiveTrendState::default() };
         let move_symbol = LoopPlanned {
             tick: 1,
             action_kind: "edit.move_symbol".to_string(),
@@ -2465,16 +1999,7 @@ mod tests {
             action_id: None,
             depends_on: Vec::new(),
         };
-        assert!(validate_action_batch(
-            &[move_symbol],
-            crate::policy::RetryPolicy::CorrectiveRetry,
-            &semantic_summary,
-            &trend,
-            &[],
-            None,
-            None,
-        )
-        .is_ok());
+        assert!(validate_action_batch(&[move_symbol], crate::policy::RetryPolicy::CorrectiveRetry, &semantic_summary, &trend, &[], None, None,).is_ok());
         let _ = fs::remove_dir_all(workspace);
     }
 
@@ -2511,18 +2036,8 @@ mod tests {
             action_id: None,
             depends_on: Vec::new(),
         };
-        let result = validate_action_batch(
-            &[rename],
-            crate::policy::RetryPolicy::CorrectiveRetry,
-            &semantic_summary,
-            &ObjectiveTrendState::default(),
-            &[],
-            None,
-            None,
-        );
-        assert!(result
-            .unwrap_err()
-            .contains("meta_invariant_action_must_declare_verifier"));
+        let result = validate_action_batch(&[rename], crate::policy::RetryPolicy::CorrectiveRetry, &semantic_summary, &ObjectiveTrendState::default(), &[], None, None);
+        assert!(result.unwrap_err().contains("meta_invariant_action_must_declare_verifier"));
         let _ = fs::remove_dir_all(workspace);
     }
 
@@ -2533,20 +2048,12 @@ mod tests {
             path_exists: true,
             cargo_project: true,
             graph_artifact_id: Some("artifact".into()),
-            compiler_hints: vec![CompilerHintRecord::new(
-                CompilerHintKind::DuplicateDefinition,
-                "duplicate definition",
-                "rename duplicate",
-                vec!["src/lib.rs".into()],
-            )],
+            compiler_hints: vec![CompilerHintRecord::new(CompilerHintKind::DuplicateDefinition, "duplicate definition", "rename duplicate", vec!["src/lib.rs".into()])],
             ..SemanticStateSummary::default()
         };
         let trend = ObjectiveTrendState::default();
         let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);
-        assert_eq!(
-            canon_semantic_state::primary_development_strategy_kind(&objective_state, &trend, &summary),
-            DevelopmentStrategyKind::PlanSymbolAwareRename
-        );
+        assert_eq!(canon_semantic_state::primary_development_strategy_kind(&objective_state, &trend, &summary), DevelopmentStrategyKind::PlanSymbolAwareRename);
     }
 
     #[test]
@@ -2559,26 +2066,12 @@ mod tests {
             cargo_project: true,
             module_gaps: vec!["merge -> src/merge.rs".into()],
             compiler_hints: vec![
-                CompilerHintRecord::new(
-                    CompilerHintKind::UnresolvedImport,
-                    "compiler reports unresolved import `crate::foo`",
-                    "add import",
-                    vec!["src/lib.rs".into()],
-                ),
-                CompilerHintRecord::new(
-                    CompilerHintKind::MissingSymbol,
-                    "compiler cannot find `run` in scope",
-                    "define symbol",
-                    vec!["src/main.rs".into()],
-                ),
+                CompilerHintRecord::new(CompilerHintKind::UnresolvedImport, "compiler reports unresolved import `crate::foo`", "add import", vec!["src/lib.rs".into()]),
+                CompilerHintRecord::new(CompilerHintKind::MissingSymbol, "compiler cannot find `run` in scope", "define symbol", vec!["src/main.rs".into()]),
             ],
             ..SemanticStateSummary::default()
         };
-        let block = build_semantic_repair_block(&context_for_strategy(
-            &workspace,
-            semantic_summary,
-            ObjectiveTrendState::default(),
-        ));
+        let block = build_semantic_repair_block(&context_for_strategy(&workspace, semantic_summary, ObjectiveTrendState::default()));
         assert!(block.contains("\"action\":\"edit.create_module_file\""));
         assert!(block.contains("\"action\":\"edit.add_import\""));
         assert!(block.contains("\"action\":\"edit.define_symbol_stub\""));

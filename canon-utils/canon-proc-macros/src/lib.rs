@@ -6,10 +6,10 @@ use syn::{
     parse::{Parse, ParseBuffer, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
+    spanned::Spanned,
     token::{Comma, Paren, Semi},
     visit::Visit,
     Attribute, Expr, ExprMatch, Ident, ItemFn, LitStr, Pat, Path, Token, Type,
-    spanned::Spanned,
 };
 
 // ---------------------------------------------------------------------
@@ -50,9 +50,7 @@ impl<'ast> Visit<'ast> for WildcardChecker {
         if has_event_arm {
             for arm in &node.arms {
                 if pattern_is_wildcard_or_binding(&arm.pat) {
-                    self.errors.push(
-                        "  wildcard/binding arm found in RuntimeEvent match — add explicit arms for every variant".to_string(),
-                    );
+                    self.errors.push("  wildcard/binding arm found in RuntimeEvent match — add explicit arms for every variant".to_string());
                 }
             }
         }
@@ -72,11 +70,7 @@ fn pattern_is_runtime_event(pat: &Pat) -> bool {
 fn pattern_is_wildcard_or_binding(pat: &Pat) -> bool {
     match pat {
         Pat::Wild(_) => true,
-        Pat::Ident(i) => {
-            i.subpat.is_none()
-                && i.by_ref.is_none()
-                && !i.ident.to_string().starts_with(|c: char| c.is_uppercase())
-        }
+        Pat::Ident(i) => i.subpat.is_none() && i.by_ref.is_none() && !i.ident.to_string().starts_with(|c: char| c.is_uppercase()),
         Pat::Or(or) => or.cases.iter().any(pattern_is_wildcard_or_binding),
         _ => false,
     }
@@ -144,12 +138,7 @@ impl Parse for EventStruct {
                     class = Some(match lit.value().as_str() {
                         "Control" => EventClassSpec::Control,
                         "Effect" => EventClassSpec::Effect,
-                        other => {
-                            return Err(syn::Error::new(
-                                lit.span(),
-                                format!("invalid event class `{other}`; expected \"Control\" or \"Effect\""),
-                            ))
-                        }
+                        other => return Err(syn::Error::new(lit.span(), format!("invalid event class `{other}`; expected \"Control\" or \"Effect\""))),
                     });
                     return Ok(());
                 }
@@ -164,23 +153,12 @@ impl Parse for EventStruct {
                 Err(meta.error("unsupported #[event(...)] key; expected class or next"))
             })?;
         }
-        let class = class.ok_or_else(|| {
-            syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "canon_event_struct!: missing #[event(class = \"Control\" | \"Effect\", ...)]",
-            )
-        })?;
+        let class = class.ok_or_else(|| syn::Error::new(proc_macro2::Span::call_site(), "canon_event_struct!: missing #[event(class = \"Control\" | \"Effect\", ...)]"))?;
         if class == EventClassSpec::Control && next.is_empty() {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "canon_event_struct!: Control events must declare #[event(next = [..])]",
-            ));
+            return Err(syn::Error::new(proc_macro2::Span::call_site(), "canon_event_struct!: Control events must declare #[event(next = [..])]"));
         }
         if class == EventClassSpec::Effect && !next.is_empty() {
-            return Err(syn::Error::new(
-                proc_macro2::Span::call_site(),
-                "canon_event_struct!: Effect events must not declare #[event(next = [..])]",
-            ));
+            return Err(syn::Error::new(proc_macro2::Span::call_site(), "canon_event_struct!: Effect events must not declare #[event(next = [..])]"));
         }
         let name: Ident = input.parse()?;
         let content;
@@ -245,21 +223,9 @@ pub fn canon_event_struct(input: TokenStream) -> TokenStream {
     let field_attrs: Vec<_> = fields.iter().map(|f| &f.attrs).collect();
 
     // Collect slot-tagged fields
-    let input_pairs: Vec<(String, &Ident)> = fields
-        .iter()
-        .filter(|f| f.slots.contains(&"input"))
-        .map(|f| (f.ident.to_string(), &f.ident))
-        .collect();
-    let output_pairs: Vec<(String, &Ident)> = fields
-        .iter()
-        .filter(|f| f.slots.contains(&"output"))
-        .map(|f| (f.ident.to_string(), &f.ident))
-        .collect();
-    let delta_pairs: Vec<(String, &Ident)> = fields
-        .iter()
-        .filter(|f| f.slots.contains(&"delta"))
-        .map(|f| (f.ident.to_string(), &f.ident))
-        .collect();
+    let input_pairs: Vec<(String, &Ident)> = fields.iter().filter(|f| f.slots.contains(&"input")).map(|f| (f.ident.to_string(), &f.ident)).collect();
+    let output_pairs: Vec<(String, &Ident)> = fields.iter().filter(|f| f.slots.contains(&"output")).map(|f| (f.ident.to_string(), &f.ident)).collect();
+    let delta_pairs: Vec<(String, &Ident)> = fields.iter().filter(|f| f.slots.contains(&"delta")).map(|f| (f.ident.to_string(), &f.ident)).collect();
 
     // Enforce: at least one #[output] field — no exceptions.
     if output_pairs.is_empty() {
@@ -585,9 +551,7 @@ impl Parse for EmitInput {
                 parents = Some(input.parse()?);
             }
             if let Some(par_expr) = parents {
-                Ok(EmitInput {
-                    form: EmitForm::DirectWithParents { source, kind, payload, path, parents: par_expr },
-                })
+                Ok(EmitInput { form: EmitForm::DirectWithParents { source, kind, payload, path, parents: par_expr } })
             } else {
                 Err(syn::Error::new(
                     path.span(),

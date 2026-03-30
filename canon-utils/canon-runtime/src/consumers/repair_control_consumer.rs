@@ -58,11 +58,7 @@
 ///   Stuck        × escape_detected       → Stuck        (emit violation)
 ///   Stuck        × replan_required       → Classifying  (fresh start)
 ///   Stuck        × compiler_clean        → Observing    (recovered)
-
-use canon_event::{
-    new_error_occurred, DebugEvent, EventConsumer, EventEmitterHandle, EventFilter, EventId,
-    EventOutcome, RuntimeEvent,
-};
+use canon_event::{new_error_occurred, DebugEvent, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RuntimeEvent};
 use std::collections::VecDeque;
 
 // ── Semantic signal ──────────────────────────────────────────────────────────
@@ -200,10 +196,7 @@ impl RepairControlConsumer {
 
                 // missing_target: real path absent, entrypoint missing, or module gaps.
                 let s = &e.semantic_summary;
-                if !s.path_exists
-                    || s.entrypoint_kind.is_none()
-                    || !s.module_gaps.is_empty()
-                {
+                if !s.path_exists || s.entrypoint_kind.is_none() || !s.module_gaps.is_empty() {
                     return Some(SemanticSignal::MissingTarget);
                 }
                 None
@@ -223,22 +216,14 @@ impl RepairControlConsumer {
                 if self.recent_acted_kinds.len() > NOOP_SPAM_WINDOW {
                     self.recent_acted_kinds.pop_front();
                 }
-                let all_same = self.recent_acted_kinds.len() >= NOOP_SPAM_WINDOW
-                    && self
-                        .recent_acted_kinds
-                        .iter()
-                        .all(|k| k == &e.action_kind);
+                let all_same = self.recent_acted_kinds.len() >= NOOP_SPAM_WINDOW && self.recent_acted_kinds.iter().all(|k| k == &e.action_kind);
                 if all_same {
                     self.pending_plan_action_kind = None;
                     return Some(SemanticSignal::NoopSpam);
                 }
 
                 // planned_to_act: plan was pending and action kind matches.
-                let matched = self
-                    .pending_plan_action_kind
-                    .as_deref()
-                    .map(|k| k == e.action_kind.as_str())
-                    .unwrap_or(false);
+                let matched = self.pending_plan_action_kind.as_deref().map(|k| k == e.action_kind.as_str()).unwrap_or(false);
                 self.pending_plan_action_kind = None;
                 if matched {
                     return Some(SemanticSignal::PlannedToAct);
@@ -307,10 +292,7 @@ impl RepairControlConsumer {
                 if kind == "act_stall" || msg.contains("scheduler is empty") {
                     return Some(SemanticSignal::ActStall);
                 }
-                if kind == "control_desync"
-                    || msg.contains("missing required successor")
-                    || msg.contains("expected=loop_acted; got=planning_completed")
-                {
+                if kind == "control_desync" || msg.contains("missing required successor") || msg.contains("expected=loop_acted; got=planning_completed") {
                     return Some(SemanticSignal::ControlDesync);
                 }
                 if src.contains("invariant") || src.contains("constraint") {
@@ -369,9 +351,7 @@ impl RepairControlConsumer {
             (Classifying, _) => return None,
 
             // ── Transitioning ─────────────────────────────────────────────────
-            (Transitioning, InvariantViolation) => {
-                (Classifying, "invariant_violation_rejects_transition")
-            }
+            (Transitioning, InvariantViolation) => (Classifying, "invariant_violation_rejects_transition"),
             (Transitioning, PlannedToAct) => (Verifying, "transition_acted_now_verifying"),
             (Transitioning, EscapeDetected) => (Stuck, "escape_detected_in_transition"),
             (Transitioning, ActStall) => (Classifying, "act_stall_recover_to_classifying"),
@@ -411,37 +391,21 @@ impl RepairControlConsumer {
     // ── illegal region tracking ───────────────────────────────────────────────
 
     fn is_illegal_region(&self, phase: RepairPhase, signal: SemanticSignal) -> bool {
-        self.illegal_regions.iter().any(|r| {
-            r.phase == phase && r.signal == signal && r.entry_count >= ILLEGAL_REGION_THRESHOLD
-        })
+        self.illegal_regions.iter().any(|r| r.phase == phase && r.signal == signal && r.entry_count >= ILLEGAL_REGION_THRESHOLD)
     }
 
     fn record_entry_into_region(&mut self, phase: RepairPhase, signal: SemanticSignal) {
-        if let Some(r) = self
-            .illegal_regions
-            .iter_mut()
-            .find(|r| r.phase == phase && r.signal == signal)
-        {
+        if let Some(r) = self.illegal_regions.iter_mut().find(|r| r.phase == phase && r.signal == signal) {
             r.entry_count += 1;
         } else {
-            self.illegal_regions.push(IllegalRegion {
-                phase,
-                signal,
-                tick_first: self.tick,
-                entry_count: 1,
-            });
+            self.illegal_regions.push(IllegalRegion { phase, signal, tick_first: self.tick, entry_count: 1 });
         }
     }
 
     fn record_transition(&mut self, signal: SemanticSignal, to: RepairPhase) {
         // Note: record_entry_into_region is called separately in advance() before
         // the phase change, so we only append the history entry here.
-        self.transition_history.push_back(TransitionRecord {
-            tick: self.tick,
-            from_phase: self.phase,
-            signal,
-            to_phase: to,
-        });
+        self.transition_history.push_back(TransitionRecord { tick: self.tick, from_phase: self.phase, signal, to_phase: to });
         if self.transition_history.len() > 256 {
             self.transition_history.pop_front();
         }
@@ -450,19 +414,12 @@ impl RepairControlConsumer {
     // ── escape detection ──────────────────────────────────────────────────────
 
     fn check_escape(&self, event: &RuntimeEvent) -> bool {
-        self.phase == RepairPhase::Stuck
-            && matches!(event, RuntimeEvent::LoopPlanned(_) | RuntimeEvent::LoopActed(_))
+        self.phase == RepairPhase::Stuck && matches!(event, RuntimeEvent::LoopPlanned(_) | RuntimeEvent::LoopActed(_))
     }
 
     // ── emit helpers ──────────────────────────────────────────────────────────
 
-    fn emit_transition_debug(
-        &self,
-        trigger_id: &EventId,
-        signal: SemanticSignal,
-        note: &str,
-        to_phase: &str,
-    ) -> EventOutcome {
+    fn emit_transition_debug(&self, trigger_id: &EventId, signal: SemanticSignal, note: &str, to_phase: &str) -> EventOutcome {
         let Some(emitter) = self.emitter.as_ref() else {
             return EventOutcome::NoOp("repair_control_no_emitter");
         };
@@ -485,12 +442,7 @@ impl RepairControlConsumer {
         EventOutcome::NoOp("repair_control_debug_emitted")
     }
 
-    fn emit_violation(
-        &self,
-        _trigger_id: &EventId,
-        signal: SemanticSignal,
-        note: &'static str,
-    ) -> EventOutcome {
+    fn emit_violation(&self, _trigger_id: &EventId, signal: SemanticSignal, note: &'static str) -> EventOutcome {
         EventOutcome::error(
             RuntimeEvent::ErrorOccurred(new_error_occurred(
                 "repair_control_consumer",
@@ -539,11 +491,7 @@ impl EventConsumer for RepairControlConsumer {
         // Escape detection: action or plan attempt while Stuck = escape.
         if self.check_escape(event) {
             let _ = self.advance(SemanticSignal::EscapeDetected);
-            return self.emit_violation(
-                &trigger_id,
-                SemanticSignal::EscapeDetected,
-                "repair_escape_detected_while_stuck",
-            );
+            return self.emit_violation(&trigger_id, SemanticSignal::EscapeDetected, "repair_escape_detected_while_stuck");
         }
 
         let Some(signal) = self.extract_signal(event) else {
@@ -555,12 +503,8 @@ impl EventConsumer for RepairControlConsumer {
         };
 
         match signal {
-            SemanticSignal::NoopSpam if self.phase == RepairPhase::Stuck => {
-                self.emit_violation(&trigger_id, signal, "repair_noop_spam_stuck")
-            }
-            SemanticSignal::InvariantViolation if self.phase == RepairPhase::Stuck => {
-                self.emit_violation(&trigger_id, signal, "repair_invariant_violation_stuck")
-            }
+            SemanticSignal::NoopSpam if self.phase == RepairPhase::Stuck => self.emit_violation(&trigger_id, signal, "repair_noop_spam_stuck"),
+            SemanticSignal::InvariantViolation if self.phase == RepairPhase::Stuck => self.emit_violation(&trigger_id, signal, "repair_invariant_violation_stuck"),
             _ => self.emit_transition_debug(&trigger_id, signal, note, to_phase),
         }
     }
@@ -584,12 +528,7 @@ mod tests {
             warning_count: 0,
             compiler_errors: vec![],
             goal_text: None,
-            semantic_summary: SemanticStateSummary {
-                path_exists: true,
-                entrypoint_kind: Some("bin".to_string()),
-                module_gaps: vec![],
-                ..SemanticStateSummary::default()
-            },
+            semantic_summary: SemanticStateSummary { path_exists: true, entrypoint_kind: Some("bin".to_string()), module_gaps: vec![], ..SemanticStateSummary::default() },
             observe_diagnostics: vec![],
         })
     }
@@ -601,12 +540,7 @@ mod tests {
             warning_count: 0,
             compiler_errors: vec![],
             goal_text: None,
-            semantic_summary: SemanticStateSummary {
-                path_exists: false,
-                entrypoint_kind: None,
-                module_gaps: vec![],
-                ..SemanticStateSummary::default()
-            },
+            semantic_summary: SemanticStateSummary { path_exists: false, entrypoint_kind: None, module_gaps: vec![], ..SemanticStateSummary::default() },
             observe_diagnostics: vec![],
         })
     }
@@ -717,14 +651,7 @@ mod tests {
     }
 
     fn error_invariant(tick_hint: u64) -> RuntimeEvent {
-        RuntimeEvent::ErrorOccurred(new_error_occurred(
-            "invariant_check",
-            "invariant_engine",
-            "constraint violated",
-            "error",
-            serde_json::json!({"tick": tick_hint}),
-            None,
-        ))
+        RuntimeEvent::ErrorOccurred(new_error_occurred("invariant_check", "invariant_engine", "constraint violated", "error", serde_json::json!({"tick": tick_hint}), None))
     }
 
     // ── signal extraction ──────────────────────────────────────────────────────
@@ -907,11 +834,7 @@ mod tests {
             c.phase = RepairPhase::Classifying;
             c.advance(SemanticSignal::CompilerClean);
         }
-        assert!(
-            c.transition_history.len() <= 256,
-            "history must be bounded: got {}",
-            c.transition_history.len()
-        );
+        assert!(c.transition_history.len() <= 256, "history must be bounded: got {}", c.transition_history.len());
     }
 
     #[test]

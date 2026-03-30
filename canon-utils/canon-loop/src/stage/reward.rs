@@ -1,8 +1,5 @@
-use canon_event::{events::VerifierPolicyUpdated, RuntimeEvent, LoopRewarded, LoopVerified, RouteSelected};
-use canon_semantic_state::{
-    latest_graph_proof_failed, latest_graph_proof_verified, latest_no_semantic_progress,
-    latest_semantic_progress,
-};
+use canon_event::{events::VerifierPolicyUpdated, LoopRewarded, LoopVerified, RouteSelected, RuntimeEvent};
+use canon_semantic_state::{latest_graph_proof_failed, latest_graph_proof_verified, latest_no_semantic_progress, latest_semantic_progress};
 
 use crate::{context::LoopContext, result::LoopStageResult};
 
@@ -61,19 +58,10 @@ pub fn execute(v: LoopVerified, ctx: &mut LoopContext) -> anyhow::Result<LoopSta
     Ok(LoopStageResult::Emit(RuntimeEvent::LoopRewarded(rewarded)))
 }
 
-pub fn execute_from_policy(
-    policy: VerifierPolicyUpdated,
-    ctx: &mut LoopContext,
-) -> anyhow::Result<LoopStageResult> {
-    let verified = ctx
-        .last_verified
-        .clone()
-        .expect("LoopVerified must be observed before VerifierPolicyUpdated reward evaluation");
+pub fn execute_from_policy(policy: VerifierPolicyUpdated, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
+    let verified = ctx.last_verified.clone().expect("LoopVerified must be observed before VerifierPolicyUpdated reward evaluation");
     ctx.last_reward_trace_id = policy.trace_id.clone().or_else(|| verified.trace_id.clone());
-    ctx.last_reward_execution_id = policy
-        .execution_id
-        .clone()
-        .or_else(|| verified.execution_id.clone());
+    ctx.last_reward_execution_id = policy.execution_id.clone().or_else(|| verified.execution_id.clone());
     let semantics = evaluate_reward_semantics(ctx, &verified);
     let halt = false;
     let rewarded = LoopRewarded {
@@ -100,15 +88,8 @@ pub fn execute_from_policy(
 }
 
 pub fn evaluate_reward_semantics(ctx: &LoopContext, _v: &LoopVerified) -> RewardSemantics {
-    let reward_bias = ctx
-        .last_verifier_reward_bias
-        .as_deref()
-        .expect("VerifierPolicyUpdated must be observed before reward evaluation");
-    let mut reward = if reward_bias == "positive" {
-        1.0_f32
-    } else {
-        -1.0_f32
-    };
+    let reward_bias = ctx.last_verifier_reward_bias.as_deref().expect("VerifierPolicyUpdated must be observed before reward evaluation");
+    let mut reward = if reward_bias == "positive" { 1.0_f32 } else { -1.0_f32 };
     if ctx.last_action_kind == "done" {
         reward += 0.5;
     }
@@ -125,17 +106,10 @@ pub fn evaluate_reward_semantics(ctx: &LoopContext, _v: &LoopVerified) -> Reward
     if ctx.objective_trend_state.repair_resolution_rate() > 0.5 {
         reward += 0.2;
     }
-    if ctx.objective_trend_state.repeated_stall_count > 0
-        && ctx.objective_trend_state.current_no_progress_streak > 0
-    {
+    if ctx.objective_trend_state.repeated_stall_count > 0 && ctx.objective_trend_state.current_no_progress_streak > 0 {
         reward -= 0.3;
     }
-    RewardSemantics {
-        reward,
-        resets_stagnation: reward_bias == "positive"
-            || (latest_semantic_progress(&ctx.recent_execution_results)
-                && !latest_graph_proof_failed(&ctx.recent_execution_results)),
-    }
+    RewardSemantics { reward, resets_stagnation: reward_bias == "positive" || (latest_semantic_progress(&ctx.recent_execution_results) && !latest_graph_proof_failed(&ctx.recent_execution_results)) }
 }
 
 #[cfg(test)]
@@ -167,12 +141,7 @@ mod tests {
         ctx.last_verifier_reward_bias = Some("negative".into());
         let verified = base_verified();
         let base = evaluate_reward_semantics(&ctx, &verified).reward;
-        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
-            "module_created",
-            "module file created",
-            vec!["/tmp/src/index.rs".into()],
-            true,
-        ));
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new("module_created", "module file created", vec!["/tmp/src/index.rs".into()], true));
         assert!(evaluate_reward_semantics(&ctx, &verified).reward > base);
     }
 
@@ -181,12 +150,7 @@ mod tests {
         let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"));
         ctx.stagnant_ticks = 3;
         ctx.last_verifier_reward_bias = Some("negative".into());
-        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
-            "module_created",
-            "module file created",
-            vec!["/tmp/src/index.rs".into()],
-            true,
-        ));
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new("module_created", "module file created", vec!["/tmp/src/index.rs".into()], true));
         let verified = base_verified();
         let _ = execute(verified, &mut ctx).unwrap();
         assert_eq!(ctx.stagnant_ticks, 0);
@@ -198,12 +162,7 @@ mod tests {
         ctx.last_verifier_reward_bias = Some("negative".into());
         let verified = base_verified();
         let base = evaluate_reward_semantics(&ctx, &verified).reward;
-        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new(
-            "graph_proof_failed",
-            "semantic graph proof failed",
-            Vec::new(),
-            false,
-        ));
+        ctx.recent_execution_results.push(SemanticExecutionResultRecord::new("graph_proof_failed", "semantic graph proof failed", Vec::new(), false));
         assert!(evaluate_reward_semantics(&ctx, &verified).reward < base);
     }
 }

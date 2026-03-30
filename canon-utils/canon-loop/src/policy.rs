@@ -152,14 +152,7 @@ impl RetryPolicy {
 pub fn classify_action(action_kind: &str, stdout: &str, stderr: &str) -> CommandClass {
     match action_kind {
         "list_dir" | "read_file" | "search_files" => CommandClass::Discovery,
-        "apply_patch"
-        | "write_file"
-        | "patch_file"
-        | "edit.rename_symbol"
-        | "edit.move_symbol"
-        | "edit.add_import"
-        | "edit.define_symbol_stub"
-        | "edit.create_module_file" => CommandClass::Edit,
+        "apply_patch" | "write_file" | "patch_file" | "edit.rename_symbol" | "edit.move_symbol" | "edit.add_import" | "edit.define_symbol_stub" | "edit.create_module_file" => CommandClass::Edit,
         "done" => CommandClass::Completion,
         "run_command" if is_bootstrap_command_output(stdout, stderr) => CommandClass::Bootstrap,
         "run_command" => CommandClass::Validation,
@@ -171,28 +164,14 @@ pub fn classify_action_outcome(action_kind: &str, success: bool, stdout: &str, s
     let text = if !stderr.is_empty() { stderr } else { stdout };
     match action_kind {
         "run_command" if success && is_bootstrap_command_output(stdout, stderr) => ActionOutcomeClass::BootstrapSuccess,
-        "run_command" if looks_like_bootstrap_selection_mismatch(text) => {
-            ActionOutcomeClass::BootstrapSelectionMismatch
-        }
+        "run_command" if looks_like_bootstrap_selection_mismatch(text) => ActionOutcomeClass::BootstrapSelectionMismatch,
         "run_command" if success && looks_semantically_failed(text) => ActionOutcomeClass::SemanticFailure,
         "run_command" if success => ActionOutcomeClass::ValidationSuccess,
         "run_command" if looks_like_compiler_failure(text) => ActionOutcomeClass::ValidationFailureCompiler,
         "run_command" if looks_semantically_failed(text) => ActionOutcomeClass::SemanticFailure,
-        "apply_patch"
-        | "edit.rename_symbol"
-        | "edit.move_symbol"
-        | "edit.add_import"
-        | "edit.define_symbol_stub"
-        | "edit.create_module_file" if success => ActionOutcomeClass::EditSuccess,
-        "apply_patch" if text.contains("No such file or directory") || text.contains("Failed to read file to update") => {
-            ActionOutcomeClass::PatchMissingTargetFile
-        }
-        "apply_patch"
-            if text.contains("invalid hunk")
-                || text.contains("unexpected line in update chunk")
-                || text.contains("Failed to find expected lines")
-                || text.contains("apply_patch failed") =>
-        {
+        "apply_patch" | "edit.rename_symbol" | "edit.move_symbol" | "edit.add_import" | "edit.define_symbol_stub" | "edit.create_module_file" if success => ActionOutcomeClass::EditSuccess,
+        "apply_patch" if text.contains("No such file or directory") || text.contains("Failed to read file to update") => ActionOutcomeClass::PatchMissingTargetFile,
+        "apply_patch" if text.contains("invalid hunk") || text.contains("unexpected line in update chunk") || text.contains("Failed to find expected lines") || text.contains("apply_patch failed") => {
             ActionOutcomeClass::PatchApplyFailure
         }
         _ => ActionOutcomeClass::Other,
@@ -220,12 +199,7 @@ pub fn recovery_rules_for_expected_successor(expected_successor: &str) -> Vec<Lo
     }
 }
 
-pub fn evaluate_loop_transition(
-    pending_required_successor: Option<&str>,
-    planning_status: Option<&str>,
-    error_kind: Option<&str>,
-    expected_successor: Option<&str>,
-) -> LoopTransitionEvaluation {
+pub fn evaluate_loop_transition(pending_required_successor: Option<&str>, planning_status: Option<&str>, error_kind: Option<&str>, expected_successor: Option<&str>) -> LoopTransitionEvaluation {
     let mut recovery_rules = Vec::new();
     if let Some(status) = planning_status {
         recovery_rules.extend(recovery_rules_for_planning_status(status));
@@ -239,21 +213,11 @@ pub fn evaluate_loop_transition(
     let trigger_observe = recovery_rules.contains(&LoopRecoveryRule::TriggerObserveOnActStall);
     let force_reward_recovery = recovery_rules.contains(&LoopRecoveryRule::RecoverLoopRewarded);
     let observe_blocked_by_successor = pending_required_successor.is_some_and(|expected| expected != "loop_observed");
-    LoopTransitionEvaluation {
-        recovery_rules,
-        trigger_observe,
-        force_reward_recovery,
-        observe_blocked_by_successor,
-    }
+    LoopTransitionEvaluation { recovery_rules, trigger_observe, force_reward_recovery, observe_blocked_by_successor }
 }
 
 pub fn evaluate_loop_runtime(
-    halted: bool,
-    force_observe_recovery: bool,
-    trigger_observe: bool,
-    suppress_observe_on_invariant: bool,
-    pending_required_successor: Option<&str>,
-    is_route_selected_event: bool,
+    halted: bool, force_observe_recovery: bool, trigger_observe: bool, suppress_observe_on_invariant: bool, pending_required_successor: Option<&str>, is_route_selected_event: bool,
 ) -> LoopRuntimeEvaluation {
     let mut rules = Vec::new();
     let observe_mode = if force_observe_recovery && !halted {
@@ -281,102 +245,40 @@ pub fn evaluate_loop_runtime(
         rules.push(LoopRuntimeRule::WarnRouteSelectedWhileHalted);
     }
 
-    LoopRuntimeEvaluation {
-        observe_mode,
-        halt_blocks_stage,
-        warn_route_selected_while_halted,
-        rules,
-    }
+    LoopRuntimeEvaluation { observe_mode, halt_blocks_stage, warn_route_selected_while_halted, rules }
 }
 
-pub fn evaluate_recovery_event(
-    expected_successor: Option<&str>,
-    pending_required_successor: Option<&str>,
-    has_last_verified: bool,
-) -> RecoveryEventEvaluation {
+pub fn evaluate_recovery_event(expected_successor: Option<&str>, pending_required_successor: Option<&str>, has_last_verified: bool) -> RecoveryEventEvaluation {
     match expected_successor {
-        Some("loop_observed") => RecoveryEventEvaluation {
-            rule: RecoveryEventRule::ForceObserve,
-            force_observe_recovery: true,
-            execute_reward_recovery: false,
-        },
-        Some("loop_rewarded") if pending_required_successor != Some("loop_rewarded") => RecoveryEventEvaluation {
-            rule: RecoveryEventRule::SkipRewardAlreadySatisfied,
-            force_observe_recovery: false,
-            execute_reward_recovery: false,
-        },
-        Some("loop_rewarded") if !has_last_verified => RecoveryEventEvaluation {
-            rule: RecoveryEventRule::MissingRewardContext,
-            force_observe_recovery: false,
-            execute_reward_recovery: false,
-        },
-        Some("loop_rewarded") => RecoveryEventEvaluation {
-            rule: RecoveryEventRule::ExecuteRewardRecovery,
-            force_observe_recovery: false,
-            execute_reward_recovery: true,
-        },
-        _ => RecoveryEventEvaluation {
-            rule: RecoveryEventRule::None,
-            force_observe_recovery: false,
-            execute_reward_recovery: false,
-        },
+        Some("loop_observed") => RecoveryEventEvaluation { rule: RecoveryEventRule::ForceObserve, force_observe_recovery: true, execute_reward_recovery: false },
+        Some("loop_rewarded") if pending_required_successor != Some("loop_rewarded") => {
+            RecoveryEventEvaluation { rule: RecoveryEventRule::SkipRewardAlreadySatisfied, force_observe_recovery: false, execute_reward_recovery: false }
+        }
+        Some("loop_rewarded") if !has_last_verified => RecoveryEventEvaluation { rule: RecoveryEventRule::MissingRewardContext, force_observe_recovery: false, execute_reward_recovery: false },
+        Some("loop_rewarded") => RecoveryEventEvaluation { rule: RecoveryEventRule::ExecuteRewardRecovery, force_observe_recovery: false, execute_reward_recovery: true },
+        _ => RecoveryEventEvaluation { rule: RecoveryEventRule::None, force_observe_recovery: false, execute_reward_recovery: false },
     }
 }
 
-pub fn evaluate_recovery_execution(
-    operation: RecoveryOperation,
-    outcome: StageExecutionOutcomeClass,
-) -> RecoveryExecutionEvaluation {
+pub fn evaluate_recovery_execution(operation: RecoveryOperation, outcome: StageExecutionOutcomeClass) -> RecoveryExecutionEvaluation {
     match (operation, outcome) {
-        (_, StageExecutionOutcomeClass::Emit | StageExecutionOutcomeClass::EmitMany) => RecoveryExecutionEvaluation {
-            debug_kind: None,
-            debug_reason: None,
-            error_kind: None,
-        },
+        (_, StageExecutionOutcomeClass::Emit | StageExecutionOutcomeClass::EmitMany) => RecoveryExecutionEvaluation { debug_kind: None, debug_reason: None, error_kind: None },
         (RecoveryOperation::RewardRecovery, StageExecutionOutcomeClass::Deferred | StageExecutionOutcomeClass::Noop) => {
-            RecoveryExecutionEvaluation {
-                debug_kind: Some("reward_recovery_noop"),
-                debug_reason: Some("reward recovery produced no events"),
-                error_kind: None,
-            }
+            RecoveryExecutionEvaluation { debug_kind: Some("reward_recovery_noop"), debug_reason: Some("reward recovery produced no events"), error_kind: None }
         }
-        (RecoveryOperation::RewardRecovery, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation {
-            debug_kind: None,
-            debug_reason: None,
-            error_kind: Some("reward_recovery_execution"),
-        },
+        (RecoveryOperation::RewardRecovery, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation { debug_kind: None, debug_reason: None, error_kind: Some("reward_recovery_execution") },
         (RecoveryOperation::ObserveForced | RecoveryOperation::ObserveTriggered, StageExecutionOutcomeClass::Deferred) => {
-            RecoveryExecutionEvaluation {
-                debug_kind: Some("observe_deferred"),
-                debug_reason: Some("observe returned deferred"),
-                error_kind: None,
-            }
+            RecoveryExecutionEvaluation { debug_kind: Some("observe_deferred"), debug_reason: Some("observe returned deferred"), error_kind: None }
         }
         (RecoveryOperation::ObserveForced | RecoveryOperation::ObserveTriggered, StageExecutionOutcomeClass::Noop) => {
-            RecoveryExecutionEvaluation {
-                debug_kind: Some("observe_noop"),
-                debug_reason: Some("observe returned noop"),
-                error_kind: None,
-            }
+            RecoveryExecutionEvaluation { debug_kind: Some("observe_noop"), debug_reason: Some("observe returned noop"), error_kind: None }
         }
-        (RecoveryOperation::ObserveForced, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation {
-            debug_kind: None,
-            debug_reason: None,
-            error_kind: Some("observe_recovery_execution"),
-        },
-        (RecoveryOperation::ObserveTriggered, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation {
-            debug_kind: None,
-            debug_reason: None,
-            error_kind: Some("observe_stage_execution"),
-        },
+        (RecoveryOperation::ObserveForced, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation { debug_kind: None, debug_reason: None, error_kind: Some("observe_recovery_execution") },
+        (RecoveryOperation::ObserveTriggered, StageExecutionOutcomeClass::Error) => RecoveryExecutionEvaluation { debug_kind: None, debug_reason: None, error_kind: Some("observe_stage_execution") },
     }
 }
 
-pub fn evaluate_error_observe(
-    error_kind: &str,
-    explicit_observe_recovery: bool,
-    fatal_invariant_diag: bool,
-) -> ErrorObserveRule {
+pub fn evaluate_error_observe(error_kind: &str, explicit_observe_recovery: bool, fatal_invariant_diag: bool) -> ErrorObserveRule {
     if explicit_observe_recovery {
         return ErrorObserveRule::ExplicitRecovery;
     }
@@ -425,11 +327,7 @@ pub fn classify_invalid_plan_reason(reason: Option<&str>) -> InvalidPlanReasonCl
         || reason.contains("single-patch retry required")
     {
         InvalidPlanReasonClass::PatchFormat
-    } else if reason.contains("absolute cwd")
-        || reason.contains("path is invalid")
-        || reason.contains("absolute paths are not allowed")
-        || reason.contains("parent traversal")
-    {
+    } else if reason.contains("absolute cwd") || reason.contains("path is invalid") || reason.contains("absolute paths are not allowed") || reason.contains("parent traversal") {
         InvalidPlanReasonClass::PathOrCwd
     } else if reason.contains("missing_last_observed") || reason.contains("missing_observed_context") {
         InvalidPlanReasonClass::MissingContext
@@ -445,25 +343,18 @@ pub fn retry_policy_for_invalid_plan(reason: Option<&str>, consecutive_invalid_p
     match classify_invalid_plan_reason(reason) {
         InvalidPlanReasonClass::MixedBatch => RetryPolicy::DiscoveryOnly,
         InvalidPlanReasonClass::PatchFormat => RetryPolicy::SinglePatchOnly,
-        InvalidPlanReasonClass::PathOrCwd
-        | InvalidPlanReasonClass::MissingContext
-        | InvalidPlanReasonClass::Unknown => RetryPolicy::CorrectiveRetry,
+        InvalidPlanReasonClass::PathOrCwd | InvalidPlanReasonClass::MissingContext | InvalidPlanReasonClass::Unknown => RetryPolicy::CorrectiveRetry,
     }
 }
 
 pub fn retry_policy_for_planning_context(
-    reason: Option<&str>,
-    consecutive_invalid_plan_batches: u32,
-    recent_execution_results: &[SemanticExecutionResultRecord],
-    objective_trend_state: &ObjectiveTrendState,
+    reason: Option<&str>, consecutive_invalid_plan_batches: u32, recent_execution_results: &[SemanticExecutionResultRecord], objective_trend_state: &ObjectiveTrendState,
 ) -> RetryPolicy {
     let base = retry_policy_for_invalid_plan(reason, consecutive_invalid_plan_batches);
     if base != RetryPolicy::None {
         return base;
     }
-    if canon_semantic_state::latest_verifier_policy_requires_corrective_retry(
-        recent_execution_results,
-    ) {
+    if canon_semantic_state::latest_verifier_policy_requires_corrective_retry(recent_execution_results) {
         return RetryPolicy::CorrectiveRetry;
     }
     if canon_semantic_state::latest_verifier_policy_clears_retry(recent_execution_results) {
@@ -485,57 +376,30 @@ pub fn retry_policy_for_planning_context(
 }
 
 pub fn planner_hint_lines(
-    reason: Option<&str>,
-    consecutive_invalid_plan_batches: u32,
-    recent_execution_results: &[SemanticExecutionResultRecord],
-    objective_trend_state: &ObjectiveTrendState,
-    last_failed_action_kind: Option<&str>,
-    last_failed_text: Option<&str>,
+    reason: Option<&str>, consecutive_invalid_plan_batches: u32, recent_execution_results: &[SemanticExecutionResultRecord], objective_trend_state: &ObjectiveTrendState,
+    last_failed_action_kind: Option<&str>, last_failed_text: Option<&str>,
 ) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(reason) = reason {
         out.push(format!("Previous invalid-plan reason: {reason}"));
     }
-    match retry_policy_for_planning_context(
-        reason,
-        consecutive_invalid_plan_batches,
-        recent_execution_results,
-        objective_trend_state,
-    ) {
+    match retry_policy_for_planning_context(reason, consecutive_invalid_plan_batches, recent_execution_results, objective_trend_state) {
         RetryPolicy::None => {}
-        RetryPolicy::DiscoveryOnly => out.push(
-            "Programmatic tip: next batch must be discovery-only; emit only list_dir/read_file.".to_string(),
-        ),
-        RetryPolicy::SinglePatchOnly => out.push(
-            "Programmatic tip: next batch must contain exactly one apply_patch and no run_command.".to_string(),
-        ),
-        RetryPolicy::CorrectiveRetry => out.push(
-            "Programmatic tip: fix the previous invalid payload directly; do not default to discovery unless file contents are missing.".to_string(),
-        ),
+        RetryPolicy::DiscoveryOnly => out.push("Programmatic tip: next batch must be discovery-only; emit only list_dir/read_file.".to_string()),
+        RetryPolicy::SinglePatchOnly => out.push("Programmatic tip: next batch must contain exactly one apply_patch and no run_command.".to_string()),
+        RetryPolicy::CorrectiveRetry => out.push("Programmatic tip: fix the previous invalid payload directly; do not default to discovery unless file contents are missing.".to_string()),
     }
     if canon_semantic_state::latest_graph_proof_failed(recent_execution_results) {
-        out.push(
-            "Programmatic tip: the last semantic edit failed graph proof; refresh compiler context and do not repeat the same symbolic edit unchanged."
-                .to_string(),
-        );
+        out.push("Programmatic tip: the last semantic edit failed graph proof; refresh compiler context and do not repeat the same symbolic edit unchanged.".to_string());
     }
     if semantic_no_progress_streak(recent_execution_results) >= 2 {
-        out.push(
-            "Programmatic tip: repeated no-progress batches indicate a stalled repair loop; change approach or refresh context before retrying."
-                .to_string(),
-        );
+        out.push("Programmatic tip: repeated no-progress batches indicate a stalled repair loop; change approach or refresh context before retrying.".to_string());
     }
     if objective_trend_state.invalid_plan_rate() > 0.5 && objective_trend_state.planning_attempts >= 3 {
-        out.push(
-            "Programmatic tip: invalid-plan rate is high; simplify the next batch and avoid mixing multiple repair strategies."
-                .to_string(),
-        );
+        out.push("Programmatic tip: invalid-plan rate is high; simplify the next batch and avoid mixing multiple repair strategies.".to_string());
     }
     if objective_trend_state.misalignment_pressure_score() > 0 {
-        out.push(
-            "Programmatic tip: contradiction events indicate goal/route drift; explicitly realign the next batch with the active repair objective."
-                .to_string(),
-        );
+        out.push("Programmatic tip: contradiction events indicate goal/route drift; explicitly realign the next batch with the active repair objective.".to_string());
     }
     if let Some(result) = recent_execution_results.iter().rev().next() {
         out.push(format!("Recent execution semantics: {}", result.render_line()));
@@ -550,16 +414,10 @@ pub fn planner_hint_lines(
     out
 }
 
-pub fn semantic_planner_hint_lines(
-    failure_class: Option<&str>,
-    failure_scope: Option<&str>,
-) -> Vec<String> {
+pub fn semantic_planner_hint_lines(failure_class: Option<&str>, failure_scope: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
     if failure_class == Some("no_actionable_failure") {
-        out.push(
-            "Programmatic tip: typed failure_class=no_actionable_failure; do not emit repair actions. Refresh observation instead."
-                .to_string(),
-        );
+        out.push("Programmatic tip: typed failure_class=no_actionable_failure; do not emit repair actions. Refresh observation instead.".to_string());
     }
     match failure_scope {
         Some("localized") => out.push(
@@ -577,30 +435,21 @@ pub fn semantic_planner_hint_lines(
 
 fn is_bootstrap_command_output(stdout: &str, stderr: &str) -> bool {
     let text = if !stdout.is_empty() { stdout } else { stderr };
-    text.contains("Creating binary (application) package")
-        || text.contains("Creating library package")
-        || text.contains("Creating binary (application) `")
-        || text.contains("Creating library `")
+    text.contains("Creating binary (application) package") || text.contains("Creating library package") || text.contains("Creating binary (application) `") || text.contains("Creating library `")
 }
 
 fn looks_like_compiler_failure(text: &str) -> bool {
-    text.contains("error[E")
-        || text.contains("could not compile")
-        || text.contains("For more information about this error")
+    text.contains("error[E") || text.contains("could not compile") || text.contains("For more information about this error")
 }
 
 fn looks_like_bootstrap_selection_mismatch(text: &str) -> bool {
     text.contains("`cargo init` cannot be run on existing Cargo packages")
         || text.contains("use `cargo new` to create a package in a new subdirectory")
-        || text.contains("destination `")
-            && text.contains("already exists")
-            && text.contains("Use `cargo init` to initialize the directory")
+        || text.contains("destination `") && text.contains("already exists") && text.contains("Use `cargo init` to initialize the directory")
 }
 
 fn looks_semantically_failed(text: &str) -> bool {
-    text.contains("test result: FAILED")
-        || text.contains("failed")
-        || text.contains("panic")
+    text.contains("test result: FAILED") || text.contains("failed") || text.contains("panic")
 }
 
 #[cfg(test)]
@@ -610,21 +459,9 @@ mod tests {
     #[test]
     fn retry_policy_is_reason_specific() {
         let cases = [
-            (
-                Some("invalid plan batch before execution: mixed discovery actions with execution/edit actions in one plan batch"),
-                1,
-                RetryPolicy::DiscoveryOnly,
-            ),
-            (
-                Some("invalid plan batch before execution: apply_patch payload is invalid: invalid hunk at line 12"),
-                1,
-                RetryPolicy::SinglePatchOnly,
-            ),
-            (
-                Some("invalid plan batch before execution: run_command requires an absolute cwd; got \".\""),
-                1,
-                RetryPolicy::CorrectiveRetry,
-            ),
+            (Some("invalid plan batch before execution: mixed discovery actions with execution/edit actions in one plan batch"), 1, RetryPolicy::DiscoveryOnly),
+            (Some("invalid plan batch before execution: apply_patch payload is invalid: invalid hunk at line 12"), 1, RetryPolicy::SinglePatchOnly),
+            (Some("invalid plan batch before execution: run_command requires an absolute cwd; got \".\""), 1, RetryPolicy::CorrectiveRetry),
             (None, 0, RetryPolicy::None),
         ];
 
@@ -645,14 +482,7 @@ mod tests {
 
     #[test]
     fn planner_hints_include_failure_output() {
-        let hints = planner_hint_lines(
-            Some("invalid hunk at line 12"),
-            2,
-            &[],
-            &ObjectiveTrendState::default(),
-            Some("apply_patch"),
-            Some("invalid hunk at line 12, unexpected line in update chunk"),
-        );
+        let hints = planner_hint_lines(Some("invalid hunk at line 12"), 2, &[], &ObjectiveTrendState::default(), Some("apply_patch"), Some("invalid hunk at line 12, unexpected line in update chunk"));
         let text = hints.join("\n");
         assert!(text.contains("exactly one apply_patch"));
         assert!(text.contains("unexpected line in update chunk"));
@@ -660,35 +490,17 @@ mod tests {
 
     #[test]
     fn single_no_semantic_progress_does_not_force_corrective_retry_context() {
-        let results = vec![SemanticExecutionResultRecord::new(
-            "no_semantic_progress",
-            "action failed",
-            Vec::new(),
-            false,
-        )];
-        assert_eq!(
-            retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()),
-            RetryPolicy::None
-        );
-        let hints =
-            planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
+        let results = vec![SemanticExecutionResultRecord::new("no_semantic_progress", "action failed", Vec::new(), false)];
+        assert_eq!(retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()), RetryPolicy::None);
+        let hints = planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
         assert!(hints.contains("Recent execution semantics:"));
     }
 
     #[test]
     fn graph_proof_failure_forces_corrective_retry_context() {
-        let results = vec![SemanticExecutionResultRecord::new(
-            "graph_proof_failed",
-            "semantic graph proof failed",
-            Vec::new(),
-            false,
-        )];
-        assert_eq!(
-            retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()),
-            RetryPolicy::CorrectiveRetry
-        );
-        let hints =
-            planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
+        let results = vec![SemanticExecutionResultRecord::new("graph_proof_failed", "semantic graph proof failed", Vec::new(), false)];
+        assert_eq!(retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()), RetryPolicy::CorrectiveRetry);
+        let hints = planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
         assert!(hints.contains("failed graph proof"));
     }
 
@@ -701,80 +513,38 @@ mod tests {
             false,
         )
         .with_attempted_kind("verify_result")];
-        assert_eq!(
-            retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()),
-            RetryPolicy::CorrectiveRetry
-        );
+        assert_eq!(retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()), RetryPolicy::CorrectiveRetry);
     }
 
     #[test]
     fn run_command_is_classified_by_outcome_shape() {
-        assert_eq!(
-            classify_action("run_command", "", "    Creating binary (application) package"),
-            CommandClass::Bootstrap
-        );
-        assert_eq!(
-            classify_action("run_command", "", "error[E0453]: allow(dead_code) incompatible with previous forbid"),
-            CommandClass::Validation
-        );
+        assert_eq!(classify_action("run_command", "", "    Creating binary (application) package"), CommandClass::Bootstrap);
+        assert_eq!(classify_action("run_command", "", "error[E0453]: allow(dead_code) incompatible with previous forbid"), CommandClass::Validation);
     }
 
     #[test]
     fn action_outcomes_are_classified_explicitly() {
+        assert_eq!(classify_action_outcome("run_command", true, "", "Creating binary (application) package"), ActionOutcomeClass::BootstrapSuccess);
         assert_eq!(
-            classify_action_outcome("run_command", true, "", "Creating binary (application) package"),
-            ActionOutcomeClass::BootstrapSuccess
-        );
-        assert_eq!(
-            classify_action_outcome(
-                "run_command",
-                false,
-                "",
-                "error: `cargo init` cannot be run on existing Cargo packages\nhelp: use `cargo new` to create a package in a new subdirectory"
-            ),
+            classify_action_outcome("run_command", false, "", "error: `cargo init` cannot be run on existing Cargo packages\nhelp: use `cargo new` to create a package in a new subdirectory"),
             ActionOutcomeClass::BootstrapSelectionMismatch
         );
-        assert_eq!(
-            classify_action_outcome("run_command", false, "", "error[E0453]: allow(dead_code) incompatible with previous forbid"),
-            ActionOutcomeClass::ValidationFailureCompiler
-        );
-        assert_eq!(
-            classify_action_outcome("apply_patch", false, "apply_patch failed: invalid hunk at line 12", ""),
-            ActionOutcomeClass::PatchApplyFailure
-        );
+        assert_eq!(classify_action_outcome("run_command", false, "", "error[E0453]: allow(dead_code) incompatible with previous forbid"), ActionOutcomeClass::ValidationFailureCompiler);
+        assert_eq!(classify_action_outcome("apply_patch", false, "apply_patch failed: invalid hunk at line 12", ""), ActionOutcomeClass::PatchApplyFailure);
     }
 
     #[test]
     fn recovery_rules_are_explicitly_classified() {
-        assert_eq!(
-            recovery_rules_for_planning_status("invalid_plan"),
-            vec![LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan]
-        );
-        assert_eq!(
-            recovery_rules_for_error_kind("act_stall"),
-            vec![LoopRecoveryRule::TriggerObserveOnActStall]
-        );
-        assert_eq!(
-            recovery_rules_for_expected_successor("loop_rewarded"),
-            vec![LoopRecoveryRule::RecoverLoopRewarded]
-        );
+        assert_eq!(recovery_rules_for_planning_status("invalid_plan"), vec![LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan]);
+        assert_eq!(recovery_rules_for_error_kind("act_stall"), vec![LoopRecoveryRule::TriggerObserveOnActStall]);
+        assert_eq!(recovery_rules_for_expected_successor("loop_rewarded"), vec![LoopRecoveryRule::RecoverLoopRewarded]);
     }
 
     #[test]
     fn loop_transition_rows_cover_recovery_and_successor_state() {
         let rows = [
-            (
-                evaluate_loop_transition(Some("loop_acted"), None, Some("act_stall"), None),
-                true,
-                false,
-                true,
-            ),
-            (
-                evaluate_loop_transition(Some("loop_rewarded"), None, None, Some("loop_rewarded")),
-                false,
-                true,
-                true,
-            ),
+            (evaluate_loop_transition(Some("loop_acted"), None, Some("act_stall"), None), true, false, true),
+            (evaluate_loop_transition(Some("loop_rewarded"), None, None, Some("loop_rewarded")), false, true, true),
         ];
 
         for (eval, trigger_observe, force_reward_recovery, blocked) in rows {
@@ -784,6 +554,4 @@ mod tests {
         }
     }
 }
-use canon_semantic_state::{
-    semantic_no_progress_streak, ObjectiveTrendState, SemanticExecutionResultRecord,
-};
+use canon_semantic_state::{semantic_no_progress_streak, ObjectiveTrendState, SemanticExecutionResultRecord};

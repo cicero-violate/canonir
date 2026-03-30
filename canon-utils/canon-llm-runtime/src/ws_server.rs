@@ -145,7 +145,6 @@ impl ServerState {
 // Public bridge handle
 // ---------------------------------------------------------------------------
 
-
 #[derive(Clone)]
 pub struct WsBridge {
     state: Arc<Mutex<ServerState>>,

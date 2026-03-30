@@ -1,17 +1,18 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{path::{Path, PathBuf}, process::Command};
-
-use canon_editor::{
-    add_import_paths, create_module_files, define_symbol_stubs, move_symbol_pairs,
-    rename_symbol_pairs,
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
 };
+
 use canon_analysis::{verify_graph_expectations, GraphProofExpectation};
+use canon_editor::{add_import_paths, create_module_files, define_symbol_stubs, move_symbol_pairs, rename_symbol_pairs};
 use canon_event::{
-    new_error_occurred, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected, RuntimeEvent, ToolCall, ToolResult,
+    new_error_occurred, BashInvoke, CapabilityCompleted, CapabilityFailed, CapabilityResult, EventId, FileEvent, FilePatch, FileWrite, LoopActed, LoopPlanned, ProcessResult, RouteSelected,
+    RuntimeEvent, ToolCall, ToolResult,
 };
 use canon_goal::parse_agent_goal_markdown;
-use canon_tools_patch::apply_patch;
 use canon_invariant::decision_trace_payload;
+use canon_tools_patch::apply_patch;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -32,29 +33,17 @@ struct GraphProofOutcome {
 
 pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     if ctx.pending_act.is_some() {
-        emit_act_stall(
-            ctx,
-            &trigger_id,
-            "pending_act already present; cannot dispatch a new action",
-        );
+        emit_act_stall(ctx, &trigger_id, "pending_act already present; cannot dispatch a new action");
         return Ok(LoopStageResult::Noop);
     }
     if ctx.scheduler.is_empty() {
         ctx.active_batch_llm_request_id = None;
-        emit_act_stall(
-            ctx,
-            &trigger_id,
-            "route_selected(act) but scheduler is empty",
-        );
+        emit_act_stall(ctx, &trigger_id, "route_selected(act) but scheduler is empty");
         return Ok(LoopStageResult::Noop);
     }
     let filtered_batch_id = ctx.active_batch_llm_request_id.clone();
     let scheduler_len_before = ctx.scheduler.len();
-    let task = if let Some(batch_id) = filtered_batch_id.as_deref() {
-        ctx.scheduler.pop_for_llm(Some(batch_id))
-    } else {
-        ctx.scheduler.pop_any()
-    };
+    let task = if let Some(batch_id) = filtered_batch_id.as_deref() { ctx.scheduler.pop_for_llm(Some(batch_id)) } else { ctx.scheduler.pop_any() };
     let task = match task {
         Some(task) => task,
         None => {
@@ -111,10 +100,7 @@ fn module_path_from_relative_file(path: &str, module_hint: Option<&str>) -> Stri
     }
     let path = Path::new(path);
     let rel = path.strip_prefix("src").ok().unwrap_or(path);
-    let mut segments = rel
-        .components()
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect::<Vec<_>>();
+    let mut segments = rel.components().filter_map(|component| component.as_os_str().to_str()).collect::<Vec<_>>();
     let filename = segments.pop().unwrap_or("lib.rs");
     let mut module_segments = vec!["crate".to_string()];
     for segment in segments {
@@ -137,20 +123,13 @@ fn semantic_graph_expectations(planned: &LoopPlanned) -> Vec<GraphProofExpectati
             let new = planned.action_payload.get("new").and_then(|v| v.as_str());
             let path = planned.action_payload.get("path").and_then(|v| v.as_str());
             match (old, new, path) {
-                (Some(old), Some(new), Some(path)) => vec![GraphProofExpectation::Rename {
-                    old_symbol: old.to_string(),
-                    new_symbol: new.to_string(),
-                    path: path.to_string(),
-                }],
+                (Some(old), Some(new), Some(path)) => vec![GraphProofExpectation::Rename { old_symbol: old.to_string(), new_symbol: new.to_string(), path: path.to_string() }],
                 _ => Vec::new(),
             }
         }
         "edit.move_symbol" => {
             let symbol_id = planned.action_payload.get("symbol_id").and_then(|v| v.as_str());
-            let new_module_path = planned
-                .action_payload
-                .get("new_module_path")
-                .and_then(|v| v.as_str());
+            let new_module_path = planned.action_payload.get("new_module_path").and_then(|v| v.as_str());
             match (symbol_id, new_module_path) {
                 (Some(old_symbol), Some(new_module_path)) => {
                     let name = old_symbol.rsplit("::").next().unwrap_or(old_symbol);
@@ -169,10 +148,7 @@ fn semantic_graph_expectations(planned: &LoopPlanned) -> Vec<GraphProofExpectati
             let import = planned.action_payload.get("import").and_then(|v| v.as_str());
             let path = planned.action_payload.get("path").and_then(|v| v.as_str());
             match (import, path) {
-                (Some(import), Some(path)) => vec![GraphProofExpectation::Import {
-                    import_path: import.to_string(),
-                    path: path.to_string(),
-                }],
+                (Some(import), Some(path)) => vec![GraphProofExpectation::Import { import_path: import.to_string(), path: path.to_string() }],
                 _ => Vec::new(),
             }
         }
@@ -180,10 +156,7 @@ fn semantic_graph_expectations(planned: &LoopPlanned) -> Vec<GraphProofExpectati
             let path = planned.action_payload.get("path").and_then(|v| v.as_str());
             let module = planned.action_payload.get("module").and_then(|v| v.as_str());
             match path {
-                Some(path) => vec![GraphProofExpectation::CreateModule {
-                    module_path: module_path_from_relative_file(path, module),
-                    path: path.to_string(),
-                }],
+                Some(path) => vec![GraphProofExpectation::CreateModule { module_path: module_path_from_relative_file(path, module), path: path.to_string() }],
                 None => Vec::new(),
             }
         }
@@ -192,10 +165,7 @@ fn semantic_graph_expectations(planned: &LoopPlanned) -> Vec<GraphProofExpectati
 }
 
 fn module_relative_file(module_path: &str) -> String {
-    let mut segments = module_path
-        .split("::")
-        .filter(|segment| !segment.is_empty() && *segment != "crate")
-        .collect::<Vec<_>>();
+    let mut segments = module_path.split("::").filter(|segment| !segment.is_empty() && *segment != "crate").collect::<Vec<_>>();
     if segments.is_empty() {
         return "src/lib.rs".to_string();
     }
@@ -208,21 +178,11 @@ fn module_relative_file(module_path: &str) -> String {
 }
 
 fn run_semantic_graph_proof(project: &Path, planned: &LoopPlanned) -> GraphProofOutcome {
-    let refresh = Command::new("cargo")
-        .arg("check")
-        .arg("--quiet")
-        .current_dir(project)
-        .env("CARGO_TARGET_DIR", project.join("target"))
-        .output();
+    let refresh = Command::new("cargo").arg("check").arg("--quiet").current_dir(project).env("CARGO_TARGET_DIR", project.join("target")).output();
     let refresh = match refresh {
         Ok(output) => output,
         Err(err) => {
-            return GraphProofOutcome {
-                verified: false,
-                summary: format!("graph refresh failed: {err}"),
-                artifact_id: None,
-                failures: vec![format!("cargo check invocation failed: {err}")],
-            };
+            return GraphProofOutcome { verified: false, summary: format!("graph refresh failed: {err}"), artifact_id: None, failures: vec![format!("cargo check invocation failed: {err}")] };
         }
     };
     if !refresh.status.success() {
@@ -235,29 +195,15 @@ fn run_semantic_graph_proof(project: &Path, planned: &LoopPlanned) -> GraphProof
     }
     let expectations = semantic_graph_expectations(planned);
     match verify_graph_expectations(project, &expectations) {
-        Ok(report) => GraphProofOutcome {
-            verified: report.verified,
-            summary: report.summary,
-            artifact_id: report.artifact_id,
-            failures: report.failures,
-        },
-        Err(err) => GraphProofOutcome {
-            verified: false,
-            summary: format!("graph proof failed to execute: {err}"),
-            artifact_id: None,
-            failures: vec![err.to_string()],
-        },
+        Ok(report) => GraphProofOutcome { verified: report.verified, summary: report.summary, artifact_id: report.artifact_id, failures: report.failures },
+        Err(err) => GraphProofOutcome { verified: false, summary: format!("graph proof failed to execute: {err}"), artifact_id: None, failures: vec![err.to_string()] },
     }
 }
 
 fn proof_debug_event(planned: &LoopPlanned, project: &Path, proof: &GraphProofOutcome) -> RuntimeEvent {
     RuntimeEvent::Debug(canon_event::DebugEvent {
         source: "act_stage".to_string(),
-        kind: if proof.verified {
-            "semantic_graph_proof_verified".to_string()
-        } else {
-            "semantic_graph_proof_failed".to_string()
-        },
+        kind: if proof.verified { "semantic_graph_proof_verified".to_string() } else { "semantic_graph_proof_failed".to_string() },
         payload: decision_trace_payload(
             &proof.summary,
             serde_json::json!({
@@ -270,12 +216,7 @@ fn proof_debug_event(planned: &LoopPlanned, project: &Path, proof: &GraphProofOu
     })
 }
 
-fn emit_act_stall_with_context(
-    ctx: &LoopContext,
-    trigger_id: &EventId,
-    reason: &str,
-    extra: serde_json::Value,
-) {
+fn emit_act_stall_with_context(ctx: &LoopContext, trigger_id: &EventId, reason: &str, extra: serde_json::Value) {
     let Some(emitter) = ctx.emitter.as_ref() else {
         return;
     };
@@ -301,19 +242,7 @@ fn emit_act_stall_with_context(
         file!(),
         line!(),
     );
-    emitter.emit_child(
-        RuntimeEvent::ErrorOccurred(new_error_occurred(
-            "act_stall",
-            "act_stage",
-            reason.to_string(),
-            "warning",
-            payload,
-            None,
-        )),
-        vec![trigger_id.clone()],
-        file!(),
-        line!(),
-    );
+    emitter.emit_child(RuntimeEvent::ErrorOccurred(new_error_occurred("act_stall", "act_stage", reason.to_string(), "warning", payload, None)), vec![trigger_id.clone()], file!(), line!());
 }
 
 pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
@@ -477,31 +406,15 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_cmd")));
             };
-            let semantic_summary = ctx
-                .last_observed
-                .as_ref()
-                .map(|observed| observed.semantic_summary.clone())
-                .unwrap_or_default();
+            let semantic_summary = ctx.last_observed.as_ref().map(|observed| observed.semantic_summary.clone()).unwrap_or_default();
             // ExecState checks real filesystem state (does Cargo.toml exist?) against the
             // semantic target — i.e., the project being created/repaired, NOT the cwd from
             // which the command runs. Using cwd here incorrectly treats a parent workspace
             // as an "existing Cargo project", which blocks `cargo new` on bootstrap.
-            let constraint_target_root = semantic_summary
-                .target_root
-                .as_deref()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(cwd));
-            eprintln!(
-                "[act_stage] exec_state target_root={} cwd={} real_cargo_toml={}",
-                constraint_target_root.display(),
-                cwd,
-                constraint_target_root.join("Cargo.toml").exists(),
-            );
+            let constraint_target_root = semantic_summary.target_root.as_deref().map(PathBuf::from).unwrap_or_else(|| PathBuf::from(cwd));
+            eprintln!("[act_stage] exec_state target_root={} cwd={} real_cargo_toml={}", constraint_target_root.display(), cwd, constraint_target_root.join("Cargo.toml").exists(),);
             let target_root = PathBuf::from(cwd);
-            let mut exec_action = ExecAction::RunCommand {
-                cmd: cmd.to_string(),
-                cwd: target_root.clone(),
-            };
+            let mut exec_action = ExecAction::RunCommand { cmd: cmd.to_string(), cwd: target_root.clone() };
             let exec_state = ExecState::from_semantic_summary(&constraint_target_root, &semantic_summary);
             let mut rewrite_debug_event = None;
             match validate_exec_action(&exec_state, &exec_action) {
@@ -531,10 +444,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 ExecAction::RunCommand { cmd, cwd } => (cmd.as_str(), cwd.to_string_lossy().to_string()),
                 ExecAction::Other { .. } => {
                     ctx.mark_batch_inline_completion(planned, false);
-                    return Ok(LoopStageResult::Emit(emit_exec_constraint_rejection(
-                        planned,
-                        "meta_invariant_tool_selection_correctness: unsupported rewritten action kind",
-                    )));
+                    return Ok(LoopStageResult::Emit(emit_exec_constraint_rejection(planned, "meta_invariant_tool_selection_correctness: unsupported rewritten action kind")));
                 }
             };
             if is_potentially_destructive(cmd, &ctx.workspace) {
@@ -546,15 +456,20 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                     DestructiveCmdPolicy::Warn => {
                         // emit warning
                         if let Some(emitter) = ctx.emitter.as_ref() {
-                            emitter.emit_with_parents(canon_event::RuntimeEvent::Debug(canon_event::DebugEvent {
-                                source: "act_consumer".to_string(),
-                                kind: "destructive_command_warning".to_string(),
-                                payload: serde_json::json!({
-                                    "cmd": cmd,
-                                    "policy": ctx.destructive_cmd_policy.as_str(),
-                                    "action_id": planned.action_id,
+                            emitter.emit_with_parents(
+                                canon_event::RuntimeEvent::Debug(canon_event::DebugEvent {
+                                    source: "act_consumer".to_string(),
+                                    kind: "destructive_command_warning".to_string(),
+                                    payload: serde_json::json!({
+                                        "cmd": cmd,
+                                        "policy": ctx.destructive_cmd_policy.as_str(),
+                                        "action_id": planned.action_id,
+                                    }),
                                 }),
-                            }), vec![trigger_id.clone()], file!(), line!());
+                                vec![trigger_id.clone()],
+                                file!(),
+                                line!(),
+                            );
                         }
                     }
                     DestructiveCmdPolicy::Allow => {}
@@ -777,22 +692,13 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_rename_args")));
             };
-            let project = planned
-                .action_payload
-                .get("project")
-                .and_then(|v| v.as_str())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| ctx.workspace.clone());
+            let project = planned.action_payload.get("project").and_then(|v| v.as_str()).map(std::path::PathBuf::from).unwrap_or_else(|| ctx.workspace.clone());
             let node_id = tool_node_id(planned);
             let started = Instant::now();
             let report = rename_symbol_pairs(&project, &[(old.to_string(), new.to_string())]);
             let duration_ms = started.elapsed().as_millis() as u64;
             let mut success = report.error.is_none();
-            let proof = if success {
-                Some(run_semantic_graph_proof(&project, planned))
-            } else {
-                None
-            };
+            let proof = if success { Some(run_semantic_graph_proof(&project, planned)) } else { None };
             if let Some(proof) = &proof {
                 if !proof.verified {
                     success = false;
@@ -800,23 +706,14 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             }
             let stdout = if success {
                 if report.def_paths.is_empty() {
-                    format!(
-                        "rename_symbol ok: {old} -> {new}{}",
-                        proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
-                    )
+                    format!("rename_symbol ok: {old} -> {new}{}", proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default())
                 } else {
-                    format!(
-                        "rename_symbol ok: {old} -> {new}\n{}{}",
-                        report.def_paths.join("\n"),
-                        proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
-                    )
+                    format!("rename_symbol ok: {old} -> {new}\n{}{}", report.def_paths.join("\n"), proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default())
                 }
             } else {
                 String::new()
             };
-            let stderr = report
-                .error
-                .unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
+            let stderr = report.error.unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
                 "edit.rename_symbol",
@@ -874,30 +771,18 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
         }
         "edit.move_symbol" => {
             let symbol_id = planned.action_payload.get("symbol_id").and_then(|v| v.as_str());
-            let new_module_path = planned
-                .action_payload
-                .get("new_module_path")
-                .and_then(|v| v.as_str());
+            let new_module_path = planned.action_payload.get("new_module_path").and_then(|v| v.as_str());
             let (Some(symbol_id), Some(new_module_path)) = (symbol_id, new_module_path) else {
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_move_symbol_args")));
             };
-            let project = planned
-                .action_payload
-                .get("project")
-                .and_then(|v| v.as_str())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| ctx.workspace.clone());
+            let project = planned.action_payload.get("project").and_then(|v| v.as_str()).map(std::path::PathBuf::from).unwrap_or_else(|| ctx.workspace.clone());
             let node_id = tool_node_id(planned);
             let started = Instant::now();
             let report = move_symbol_pairs(&project, &[(symbol_id.to_string(), new_module_path.to_string())]);
             let duration_ms = started.elapsed().as_millis() as u64;
             let mut success = report.error.is_none();
-            let proof = if success {
-                Some(run_semantic_graph_proof(&project, planned))
-            } else {
-                None
-            };
+            let proof = if success { Some(run_semantic_graph_proof(&project, planned)) } else { None };
             if let Some(proof) = &proof {
                 if !proof.verified {
                     success = false;
@@ -905,23 +790,14 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             }
             let stdout = if success {
                 if report.def_paths.is_empty() {
-                    format!(
-                        "move_symbol ok: {symbol_id} -> {new_module_path}{}",
-                        proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
-                    )
+                    format!("move_symbol ok: {symbol_id} -> {new_module_path}{}", proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default())
                 } else {
-                    format!(
-                        "move_symbol ok: {symbol_id} -> {new_module_path}\n{}{}",
-                        report.def_paths.join("\n"),
-                        proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
-                    )
+                    format!("move_symbol ok: {symbol_id} -> {new_module_path}\n{}{}", report.def_paths.join("\n"), proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default())
                 }
             } else {
                 String::new()
             };
-            let stderr = report
-                .error
-                .unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
+            let stderr = report.error.unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
                 "edit.move_symbol",
@@ -984,38 +860,20 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_add_import_args")));
             };
-            let project = planned
-                .action_payload
-                .get("project")
-                .and_then(|v| v.as_str())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| ctx.workspace.clone());
+            let project = planned.action_payload.get("project").and_then(|v| v.as_str()).map(std::path::PathBuf::from).unwrap_or_else(|| ctx.workspace.clone());
             let node_id = tool_node_id(planned);
             let started = Instant::now();
             let report = add_import_paths(&project, &[(path.to_string(), import.to_string())]);
             let duration_ms = started.elapsed().as_millis() as u64;
             let mut success = report.error.is_none();
-            let proof = if success {
-                Some(run_semantic_graph_proof(&project, planned))
-            } else {
-                None
-            };
+            let proof = if success { Some(run_semantic_graph_proof(&project, planned)) } else { None };
             if let Some(proof) = &proof {
                 if !proof.verified {
                     success = false;
                 }
             }
-            let stdout = if success {
-                format!(
-                    "add_import ok: {import} -> {path}{}",
-                    proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
-                )
-            } else {
-                String::new()
-            };
-            let stderr = report
-                .error
-                .unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
+            let stdout = if success { format!("add_import ok: {import} -> {path}{}", proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()) } else { String::new() };
+            let stderr = report.error.unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
                 "edit.add_import",
@@ -1024,7 +882,23 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 success,
             );
             let acted = emit_acted(
-                PendingAct { tick: planned.tick, action_kind: planned.action_kind.clone(), tool_kind: "edit.add_import".to_string(), request_id: String::new(), tool_call_id: String::new(), node_id: node_id.clone(), started_at: started, trace_id: planned.trace_id.clone(), execution_id: planned.execution_id.clone(), parent_span_id: planned.span_id.clone(), plan_id: planned.plan_id.clone(), plan_step_id: planned.plan_step_id.clone(), action_id: planned.action_id.clone(), artifact_n: 0, llm_request_id: planned.llm_request_id.clone() },
+                PendingAct {
+                    tick: planned.tick,
+                    action_kind: planned.action_kind.clone(),
+                    tool_kind: "edit.add_import".to_string(),
+                    request_id: String::new(),
+                    tool_call_id: String::new(),
+                    node_id: node_id.clone(),
+                    started_at: started,
+                    trace_id: planned.trace_id.clone(),
+                    execution_id: planned.execution_id.clone(),
+                    parent_span_id: planned.span_id.clone(),
+                    plan_id: planned.plan_id.clone(),
+                    plan_step_id: planned.plan_step_id.clone(),
+                    action_id: planned.action_id.clone(),
+                    artifact_n: 0,
+                    llm_request_id: planned.llm_request_id.clone(),
+                },
                 stdout,
                 stderr,
                 None,
@@ -1056,22 +930,13 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_define_symbol_stub_args")));
             };
-            let project = planned
-                .action_payload
-                .get("project")
-                .and_then(|v| v.as_str())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| ctx.workspace.clone());
+            let project = planned.action_payload.get("project").and_then(|v| v.as_str()).map(std::path::PathBuf::from).unwrap_or_else(|| ctx.workspace.clone());
             let node_id = tool_node_id(planned);
             let started = Instant::now();
             let report = define_symbol_stubs(&project, &[(path.to_string(), symbol.to_string(), kind.to_string())]);
             let duration_ms = started.elapsed().as_millis() as u64;
             let success = report.error.is_none();
-            let stdout = if success {
-                format!("define_symbol_stub ok: {symbol} ({kind}) -> {path}")
-            } else {
-                String::new()
-            };
+            let stdout = if success { format!("define_symbol_stub ok: {symbol} ({kind}) -> {path}") } else { String::new() };
             let stderr = report.error.unwrap_or_default();
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
@@ -1081,7 +946,23 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 success,
             );
             let acted = emit_acted(
-                PendingAct { tick: planned.tick, action_kind: planned.action_kind.clone(), tool_kind: "edit.define_symbol_stub".to_string(), request_id: String::new(), tool_call_id: String::new(), node_id: node_id.clone(), started_at: started, trace_id: planned.trace_id.clone(), execution_id: planned.execution_id.clone(), parent_span_id: planned.span_id.clone(), plan_id: planned.plan_id.clone(), plan_step_id: planned.plan_step_id.clone(), action_id: planned.action_id.clone(), artifact_n: 0, llm_request_id: planned.llm_request_id.clone() },
+                PendingAct {
+                    tick: planned.tick,
+                    action_kind: planned.action_kind.clone(),
+                    tool_kind: "edit.define_symbol_stub".to_string(),
+                    request_id: String::new(),
+                    tool_call_id: String::new(),
+                    node_id: node_id.clone(),
+                    started_at: started,
+                    trace_id: planned.trace_id.clone(),
+                    execution_id: planned.execution_id.clone(),
+                    parent_span_id: planned.span_id.clone(),
+                    plan_id: planned.plan_id.clone(),
+                    plan_step_id: planned.plan_step_id.clone(),
+                    action_id: planned.action_id.clone(),
+                    artifact_n: 0,
+                    llm_request_id: planned.llm_request_id.clone(),
+                },
                 stdout,
                 stderr,
                 None,
@@ -1098,38 +979,20 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 ctx.mark_batch_inline_completion(planned, false);
                 return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_create_module_file_args")));
             };
-            let project = planned
-                .action_payload
-                .get("project")
-                .and_then(|v| v.as_str())
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| ctx.workspace.clone());
+            let project = planned.action_payload.get("project").and_then(|v| v.as_str()).map(std::path::PathBuf::from).unwrap_or_else(|| ctx.workspace.clone());
             let node_id = tool_node_id(planned);
             let started = Instant::now();
             let report = create_module_files(&project, &[(path.to_string(), module.map(ToString::to_string))]);
             let duration_ms = started.elapsed().as_millis() as u64;
             let mut success = report.error.is_none();
-            let proof = if success {
-                Some(run_semantic_graph_proof(&project, planned))
-            } else {
-                None
-            };
+            let proof = if success { Some(run_semantic_graph_proof(&project, planned)) } else { None };
             if let Some(proof) = &proof {
                 if !proof.verified {
                     success = false;
                 }
             }
-            let stdout = if success {
-                format!(
-                    "create_module_file ok: {path}{}",
-                    proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()
-                )
-            } else {
-                String::new()
-            };
-            let stderr = report
-                .error
-                .unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
+            let stdout = if success { format!("create_module_file ok: {path}{}", proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()) } else { String::new() };
+            let stderr = report.error.unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
             let tool_result = inline_tool_result(
                 "edit.create_module_file",
@@ -1138,7 +1001,23 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 success,
             );
             let acted = emit_acted(
-                PendingAct { tick: planned.tick, action_kind: planned.action_kind.clone(), tool_kind: "edit.create_module_file".to_string(), request_id: String::new(), tool_call_id: String::new(), node_id: node_id.clone(), started_at: started, trace_id: planned.trace_id.clone(), execution_id: planned.execution_id.clone(), parent_span_id: planned.span_id.clone(), plan_id: planned.plan_id.clone(), plan_step_id: planned.plan_step_id.clone(), action_id: planned.action_id.clone(), artifact_n: 0, llm_request_id: planned.llm_request_id.clone() },
+                PendingAct {
+                    tick: planned.tick,
+                    action_kind: planned.action_kind.clone(),
+                    tool_kind: "edit.create_module_file".to_string(),
+                    request_id: String::new(),
+                    tool_call_id: String::new(),
+                    node_id: node_id.clone(),
+                    started_at: started,
+                    trace_id: planned.trace_id.clone(),
+                    execution_id: planned.execution_id.clone(),
+                    parent_span_id: planned.span_id.clone(),
+                    plan_id: planned.plan_id.clone(),
+                    plan_step_id: planned.plan_step_id.clone(),
+                    action_id: planned.action_id.clone(),
+                    artifact_n: 0,
+                    llm_request_id: planned.llm_request_id.clone(),
+                },
                 stdout,
                 stderr,
                 None,

@@ -110,19 +110,8 @@ pub struct CompilerHintRecord {
 }
 
 impl CompilerHintRecord {
-    pub fn new(
-        kind: CompilerHintKind,
-        summary: impl Into<String>,
-        suggested_repair: impl Into<String>,
-        target_files: Vec<String>,
-    ) -> Self {
-        Self {
-            kind: kind.as_str().to_string(),
-            summary: summary.into(),
-            suggested_repair: suggested_repair.into(),
-            target_files,
-            failure_scope: FailureScopeKind::None.as_str().to_string(),
-        }
+    pub fn new(kind: CompilerHintKind, summary: impl Into<String>, suggested_repair: impl Into<String>, target_files: Vec<String>) -> Self {
+        Self { kind: kind.as_str().to_string(), summary: summary.into(), suggested_repair: suggested_repair.into(), target_files, failure_scope: FailureScopeKind::None.as_str().to_string() }
     }
 
     pub fn with_failure_scope(mut self, scope: FailureScopeKind) -> Self {
@@ -139,15 +128,8 @@ impl CompilerHintRecord {
     }
 
     pub fn render_line(&self) -> String {
-        let targets = if self.target_files.is_empty() {
-            "none".to_string()
-        } else {
-            self.target_files.join("|")
-        };
-        format!(
-            "kind={} scope={} targets={} summary={} repair={}",
-            self.kind, self.failure_scope, targets, self.summary, self.suggested_repair
-        )
+        let targets = if self.target_files.is_empty() { "none".to_string() } else { self.target_files.join("|") };
+        format!("kind={} scope={} targets={} summary={} repair={}", self.kind, self.failure_scope, targets, self.summary, self.suggested_repair)
     }
 }
 
@@ -217,14 +199,8 @@ impl SemanticStateSummary {
         for hint in &self.compiler_hints {
             facts.push(format!("semantic.compiler_hint={}", hint.render_line()));
         }
-        facts.push(format!(
-            "semantic.validation_blocked_by_preconditions={}",
-            self.validation_blocked_by_preconditions
-        ));
-        facts.push(format!(
-            "semantic.compiler_repair_required={}",
-            self.compiler_repair_required
-        ));
+        facts.push(format!("semantic.validation_blocked_by_preconditions={}", self.validation_blocked_by_preconditions));
+        facts.push(format!("semantic.compiler_repair_required={}", self.compiler_repair_required));
         if let Some(value) = &self.failure_class {
             facts.push(format!("semantic.failure_class={value}"));
         }
@@ -256,14 +232,7 @@ impl SemanticStateSummary {
     }
 
     pub fn apply_graph_artifact_summary(
-        &mut self,
-        artifact_id: String,
-        node_count: usize,
-        edge_count: usize,
-        file_count: usize,
-        call_edge_count: usize,
-        module_edge_count: usize,
-        cfg_edge_count: usize,
+        &mut self, artifact_id: String, node_count: usize, edge_count: usize, file_count: usize, call_edge_count: usize, module_edge_count: usize, cfg_edge_count: usize,
     ) {
         self.graph_artifact_id = Some(artifact_id);
         self.graph_node_count = Some(node_count);
@@ -277,17 +246,16 @@ impl SemanticStateSummary {
     pub fn apply_rustc_capture_failure(&mut self, message: &str) {
         self.compiler_repair_required = true;
         self.failure_class = Some(FailureClassKind::GenericCompilerFailure.as_str().to_string());
-        if !self.compiler_hints.iter().any(|hint| {
-            hint.kind_enum() == Some(CompilerHintKind::GenericCompilerFailure)
-                && hint.summary == format!("rustc capture failed: {message}")
-        }) {
-            self.compiler_hints.push(CompilerHintRecord::new(
-                CompilerHintKind::GenericCompilerFailure,
-                format!("rustc capture failed: {message}"),
-                "refresh compiler context or stabilize rustc capture before structural analysis",
-                Vec::new(),
-            )
-            .with_failure_scope(FailureScopeKind::Tooling));
+        if !self.compiler_hints.iter().any(|hint| hint.kind_enum() == Some(CompilerHintKind::GenericCompilerFailure) && hint.summary == format!("rustc capture failed: {message}")) {
+            self.compiler_hints.push(
+                CompilerHintRecord::new(
+                    CompilerHintKind::GenericCompilerFailure,
+                    format!("rustc capture failed: {message}"),
+                    "refresh compiler context or stabilize rustc capture before structural analysis",
+                    Vec::new(),
+                )
+                .with_failure_scope(FailureScopeKind::Tooling),
+            );
         }
         self.failure_scope = Some(FailureScopeKind::Tooling.as_str().to_string());
     }
@@ -325,9 +293,7 @@ impl SemanticStateSummary {
                 if let Some(hint) = parse_compiler_hint_record(value) {
                     summary.compiler_hints.push(hint);
                 }
-            } else if let Some(value) =
-                fact.strip_prefix("semantic.validation_blocked_by_preconditions=")
-            {
+            } else if let Some(value) = fact.strip_prefix("semantic.validation_blocked_by_preconditions=") {
                 summary.validation_blocked_by_preconditions = value == "true";
             } else if let Some(value) = fact.strip_prefix("semantic.compiler_repair_required=") {
                 summary.compiler_repair_required = value == "true";
@@ -419,9 +385,7 @@ impl SemanticStateSummary {
         if let Some(value) = &self.failure_class {
             return Some(value.clone());
         }
-        self.compiler_hints
-            .iter()
-            .find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()))
+        self.compiler_hints.iter().find_map(|hint| hint.kind_enum().map(|kind| kind.as_str().to_string()))
     }
 
     pub fn compact_block(&self) -> String {
@@ -430,15 +394,9 @@ impl SemanticStateSummary {
             format!("complete={}", self.complete),
             format!("path_exists={}", self.path_exists),
             format!("cargo_project={}", self.cargo_project),
-            format!(
-                "entrypoint_kind={}",
-                self.entrypoint_kind.as_deref().unwrap_or("NA")
-            ),
+            format!("entrypoint_kind={}", self.entrypoint_kind.as_deref().unwrap_or("NA")),
             format!("crate_name={}", self.crate_name.as_deref().unwrap_or("NA")),
-            format!(
-                "validation_blocked={}",
-                self.validation_blocked_by_preconditions
-            ),
+            format!("validation_blocked={}", self.validation_blocked_by_preconditions),
             format!("compiler_repair_required={}", self.compiler_repair_required),
         ];
         if let Some(failure_scope) = &self.failure_scope {
@@ -469,11 +427,7 @@ impl SemanticStateSummary {
     }
 
     pub fn render_planner_block(&self) -> String {
-        let compiler_hint_lines = self
-            .compiler_hints
-            .iter()
-            .map(CompilerHintRecord::render_line)
-            .collect::<Vec<_>>();
+        let compiler_hint_lines = self.compiler_hints.iter().map(CompilerHintRecord::render_line).collect::<Vec<_>>();
         format!(
             "Environment model:\n{}\n\nPlanning preconditions:\n{}\n\nRepair intents:\n{}\n\nCompiler hints:\n{}\n\nSemantic summary:\n{}",
             render_bullets(&self.planner_lines()),
@@ -488,7 +442,6 @@ impl SemanticStateSummary {
         format!("Semantic summary:\n{}", self.compact_block())
     }
 }
-
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LlmSemanticContext {
@@ -634,14 +587,8 @@ impl SelfDevelopmentObjectiveState {
         vec![
             format!("semantic_progress_rate={:.2}", self.semantic_progress_rate),
             format!("semantic_no_progress_streak={}", self.semantic_no_progress_streak),
-            format!(
-                "consecutive_invalid_plan_batches={}",
-                self.consecutive_invalid_plan_batches
-            ),
-            format!(
-                "validation_blocked_by_preconditions={}",
-                self.validation_blocked_by_preconditions
-            ),
+            format!("consecutive_invalid_plan_batches={}", self.consecutive_invalid_plan_batches),
+            format!("validation_blocked_by_preconditions={}", self.validation_blocked_by_preconditions),
             format!("compiler_repair_required={}", self.compiler_repair_required),
             format!("misalignment_pressure_score={}", self.misalignment_pressure_score),
             format!("repair_pressure_score={}", self.repair_pressure_score()),
@@ -713,23 +660,14 @@ impl ObjectiveTrendState {
         self.current_module_gap_count = Some(module_gap_count);
         self.baseline_module_gap_count.get_or_insert(module_gap_count);
 
-        let test_surface_count = semantic_summary
-            .source_files
-            .iter()
-            .filter(|path| {
-                path.contains("/tests/")
-                    || path.starts_with("tests/")
-                    || path.ends_with("_test.rs")
-                    || path.ends_with("_tests.rs")
-            })
-            .count() as u32;
+        let test_surface_count =
+            semantic_summary.source_files.iter().filter(|path| path.contains("/tests/") || path.starts_with("tests/") || path.ends_with("_test.rs") || path.ends_with("_tests.rs")).count() as u32;
         self.current_test_surface_count = Some(test_surface_count);
         self.baseline_test_surface_count.get_or_insert(test_surface_count);
     }
 
     pub fn record_route_objective_contradiction(&mut self) {
-        self.route_objective_contradiction_events =
-            self.route_objective_contradiction_events.saturating_add(1);
+        self.route_objective_contradiction_events = self.route_objective_contradiction_events.saturating_add(1);
     }
 
     pub fn record_goal_objective_drift(&mut self) {
@@ -765,13 +703,11 @@ impl ObjectiveTrendState {
     }
 
     pub fn module_gap_delta(&self) -> i32 {
-        self.current_module_gap_count.unwrap_or(0) as i32
-            - self.baseline_module_gap_count.unwrap_or(0) as i32
+        self.current_module_gap_count.unwrap_or(0) as i32 - self.baseline_module_gap_count.unwrap_or(0) as i32
     }
 
     pub fn test_surface_delta(&self) -> i32 {
-        self.current_test_surface_count.unwrap_or(0) as i32
-            - self.baseline_test_surface_count.unwrap_or(0) as i32
+        self.current_test_surface_count.unwrap_or(0) as i32 - self.baseline_test_surface_count.unwrap_or(0) as i32
     }
 
     pub fn render_lines(&self) -> Vec<String> {
@@ -780,44 +716,25 @@ impl ObjectiveTrendState {
             format!("invalid_plan_rate={:.2}", self.invalid_plan_rate()),
             format!("semantic_progress_trend={:.2}", self.semantic_progress_trend()),
             format!("repeated_stall_count={}", self.repeated_stall_count),
-            format!(
-                "route_objective_contradiction_events={}",
-                self.route_objective_contradiction_events
-            ),
-            format!(
-                "goal_objective_drift_events={}",
-                self.goal_objective_drift_events
-            ),
+            format!("route_objective_contradiction_events={}", self.route_objective_contradiction_events),
+            format!("goal_objective_drift_events={}", self.goal_objective_drift_events),
             format!("compiler_error_delta={}", self.compiler_error_delta()),
             format!("module_gap_delta={}", self.module_gap_delta()),
             format!("test_surface_delta={}", self.test_surface_delta()),
             format!("total_execution_results={}", self.total_execution_results),
             format!("planning_attempts={}", self.planning_attempts),
-            format!(
-                "last_goodness={}",
-                self.last_goodness
-                    .map(|v| format!("{v:.3}"))
-                    .unwrap_or_else(|| "NA".into())
-            ),
-            format!(
-                "last_delta_g={}",
-                self.last_delta_g
-                    .map(|v| format!("{v:.3}"))
-                    .unwrap_or_else(|| "NA".into())
-            ),
+            format!("last_goodness={}", self.last_goodness.map(|v| format!("{v:.3}")).unwrap_or_else(|| "NA".into())),
+            format!("last_delta_g={}", self.last_delta_g.map(|v| format!("{v:.3}")).unwrap_or_else(|| "NA".into())),
         ]
     }
 
     pub fn primary_objective(&self, objective_state: &SelfDevelopmentObjectiveState) -> &'static str {
-        primary_development_objective_kind(objective_state, self, &SemanticStateSummary::default())
-            .focus_text()
+        primary_development_objective_kind(objective_state, self, &SemanticStateSummary::default()).focus_text()
     }
 }
 
 pub fn primary_development_objective_kind(
-    objective_state: &SelfDevelopmentObjectiveState,
-    objective_trend_state: &ObjectiveTrendState,
-    semantic_summary: &SemanticStateSummary,
+    objective_state: &SelfDevelopmentObjectiveState, objective_trend_state: &ObjectiveTrendState, semantic_summary: &SemanticStateSummary,
 ) -> DevelopmentObjectiveKind {
     derive_development_objectives(semantic_summary, objective_state, objective_trend_state)
         .into_iter()
@@ -827,34 +744,20 @@ pub fn primary_development_objective_kind(
 }
 
 pub fn primary_development_strategy_kind(
-    objective_state: &SelfDevelopmentObjectiveState,
-    objective_trend_state: &ObjectiveTrendState,
-    semantic_summary: &SemanticStateSummary,
+    objective_state: &SelfDevelopmentObjectiveState, objective_trend_state: &ObjectiveTrendState, semantic_summary: &SemanticStateSummary,
 ) -> DevelopmentStrategyKind {
-    let primary_objective =
-        primary_development_objective_kind(objective_state, objective_trend_state, semantic_summary);
+    let primary_objective = primary_development_objective_kind(objective_state, objective_trend_state, semantic_summary);
 
     if objective_state.misalignment_pressure_score > 0 {
         return DevelopmentStrategyKind::RealignObjectiveFlow;
     }
-    if semantic_summary
-        .compiler_hints
-        .iter()
-        .any(|hint| hint.kind_enum() == Some(CompilerHintKind::DeadCodeForbidConflict))
-    {
+    if semantic_summary.compiler_hints.iter().any(|hint| hint.kind_enum() == Some(CompilerHintKind::DeadCodeForbidConflict)) {
         return DevelopmentStrategyKind::FixConfigLintPolicy;
     }
-    if objective_trend_state.repeated_stall_count > 0
-        && objective_state.semantic_no_progress_streak >= 2
-    {
+    if objective_trend_state.repeated_stall_count > 0 && objective_state.semantic_no_progress_streak >= 2 {
         return DevelopmentStrategyKind::RefreshContextBeforeRetry;
     }
-    if semantic_summary.graph_artifact_id.is_some()
-        && semantic_summary
-            .compiler_hints
-            .iter()
-            .any(|hint| hint.kind_enum() == Some(CompilerHintKind::DuplicateDefinition))
-    {
+    if semantic_summary.graph_artifact_id.is_some() && semantic_summary.compiler_hints.iter().any(|hint| hint.kind_enum() == Some(CompilerHintKind::DuplicateDefinition)) {
         return DevelopmentStrategyKind::PlanSymbolAwareRename;
     }
 
@@ -868,12 +771,7 @@ pub fn primary_development_strategy_kind(
         }
         DevelopmentObjectiveKind::ReduceContradictionRate => DevelopmentStrategyKind::RealignObjectiveFlow,
         DevelopmentObjectiveKind::IncreaseTestCoverage => {
-            let has_test_files = semantic_summary.source_files.iter().any(|path| {
-                path.contains("/tests/")
-                    || path.starts_with("tests/")
-                    || path.ends_with("_test.rs")
-                    || path.ends_with("_tests.rs")
-            });
+            let has_test_files = semantic_summary.source_files.iter().any(|path| path.contains("/tests/") || path.starts_with("tests/") || path.ends_with("_test.rs") || path.ends_with("_tests.rs"));
             if has_test_files {
                 DevelopmentStrategyKind::AddRegressionTest
             } else {
@@ -881,16 +779,12 @@ pub fn primary_development_strategy_kind(
             }
         }
         DevelopmentObjectiveKind::DecreaseInvalidPlanRate => DevelopmentStrategyKind::SimplifyPlanBatch,
-        DevelopmentObjectiveKind::ReduceStalledLoopFrequency => {
-            DevelopmentStrategyKind::RefreshContextBeforeRetry
-        }
+        DevelopmentObjectiveKind::ReduceStalledLoopFrequency => DevelopmentStrategyKind::RefreshContextBeforeRetry,
         DevelopmentObjectiveKind::ImproveModuleCohesion => {
             let has_dense_module_graph = semantic_summary
                 .graph_module_edge_count
                 .zip(semantic_summary.graph_call_edge_count)
-                .is_some_and(|(module_edges, call_edges)| {
-                    module_edges > call_edges.saturating_mul(4) && module_edges > 32
-                });
+                .is_some_and(|(module_edges, call_edges)| module_edges > call_edges.saturating_mul(4) && module_edges > 32);
             if !semantic_summary.module_gaps.is_empty() {
                 DevelopmentStrategyKind::CreateMissingModules
             } else if has_dense_module_graph && semantic_summary.graph_artifact_id.is_some() {
@@ -903,16 +797,9 @@ pub fn primary_development_strategy_kind(
 }
 
 pub fn derive_development_objectives(
-    semantic_summary: &SemanticStateSummary,
-    objective_state: &SelfDevelopmentObjectiveState,
-    objective_trend_state: &ObjectiveTrendState,
+    semantic_summary: &SemanticStateSummary, objective_state: &SelfDevelopmentObjectiveState, objective_trend_state: &ObjectiveTrendState,
 ) -> Vec<DevelopmentObjective> {
-    let has_test_files = semantic_summary.source_files.iter().any(|path| {
-        path.contains("/tests/")
-            || path.starts_with("tests/")
-            || path.ends_with("_test.rs")
-            || path.ends_with("_tests.rs")
-    });
+    let has_test_files = semantic_summary.source_files.iter().any(|path| path.contains("/tests/") || path.starts_with("tests/") || path.ends_with("_test.rs") || path.ends_with("_tests.rs"));
     let rust_file_count = semantic_summary.rust_file_count.unwrap_or(0);
     let mut objectives = vec![
         DevelopmentObjective {
@@ -933,11 +820,7 @@ pub fn derive_development_objectives(
             kind: DevelopmentObjectiveKind::ReduceContradictionRate,
             priority_score: objective_state.misalignment_pressure_score,
             rationale: "goal/route/planner drift has been observed".to_string(),
-            progress_summary: format!(
-                "route_contradictions={} goal_drifts={}",
-                objective_trend_state.route_objective_contradiction_events,
-                objective_trend_state.goal_objective_drift_events
-            ),
+            progress_summary: format!("route_contradictions={} goal_drifts={}", objective_trend_state.route_objective_contradiction_events, objective_trend_state.goal_objective_drift_events),
         },
         DevelopmentObjective {
             kind: DevelopmentObjectiveKind::IncreaseTestCoverage,
@@ -945,46 +828,25 @@ pub fn derive_development_objectives(
                 + u32::from(semantic_summary.path_exists && semantic_summary.cargo_project)
                 + u32::from(objective_trend_state.test_surface_delta() <= 0),
             rationale: "the workspace has little or no visible test surface".to_string(),
-            progress_summary: format!(
-                "has_test_files={has_test_files} rust_file_count={rust_file_count} test_surface_delta={}",
-                objective_trend_state.test_surface_delta()
-            ),
+            progress_summary: format!("has_test_files={has_test_files} rust_file_count={rust_file_count} test_surface_delta={}", objective_trend_state.test_surface_delta()),
         },
         DevelopmentObjective {
             kind: DevelopmentObjectiveKind::DecreaseInvalidPlanRate,
-            priority_score: if objective_trend_state.invalid_plan_rate() > 0.0 {
-                1 + objective_trend_state.invalid_plan_events
-            } else {
-                0
-            },
+            priority_score: if objective_trend_state.invalid_plan_rate() > 0.0 { 1 + objective_trend_state.invalid_plan_events } else { 0 },
             rationale: "invalid plans are reducing execution throughput".to_string(),
-            progress_summary: format!(
-                "invalid_plan_events={} invalid_plan_rate={:.2}",
-                objective_trend_state.invalid_plan_events,
-                objective_trend_state.invalid_plan_rate()
-            ),
+            progress_summary: format!("invalid_plan_events={} invalid_plan_rate={:.2}", objective_trend_state.invalid_plan_events, objective_trend_state.invalid_plan_rate()),
         },
         DevelopmentObjective {
             kind: DevelopmentObjectiveKind::ReduceStalledLoopFrequency,
-            priority_score: objective_trend_state.repeated_stall_count
-                + objective_state.semantic_no_progress_streak as u32,
+            priority_score: objective_trend_state.repeated_stall_count + objective_state.semantic_no_progress_streak as u32,
             rationale: "the loop is repeating without semantic progress".to_string(),
-            progress_summary: format!(
-                "no_progress_streak={} repeated_stall_count={}",
-                objective_state.semantic_no_progress_streak,
-                objective_trend_state.repeated_stall_count
-            ),
+            progress_summary: format!("no_progress_streak={} repeated_stall_count={}", objective_state.semantic_no_progress_streak, objective_trend_state.repeated_stall_count),
         },
         DevelopmentObjective {
             kind: DevelopmentObjectiveKind::ImproveModuleCohesion,
             priority_score: semantic_summary.module_gaps.len() as u32
                 + u32::from(rust_file_count >= 8)
-                + u32::from(
-                    semantic_summary
-                        .graph_module_edge_count
-                        .zip(semantic_summary.graph_call_edge_count)
-                        .is_some_and(|(module_edges, call_edges)| module_edges > call_edges.saturating_mul(8)),
-                )
+                + u32::from(semantic_summary.graph_module_edge_count.zip(semantic_summary.graph_call_edge_count).is_some_and(|(module_edges, call_edges)| module_edges > call_edges.saturating_mul(8)))
                 + objective_trend_state.module_gap_delta().max(0) as u32,
             rationale: "module gaps or graph sprawl indicate structural cohesion issues".to_string(),
             progress_summary: format!(
@@ -997,53 +859,25 @@ pub fn derive_development_objectives(
             ),
         },
     ];
-    objectives.sort_by(|a, b| {
-        b.priority_score
-            .cmp(&a.priority_score)
-            .then_with(|| a.kind.as_str().cmp(b.kind.as_str()))
-    });
+    objectives.sort_by(|a, b| b.priority_score.cmp(&a.priority_score).then_with(|| a.kind.as_str().cmp(b.kind.as_str())));
     objectives
 }
 
-fn development_objective_lines(
-    semantic_summary: &SemanticStateSummary,
-    objective_state: &SelfDevelopmentObjectiveState,
-    objective_trend_state: &ObjectiveTrendState,
-) -> Vec<String> {
+fn development_objective_lines(semantic_summary: &SemanticStateSummary, objective_state: &SelfDevelopmentObjectiveState, objective_trend_state: &ObjectiveTrendState) -> Vec<String> {
     derive_development_objectives(semantic_summary, objective_state, objective_trend_state)
         .into_iter()
         .filter(|objective| objective.priority_score > 0)
-        .map(|objective| {
-            format!(
-                "kind={} priority={} progress={} rationale={}",
-                objective.kind.as_str(),
-                objective.priority_score,
-                objective.progress_summary,
-                objective.rationale
-            )
-        })
+        .map(|objective| format!("kind={} priority={} progress={} rationale={}", objective.kind.as_str(), objective.priority_score, objective.progress_summary, objective.rationale))
         .collect()
 }
 
 impl LlmSemanticContext {
     fn primary_objective_kind(&self) -> DevelopmentObjectiveKind {
-        self.forced_primary_objective.unwrap_or_else(|| {
-            primary_development_objective_kind(
-                &self.objective_state,
-                &self.objective_trend_state,
-                &self.semantic_summary,
-            )
-        })
+        self.forced_primary_objective.unwrap_or_else(|| primary_development_objective_kind(&self.objective_state, &self.objective_trend_state, &self.semantic_summary))
     }
 
     fn primary_strategy_kind(&self) -> DevelopmentStrategyKind {
-        self.forced_primary_strategy.unwrap_or_else(|| {
-            primary_development_strategy_kind(
-                &self.objective_state,
-                &self.objective_trend_state,
-                &self.semantic_summary,
-            )
-        })
+        self.forced_primary_strategy.unwrap_or_else(|| primary_development_strategy_kind(&self.objective_state, &self.objective_trend_state, &self.semantic_summary))
     }
 
     pub fn render_goal_gen_block(&self) -> String {
@@ -1060,27 +894,20 @@ impl LlmSemanticContext {
             lines.push(format!("entrypoint_kind={entrypoint_kind}"));
         }
         if !self.semantic_summary.compiler_hints.is_empty() {
-            lines.push(format!(
-                "compiler_hint_kinds={}",
-                self.semantic_summary.compiler_hint_kinds().join("|")
-            ));
+            lines.push(format!("compiler_hint_kinds={}", self.semantic_summary.compiler_hint_kinds().join("|")));
         }
-        lines.push(format!(
-            "primary_objective={}",
-            primary_objective.as_str()
-        ));
+        lines.push(format!("primary_objective={}", primary_objective.as_str()));
         lines.push(format!("primary_objective_focus={}", primary_objective.focus_text()));
         lines.push(format!("primary_strategy={}", primary_strategy.as_str()));
         lines.push(format!("primary_strategy_focus={}", primary_strategy.focus_text()));
-        lines.extend(development_objective_lines(
-            &self.semantic_summary,
-            &self.objective_state,
-            &self.objective_trend_state,
-        ));
+        lines.extend(development_objective_lines(&self.semantic_summary, &self.objective_state, &self.objective_trend_state));
         lines.extend(self.objective_state.render_lines());
         lines.extend(self.objective_trend_state.render_lines());
-        format!("LLM semantic context:
-{}", render_bullets(&lines))
+        format!(
+            "LLM semantic context:
+{}",
+            render_bullets(&lines)
+        )
     }
 
     pub fn render_router_block(&self) -> String {
@@ -1098,32 +925,21 @@ impl LlmSemanticContext {
             lines.push(format!("route_confidence={confidence:.2}"));
         }
         lines.push(self.semantic_summary.compact_block());
-        lines.push(format!(
-            "primary_objective={}",
-            primary_objective.as_str()
-        ));
+        lines.push(format!("primary_objective={}", primary_objective.as_str()));
         lines.push(format!("primary_objective_focus={}", primary_objective.focus_text()));
         lines.push(format!("primary_strategy={}", primary_strategy.as_str()));
         lines.push(format!("primary_strategy_focus={}", primary_strategy.focus_text()));
         if !self.recent_execution_results.is_empty() {
-            lines.push(format!(
-                "execution_results={}",
-                self.recent_execution_results
-                    .iter()
-                    .map(SemanticExecutionResultRecord::render_line)
-                    .collect::<Vec<_>>()
-                    .join("|")
-            ));
+            lines.push(format!("execution_results={}", self.recent_execution_results.iter().map(SemanticExecutionResultRecord::render_line).collect::<Vec<_>>().join("|")));
         }
-        lines.extend(development_objective_lines(
-            &self.semantic_summary,
-            &self.objective_state,
-            &self.objective_trend_state,
-        ));
+        lines.extend(development_objective_lines(&self.semantic_summary, &self.objective_state, &self.objective_trend_state));
         lines.extend(self.objective_state.render_lines());
         lines.extend(self.objective_trend_state.render_lines());
-        format!("LLM semantic context:
-{}", render_bullets(&lines))
+        format!(
+            "LLM semantic context:
+{}",
+            render_bullets(&lines)
+        )
     }
 
     pub fn render_planner_base_block(&self) -> String {
@@ -1131,24 +947,9 @@ impl LlmSemanticContext {
         let primary_strategy = self.primary_strategy_kind();
         let mut sections = vec![
             self.semantic_summary.render_planner_block(),
-            format!(
-                "Primary objective:\n- {} ({})",
-                primary_objective.as_str(),
-                primary_objective.focus_text()
-            ),
-            format!(
-                "Primary strategy:\n- {} ({})",
-                primary_strategy.as_str(),
-                primary_strategy.focus_text()
-            ),
-            format!(
-                "Development objectives:\n{}",
-                render_bullets(&development_objective_lines(
-                    &self.semantic_summary,
-                    &self.objective_state,
-                    &self.objective_trend_state,
-                ))
-            ),
+            format!("Primary objective:\n- {} ({})", primary_objective.as_str(), primary_objective.focus_text()),
+            format!("Primary strategy:\n- {} ({})", primary_strategy.as_str(), primary_strategy.focus_text()),
+            format!("Development objectives:\n{}", render_bullets(&development_objective_lines(&self.semantic_summary, &self.objective_state, &self.objective_trend_state,))),
         ];
         if !self.low_level_diagnostics.is_empty() {
             sections.push(format!(
@@ -1161,26 +962,16 @@ impl LlmSemanticContext {
             sections.push(format!(
                 "Execution semantics:
 {}",
-                render_bullets(
-                    &self
-                        .recent_execution_results
-                        .iter()
-                        .map(SemanticExecutionResultRecord::render_line)
-                        .collect::<Vec<_>>()
-                )
+                render_bullets(&self.recent_execution_results.iter().map(SemanticExecutionResultRecord::render_line).collect::<Vec<_>>())
             ));
-            sections.push(format!(
-                "Execution metrics:\n{}",
-                render_bullets(&self.objective_state.render_lines()),
-            ));
+            sections.push(format!("Execution metrics:\n{}", render_bullets(&self.objective_state.render_lines()),));
         }
-        sections.push(format!(
-            "Execution trends:\n{}",
-            render_bullets(&self.objective_trend_state.render_lines()),
-        ));
-        sections.join("
+        sections.push(format!("Execution trends:\n{}", render_bullets(&self.objective_trend_state.render_lines()),));
+        sections.join(
+            "
 
-")
+",
+        )
     }
 
     pub fn render_planner_delta_block(&self) -> String {
@@ -1188,12 +979,11 @@ impl LlmSemanticContext {
         let primary_strategy = self.primary_strategy_kind();
         let route_section = match &self.route_rationale {
             Some(rationale) if !rationale.is_empty() => {
-                let conf = self
-                    .route_confidence
-                    .map(|value| format!("{value:.2}"))
-                    .unwrap_or_else(|| "n/a".to_string());
-                format!("Route rationale: {rationale}
-Route confidence: {conf}")
+                let conf = self.route_confidence.map(|value| format!("{value:.2}")).unwrap_or_else(|| "n/a".to_string());
+                format!(
+                    "Route rationale: {rationale}
+Route confidence: {conf}"
+                )
             }
             _ => "Route rationale: (not provided)".to_string(),
         };
@@ -1201,100 +991,76 @@ Route confidence: {conf}")
             Some(reason) => format!(
                 "Invalid plan memory: consecutive_invalid_plan_batches={count}; last_invalid_plan_planned_count={planned}; last_invalid_plan_reason={reason}",
                 count = self.consecutive_invalid_plan_batches,
-                planned = self
-                    .invalid_plan_planned_count
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "NA".to_string()),
+                planned = self.invalid_plan_planned_count.map(|value| value.to_string()).unwrap_or_else(|| "NA".to_string()),
             ),
             None => "Invalid plan memory: none".to_string(),
         };
-        let compiler_hints = self
-            .semantic_summary
-            .compiler_hints
-            .iter()
-            .map(CompilerHintRecord::render_line)
-            .collect::<Vec<_>>();
+        let compiler_hints = self.semantic_summary.compiler_hints.iter().map(CompilerHintRecord::render_line).collect::<Vec<_>>();
         let mut sections = vec![
             format!(
                 "TARGET WORKSPACE: {}
 All relative paths resolve against TARGET WORKSPACE (not its parent).
 LOC: {}  |  Errors: {}  |  Warnings: {}",
                 self.target_workspace.as_deref().unwrap_or("NA"),
-                self.workspace_loc
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "NA".to_string()),
-                self.error_count
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "NA".to_string()),
-                self.warning_count
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "NA".to_string()),
+                self.workspace_loc.map(|value| value.to_string()).unwrap_or_else(|| "NA".to_string()),
+                self.error_count.map(|value| value.to_string()).unwrap_or_else(|| "NA".to_string()),
+                self.warning_count.map(|value| value.to_string()).unwrap_or_else(|| "NA".to_string()),
             ),
             route_section,
             invalid_plan_section,
-            format!("Compiler repair hints:
-{}", render_bullets(&compiler_hints)),
-            format!("Semantic summary:
-{}", self.semantic_summary.compact_block()),
             format!(
-                "Primary objective:\n- {} ({})",
-                primary_objective.as_str(),
-                primary_objective.focus_text()
+                "Compiler repair hints:
+{}",
+                render_bullets(&compiler_hints)
             ),
             format!(
-                "Primary strategy:\n- {} ({})",
-                primary_strategy.as_str(),
-                primary_strategy.focus_text()
+                "Semantic summary:
+{}",
+                self.semantic_summary.compact_block()
             ),
-            format!(
-                "Development objectives:\n{}",
-                render_bullets(&development_objective_lines(
-                    &self.semantic_summary,
-                    &self.objective_state,
-                    &self.objective_trend_state,
-                ))
-            ),
+            format!("Primary objective:\n- {} ({})", primary_objective.as_str(), primary_objective.focus_text()),
+            format!("Primary strategy:\n- {} ({})", primary_strategy.as_str(), primary_strategy.focus_text()),
+            format!("Development objectives:\n{}", render_bullets(&development_objective_lines(&self.semantic_summary, &self.objective_state, &self.objective_trend_state,))),
         ];
         if !self.recent_actions.is_empty() {
-            sections.push(format!("Recent actions:
-{}", self.recent_actions.join("
-")));
+            sections.push(format!(
+                "Recent actions:
+{}",
+                self.recent_actions.join(
+                    "
+"
+                )
+            ));
         }
         if !self.recent_tool_results.is_empty() {
-            sections.push(format!("Recent tool results:
-{}", self.recent_tool_results.join("
-")));
+            sections.push(format!(
+                "Recent tool results:
+{}",
+                self.recent_tool_results.join(
+                    "
+"
+                )
+            ));
         }
         if !self.recent_execution_results.is_empty() {
             sections.push(format!(
                 "Recent execution semantics:
 {}",
-                self.recent_execution_results
-                    .iter()
-                    .map(SemanticExecutionResultRecord::render_line)
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                self.recent_execution_results.iter().map(SemanticExecutionResultRecord::render_line).collect::<Vec<_>>().join("\n")
             ));
         }
-        sections.push(format!(
-            "Self-development objective state:\n{}",
-            render_bullets(&self.objective_state.render_lines())
-        ));
-        sections.push(format!(
-            "Self-development objective trends:\n{}",
-            render_bullets(&self.objective_trend_state.render_lines())
-        ));
-        sections.join("
+        sections.push(format!("Self-development objective state:\n{}", render_bullets(&self.objective_state.render_lines())));
+        sections.push(format!("Self-development objective trends:\n{}", render_bullets(&self.objective_trend_state.render_lines())));
+        sections.join(
+            "
 
-")
+",
+        )
     }
 }
 
 pub fn derive_self_development_objective_state(
-    semantic_summary: &SemanticStateSummary,
-    consecutive_invalid_plan_batches: u32,
-    recent_execution_results: &[SemanticExecutionResultRecord],
-    objective_trend_state: &ObjectiveTrendState,
+    semantic_summary: &SemanticStateSummary, consecutive_invalid_plan_batches: u32, recent_execution_results: &[SemanticExecutionResultRecord], objective_trend_state: &ObjectiveTrendState,
 ) -> SelfDevelopmentObjectiveState {
     SelfDevelopmentObjectiveState {
         semantic_progress_rate: semantic_progress_rate(recent_execution_results),
@@ -1307,19 +1073,9 @@ pub fn derive_self_development_objective_state(
 }
 
 pub fn derive_objective_trend_state(
-    planning_attempts: u32,
-    invalid_plan_events: u32,
-    last_goodness: Option<f32>,
-    last_delta_g: Option<f32>,
-    recent_execution_results: &[SemanticExecutionResultRecord],
+    planning_attempts: u32, invalid_plan_events: u32, last_goodness: Option<f32>, last_delta_g: Option<f32>, recent_execution_results: &[SemanticExecutionResultRecord],
 ) -> ObjectiveTrendState {
-    let mut trend = ObjectiveTrendState {
-        planning_attempts,
-        invalid_plan_events,
-        last_goodness,
-        last_delta_g,
-        ..ObjectiveTrendState::default()
-    };
+    let mut trend = ObjectiveTrendState { planning_attempts, invalid_plan_events, last_goodness, last_delta_g, ..ObjectiveTrendState::default() };
     trend.record_execution_results(recent_execution_results);
     trend
 }
@@ -1349,19 +1105,8 @@ pub struct SemanticExecutionResultRecord {
 }
 
 impl SemanticExecutionResultRecord {
-    pub fn new(
-        kind: impl Into<String>,
-        summary: impl Into<String>,
-        target_files: Vec<String>,
-        semantic_progress: bool,
-    ) -> Self {
-        Self {
-            kind: kind.into(),
-            summary: summary.into(),
-            target_files,
-            semantic_progress,
-            attempted_kind: None,
-        }
+    pub fn new(kind: impl Into<String>, summary: impl Into<String>, target_files: Vec<String>, semantic_progress: bool) -> Self {
+        Self { kind: kind.into(), summary: summary.into(), target_files, semantic_progress, attempted_kind: None }
     }
 
     pub fn with_attempted_kind(mut self, attempted_kind: impl Into<String>) -> Self {
@@ -1370,24 +1115,13 @@ impl SemanticExecutionResultRecord {
     }
 
     pub fn render_line(&self) -> String {
-        let targets = if self.target_files.is_empty() {
-            "none".to_string()
-        } else {
-            self.target_files.join("|")
-        };
+        let targets = if self.target_files.is_empty() { "none".to_string() } else { self.target_files.join("|") };
         let attempted = self.attempted_kind.as_deref().unwrap_or("none");
-        format!(
-            "kind={} attempted_kind={} progress={} targets={} summary={}",
-            self.kind, attempted, self.semantic_progress, targets, self.summary
-        )
+        format!("kind={} attempted_kind={} progress={} targets={} summary={}", self.kind, attempted, self.semantic_progress, targets, self.summary)
     }
 }
 
-pub fn classify_planned_action_intents(
-    action_kind: &str,
-    action_payload: &serde_json::Value,
-    target_root: Option<&Path>,
-) -> Vec<SemanticActionIntent> {
+pub fn classify_planned_action_intents(action_kind: &str, action_payload: &serde_json::Value, target_root: Option<&Path>) -> Vec<SemanticActionIntent> {
     let mut out = Vec::new();
     match action_kind {
         "run_command" => {
@@ -1403,52 +1137,27 @@ pub fn classify_planned_action_intents(
             }
         }
         "edit.rename_symbol" => {
-            if let Some(path) = action_payload
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from)
-                .map(|path| normalize_path(&path, target_root))
-            {
+            if let Some(path) = action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from).map(|path| normalize_path(&path, target_root)) {
                 out.push(SemanticActionIntent::ResolveDuplicateDefinition(path));
             }
         }
         "edit.move_symbol" => {
-            if let Some(path) = action_payload
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from)
-                .map(|path| normalize_path(&path, target_root))
-            {
+            if let Some(path) = action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from).map(|path| normalize_path(&path, target_root)) {
                 out.push(SemanticActionIntent::RestructureModules(path));
             }
         }
         "edit.add_import" => {
-            if let Some(path) = action_payload
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from)
-                .map(|path| normalize_path(&path, target_root))
-            {
+            if let Some(path) = action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from).map(|path| normalize_path(&path, target_root)) {
                 out.push(SemanticActionIntent::FixUnresolvedImport(path));
             }
         }
         "edit.define_symbol_stub" => {
-            if let Some(path) = action_payload
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from)
-                .map(|path| normalize_path(&path, target_root))
-            {
+            if let Some(path) = action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from).map(|path| normalize_path(&path, target_root)) {
                 out.push(SemanticActionIntent::DefineMissingSymbol(path));
             }
         }
         "edit.create_module_file" => {
-            if let Some(path) = action_payload
-                .get("path")
-                .and_then(|v| v.as_str())
-                .map(PathBuf::from)
-                .map(|path| normalize_path(&path, target_root))
-            {
+            if let Some(path) = action_payload.get("path").and_then(|v| v.as_str()).map(PathBuf::from).map(|path| normalize_path(&path, target_root)) {
                 out.push(SemanticActionIntent::CreateModuleFile(path));
             }
         }
@@ -1464,8 +1173,7 @@ pub fn classify_planned_action_intents(
                                 out.push(SemanticActionIntent::CreateEntrypoint(path));
                             }
                         }
-                        canon_tools_patch::Hunk::UpdateFile { path, .. }
-                        | canon_tools_patch::Hunk::DeleteFile { path } => {
+                        canon_tools_patch::Hunk::UpdateFile { path, .. } | canon_tools_patch::Hunk::DeleteFile { path } => {
                             let path = normalize_path(&path, target_root);
                             if patch.contains("allow(dead_code)") {
                                 out.push(SemanticActionIntent::FixDeadCodeConflict(path.clone()));
@@ -1483,132 +1191,68 @@ pub fn classify_planned_action_intents(
     out
 }
 
-pub fn execution_results_for_action(
-    intents: &[SemanticActionIntent],
-    success: bool,
-    stderr: &str,
-) -> Vec<SemanticExecutionResultRecord> {
+pub fn execution_results_for_action(intents: &[SemanticActionIntent], success: bool, stderr: &str) -> Vec<SemanticExecutionResultRecord> {
     if !success {
         if intents.is_empty() {
-            return vec![SemanticExecutionResultRecord::new(
-                "no_semantic_progress",
-                format!("action failed: {}", stderr.trim()),
-                Vec::new(),
-                false,
-            )];
+            return vec![SemanticExecutionResultRecord::new("no_semantic_progress", format!("action failed: {}", stderr.trim()), Vec::new(), false)];
         }
         return intents
             .iter()
             .map(|intent| {
                 let (kind, targets) = intent_kind_and_targets(intent);
-                SemanticExecutionResultRecord::new(
-                    "no_semantic_progress",
-                    format!("{kind} failed: {}", stderr.trim()),
-                    targets,
-                    false,
-                )
-                .with_attempted_kind(kind)
+                SemanticExecutionResultRecord::new("no_semantic_progress", format!("{kind} failed: {}", stderr.trim()), targets, false).with_attempted_kind(kind)
             })
             .collect();
     }
     if intents.is_empty() {
-        return vec![SemanticExecutionResultRecord::new(
-            "no_semantic_progress",
-            "action succeeded without semantic state change classification",
-            Vec::new(),
-            false,
-        )];
+        return vec![SemanticExecutionResultRecord::new("no_semantic_progress", "action succeeded without semantic state change classification", Vec::new(), false)];
     }
     intents
         .iter()
         .map(|intent| match intent {
-            SemanticActionIntent::BootstrapWorkspace => SemanticExecutionResultRecord::new(
-                "workspace_bootstrapped",
-                "workspace bootstrap command succeeded",
-                Vec::new(),
-                true,
-            )
-            .with_attempted_kind("bootstrap_workspace"),
-            SemanticActionIntent::InitCargoProject => SemanticExecutionResultRecord::new(
-                "cargo_project_initialized",
-                "cargo project initialization succeeded",
-                Vec::new(),
-                true,
-            )
-            .with_attempted_kind("init_cargo_project"),
-            SemanticActionIntent::ValidateCargoCheck => SemanticExecutionResultRecord::new(
-                "validation_attempted",
-                "cargo check executed",
-                Vec::new(),
-                false,
-            )
-            .with_attempted_kind("validate_cargo_check"),
-            SemanticActionIntent::CreateEntrypoint(path) => SemanticExecutionResultRecord::new(
-                "entrypoint_created",
-                "entrypoint file created",
-                vec![path.to_string_lossy().to_string()],
-                true,
-            )
-            .with_attempted_kind("create_entrypoint"),
-            SemanticActionIntent::CreateModuleFile(path) => SemanticExecutionResultRecord::new(
-                "module_created",
-                "module file created",
-                vec![path.to_string_lossy().to_string()],
-                true,
-            )
-            .with_attempted_kind("create_module_file"),
-            SemanticActionIntent::RestructureModules(path) => SemanticExecutionResultRecord::new(
-                "module_restructured",
-                "module restructure edit applied",
-                vec![path.to_string_lossy().to_string()],
-                true,
-            )
-            .with_attempted_kind("restructure_modules"),
-            SemanticActionIntent::FixDeadCodeConflict(path) => SemanticExecutionResultRecord::new(
-                "dead_code_conflict_addressed",
-                "dead_code conflict edit applied",
-                vec![path.to_string_lossy().to_string()],
-                true,
-            )
-            .with_attempted_kind("fix_dead_code_conflict"),
-            SemanticActionIntent::FixUnresolvedImport(path) => SemanticExecutionResultRecord::new(
-                "import_resolved",
-                "import repair edit applied",
-                vec![path.to_string_lossy().to_string()],
-                true,
-            )
-            .with_attempted_kind("fix_unresolved_import"),
-            SemanticActionIntent::DefineMissingSymbol(path) => SemanticExecutionResultRecord::new(
-                "symbol_defined",
-                "missing symbol definition edit applied",
-                vec![path.to_string_lossy().to_string()],
-                true,
-            )
-            .with_attempted_kind("define_missing_symbol"),
-            SemanticActionIntent::ResolveDuplicateDefinition(path) => SemanticExecutionResultRecord::new(
-                "duplicate_resolved",
-                "duplicate definition repair applied",
-                vec![path.to_string_lossy().to_string()],
-                true,
-            )
-            .with_attempted_kind("resolve_duplicate_definition"),
-            SemanticActionIntent::FixTraitBoundFailure(path) => SemanticExecutionResultRecord::new(
-                "trait_bound_fixed",
-                "trait bound repair edit applied",
-                vec![path.to_string_lossy().to_string()],
-                true,
-            )
-            .with_attempted_kind("fix_trait_bound_failure"),
+            SemanticActionIntent::BootstrapWorkspace => {
+                SemanticExecutionResultRecord::new("workspace_bootstrapped", "workspace bootstrap command succeeded", Vec::new(), true).with_attempted_kind("bootstrap_workspace")
+            }
+            SemanticActionIntent::InitCargoProject => {
+                SemanticExecutionResultRecord::new("cargo_project_initialized", "cargo project initialization succeeded", Vec::new(), true).with_attempted_kind("init_cargo_project")
+            }
+            SemanticActionIntent::ValidateCargoCheck => {
+                SemanticExecutionResultRecord::new("validation_attempted", "cargo check executed", Vec::new(), false).with_attempted_kind("validate_cargo_check")
+            }
+            SemanticActionIntent::CreateEntrypoint(path) => {
+                SemanticExecutionResultRecord::new("entrypoint_created", "entrypoint file created", vec![path.to_string_lossy().to_string()], true).with_attempted_kind("create_entrypoint")
+            }
+            SemanticActionIntent::CreateModuleFile(path) => {
+                SemanticExecutionResultRecord::new("module_created", "module file created", vec![path.to_string_lossy().to_string()], true).with_attempted_kind("create_module_file")
+            }
+            SemanticActionIntent::RestructureModules(path) => {
+                SemanticExecutionResultRecord::new("module_restructured", "module restructure edit applied", vec![path.to_string_lossy().to_string()], true).with_attempted_kind("restructure_modules")
+            }
+            SemanticActionIntent::FixDeadCodeConflict(path) => {
+                SemanticExecutionResultRecord::new("dead_code_conflict_addressed", "dead_code conflict edit applied", vec![path.to_string_lossy().to_string()], true)
+                    .with_attempted_kind("fix_dead_code_conflict")
+            }
+            SemanticActionIntent::FixUnresolvedImport(path) => {
+                SemanticExecutionResultRecord::new("import_resolved", "import repair edit applied", vec![path.to_string_lossy().to_string()], true).with_attempted_kind("fix_unresolved_import")
+            }
+            SemanticActionIntent::DefineMissingSymbol(path) => {
+                SemanticExecutionResultRecord::new("symbol_defined", "missing symbol definition edit applied", vec![path.to_string_lossy().to_string()], true)
+                    .with_attempted_kind("define_missing_symbol")
+            }
+            SemanticActionIntent::ResolveDuplicateDefinition(path) => {
+                SemanticExecutionResultRecord::new("duplicate_resolved", "duplicate definition repair applied", vec![path.to_string_lossy().to_string()], true)
+                    .with_attempted_kind("resolve_duplicate_definition")
+            }
+            SemanticActionIntent::FixTraitBoundFailure(path) => {
+                SemanticExecutionResultRecord::new("trait_bound_fixed", "trait bound repair edit applied", vec![path.to_string_lossy().to_string()], true)
+                    .with_attempted_kind("fix_trait_bound_failure")
+            }
         })
         .collect()
 }
 
 pub fn latest_semantic_progress(results: &[SemanticExecutionResultRecord]) -> bool {
-    results
-        .iter()
-        .rev()
-        .next()
-        .is_some_and(|result| result.semantic_progress)
+    results.iter().rev().next().is_some_and(|result| result.semantic_progress)
 }
 
 pub fn latest_graph_proof_verified(results: &[SemanticExecutionResultRecord]) -> bool {
@@ -1619,28 +1263,16 @@ pub fn latest_graph_proof_failed(results: &[SemanticExecutionResultRecord]) -> b
     results.last().is_some_and(|result| result.kind == "graph_proof_failed")
 }
 
-pub fn latest_verifier_policy_requires_corrective_retry(
-    results: &[SemanticExecutionResultRecord],
-) -> bool {
-    results
-        .last()
-        .is_some_and(|result| result.kind == "verifier_policy_corrective_retry")
+pub fn latest_verifier_policy_requires_corrective_retry(results: &[SemanticExecutionResultRecord]) -> bool {
+    results.last().is_some_and(|result| result.kind == "verifier_policy_corrective_retry")
 }
 
-pub fn latest_verifier_policy_clears_retry(
-    results: &[SemanticExecutionResultRecord],
-) -> bool {
-    results
-        .last()
-        .is_some_and(|result| result.kind == "verifier_policy_none")
+pub fn latest_verifier_policy_clears_retry(results: &[SemanticExecutionResultRecord]) -> bool {
+    results.last().is_some_and(|result| result.kind == "verifier_policy_none")
 }
 
 pub fn latest_no_semantic_progress(results: &[SemanticExecutionResultRecord]) -> bool {
-    results
-        .iter()
-        .rev()
-        .next()
-        .is_some_and(|result| !result.semantic_progress)
+    results.iter().rev().next().is_some_and(|result| !result.semantic_progress)
 }
 
 pub fn semantic_progress_count(results: &[SemanticExecutionResultRecord]) -> usize {
@@ -1648,11 +1280,7 @@ pub fn semantic_progress_count(results: &[SemanticExecutionResultRecord]) -> usi
 }
 
 pub fn semantic_no_progress_streak(results: &[SemanticExecutionResultRecord]) -> usize {
-    results
-        .iter()
-        .rev()
-        .take_while(|result| !result.semantic_progress)
-        .count()
+    results.iter().rev().take_while(|result| !result.semantic_progress).count()
 }
 
 pub fn semantic_progress_rate(results: &[SemanticExecutionResultRecord]) -> f32 {
@@ -1666,11 +1294,7 @@ fn render_bullets(lines: &[String]) -> String {
     if lines.is_empty() {
         "- none".to_string()
     } else {
-        lines
-            .iter()
-            .map(|line| format!("- {line}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        lines.iter().map(|line| format!("- {line}")).collect::<Vec<_>>().join("\n")
     }
 }
 
@@ -1679,30 +1303,14 @@ fn intent_kind_and_targets(intent: &SemanticActionIntent) -> (&'static str, Vec<
         SemanticActionIntent::BootstrapWorkspace => ("bootstrap_workspace", Vec::new()),
         SemanticActionIntent::InitCargoProject => ("init_cargo_project", Vec::new()),
         SemanticActionIntent::ValidateCargoCheck => ("validate_cargo_check", Vec::new()),
-        SemanticActionIntent::CreateEntrypoint(path) => {
-            ("create_entrypoint", vec![path.to_string_lossy().to_string()])
-        }
-        SemanticActionIntent::CreateModuleFile(path) => {
-            ("create_module_file", vec![path.to_string_lossy().to_string()])
-        }
-        SemanticActionIntent::RestructureModules(path) => {
-            ("restructure_modules", vec![path.to_string_lossy().to_string()])
-        }
-        SemanticActionIntent::FixDeadCodeConflict(path) => {
-            ("fix_dead_code_conflict", vec![path.to_string_lossy().to_string()])
-        }
-        SemanticActionIntent::FixUnresolvedImport(path) => {
-            ("fix_unresolved_import", vec![path.to_string_lossy().to_string()])
-        }
-        SemanticActionIntent::DefineMissingSymbol(path) => {
-            ("define_missing_symbol", vec![path.to_string_lossy().to_string()])
-        }
-        SemanticActionIntent::ResolveDuplicateDefinition(path) => {
-            ("resolve_duplicate_definition", vec![path.to_string_lossy().to_string()])
-        }
-        SemanticActionIntent::FixTraitBoundFailure(path) => {
-            ("fix_trait_bound_failure", vec![path.to_string_lossy().to_string()])
-        }
+        SemanticActionIntent::CreateEntrypoint(path) => ("create_entrypoint", vec![path.to_string_lossy().to_string()]),
+        SemanticActionIntent::CreateModuleFile(path) => ("create_module_file", vec![path.to_string_lossy().to_string()]),
+        SemanticActionIntent::RestructureModules(path) => ("restructure_modules", vec![path.to_string_lossy().to_string()]),
+        SemanticActionIntent::FixDeadCodeConflict(path) => ("fix_dead_code_conflict", vec![path.to_string_lossy().to_string()]),
+        SemanticActionIntent::FixUnresolvedImport(path) => ("fix_unresolved_import", vec![path.to_string_lossy().to_string()]),
+        SemanticActionIntent::DefineMissingSymbol(path) => ("define_missing_symbol", vec![path.to_string_lossy().to_string()]),
+        SemanticActionIntent::ResolveDuplicateDefinition(path) => ("resolve_duplicate_definition", vec![path.to_string_lossy().to_string()]),
+        SemanticActionIntent::FixTraitBoundFailure(path) => ("fix_trait_bound_failure", vec![path.to_string_lossy().to_string()]),
     }
 }
 
@@ -1720,10 +1328,7 @@ fn is_trait_bound_edit(patch: &str) -> bool {
             return false;
         }
         let content = line[1..].trim_start();
-        content.contains("impl ")
-            || content.contains("where ")
-            || content.contains("derive(")
-            || content.contains(": ")
+        content.contains("impl ") || content.contains("where ") || content.contains("derive(") || content.contains(": ")
     })
 }
 
@@ -1733,29 +1338,15 @@ fn parse_compiler_hint_record(line: &str) -> Option<CompilerHintRecord> {
     let targets = parse_field(line, "targets=").unwrap_or_else(|| "none".to_string());
     let summary = parse_field(line, "summary=").unwrap_or_default();
     let repair = parse_field(line, "repair=").unwrap_or_default();
-    let target_files = if targets == "none" || targets.is_empty() {
-        Vec::new()
-    } else {
-        targets.split('|').map(|s| s.trim().to_string()).collect()
-    };
-    Some(CompilerHintRecord {
-        kind,
-        summary,
-        suggested_repair: repair,
-        target_files,
-        failure_scope: scope,
-    })
+    let target_files = if targets == "none" || targets.is_empty() { Vec::new() } else { targets.split('|').map(|s| s.trim().to_string()).collect() };
+    Some(CompilerHintRecord { kind, summary, suggested_repair: repair, target_files, failure_scope: scope })
 }
 
 fn parse_field(line: &str, marker: &str) -> Option<String> {
     let start = line.find(marker)? + marker.len();
     let tail = &line[start..];
     let delimiter = next_field_delimiter(marker);
-    let end = if delimiter.is_empty() {
-        tail.len()
-    } else {
-        tail.find(delimiter).unwrap_or(tail.len())
-    };
+    let end = if delimiter.is_empty() { tail.len() } else { tail.find(delimiter).unwrap_or(tail.len()) };
     Some(tail[..end].trim().to_string())
 }
 
@@ -1772,10 +1363,8 @@ fn next_field_delimiter(marker: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_development_objectives, derive_self_development_objective_state,
-        primary_development_strategy_kind, CompilerHintKind, CompilerHintRecord, FailureScopeKind,
-        DevelopmentObjectiveKind, DevelopmentStrategyKind, ObjectiveTrendState,
-        SemanticStateSummary,
+        derive_development_objectives, derive_self_development_objective_state, primary_development_strategy_kind, CompilerHintKind, CompilerHintRecord, DevelopmentObjectiveKind,
+        DevelopmentStrategyKind, FailureScopeKind, ObjectiveTrendState, SemanticStateSummary,
     };
 
     #[test]
@@ -1794,13 +1383,8 @@ mod tests {
             module_gaps: vec!["index -> src/index.rs".into()],
             planning_preconditions: vec!["must_create_missing_modules=true".into()],
             repair_intents: vec!["repair_intent=create_missing_modules".into()],
-            compiler_hints: vec![CompilerHintRecord::new(
-                CompilerHintKind::MissingModule,
-                "compiler reports missing module `index`",
-                "create the missing module file",
-                vec!["src/lib.rs".into()],
-            )
-            .with_failure_scope(FailureScopeKind::Localized)],
+            compiler_hints: vec![CompilerHintRecord::new(CompilerHintKind::MissingModule, "compiler reports missing module `index`", "create the missing module file", vec!["src/lib.rs".into()])
+                .with_failure_scope(FailureScopeKind::Localized)],
             validation_blocked_by_preconditions: true,
             compiler_repair_required: true,
             failure_scope: Some(FailureScopeKind::Localized.as_str().into()),
@@ -1849,17 +1433,8 @@ mod tests {
 
     #[test]
     fn development_objectives_prioritize_contradictions_when_present() {
-        let summary = SemanticStateSummary {
-            complete: true,
-            path_exists: true,
-            cargo_project: true,
-            ..SemanticStateSummary::default()
-        };
-        let trend = ObjectiveTrendState {
-            route_objective_contradiction_events: 3,
-            goal_objective_drift_events: 2,
-            ..ObjectiveTrendState::default()
-        };
+        let summary = SemanticStateSummary { complete: true, path_exists: true, cargo_project: true, ..SemanticStateSummary::default() };
+        let trend = ObjectiveTrendState { route_objective_contradiction_events: 3, goal_objective_drift_events: 2, ..ObjectiveTrendState::default() };
         let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);
         let objectives = derive_development_objectives(&summary, &objective_state, &trend);
         assert_eq!(objectives[0].kind, DevelopmentObjectiveKind::ReduceContradictionRate);
@@ -1882,10 +1457,7 @@ mod tests {
         };
         let trend = ObjectiveTrendState::default();
         let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);
-        assert_eq!(
-            primary_development_strategy_kind(&objective_state, &trend, &summary),
-            DevelopmentStrategyKind::FixConfigLintPolicy
-        );
+        assert_eq!(primary_development_strategy_kind(&objective_state, &trend, &summary), DevelopmentStrategyKind::FixConfigLintPolicy);
     }
 
     #[test]
@@ -1895,19 +1467,11 @@ mod tests {
             path_exists: true,
             cargo_project: true,
             graph_artifact_id: Some("artifact".into()),
-            compiler_hints: vec![CompilerHintRecord::new(
-                CompilerHintKind::DuplicateDefinition,
-                "compiler reports duplicate definition",
-                "rename the duplicate definition",
-                vec!["src/lib.rs".into()],
-            )],
+            compiler_hints: vec![CompilerHintRecord::new(CompilerHintKind::DuplicateDefinition, "compiler reports duplicate definition", "rename the duplicate definition", vec!["src/lib.rs".into()])],
             ..SemanticStateSummary::default()
         };
         let trend = ObjectiveTrendState::default();
         let objective_state = derive_self_development_objective_state(&summary, 0, &[], &trend);
-        assert_eq!(
-            primary_development_strategy_kind(&objective_state, &trend, &summary),
-            DevelopmentStrategyKind::PlanSymbolAwareRename
-        );
+        assert_eq!(primary_development_strategy_kind(&objective_state, &trend, &summary), DevelopmentStrategyKind::PlanSymbolAwareRename);
     }
 }

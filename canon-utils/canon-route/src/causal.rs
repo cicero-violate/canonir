@@ -72,10 +72,7 @@ impl CausalGraph {
     }
 
     pub fn record_dispatch(&mut self, dispatch_id: &str, from_agent: &str, to_agent: &str) {
-        self.upsert_node(
-            dispatch_id,
-            CausalNodeKind::RequestDispatch { dispatch_id: dispatch_id.to_string(), from_agent: from_agent.to_string(), to_agent: to_agent.to_string() },
-        );
+        self.upsert_node(dispatch_id, CausalNodeKind::RequestDispatch { dispatch_id: dispatch_id.to_string(), from_agent: from_agent.to_string(), to_agent: to_agent.to_string() });
     }
 
     pub fn record_sub_result(&mut self, dispatch_id: &str, agent_id: &str, success: bool) {

@@ -1,16 +1,16 @@
-mod intelligence;
-mod efficiency;
-mod correctness;
 mod alignment;
-mod robustness;
-mod performance;
-mod scalability;
-mod determinism;
-mod execution;
 mod benefit;
-mod learning;
+mod correctness;
+mod determinism;
+mod efficiency;
+mod execution;
 mod future;
+mod intelligence;
+mod learning;
 mod love;
+mod performance;
+mod robustness;
+mod scalability;
 
 use canon_event::RuntimeEvent;
 
@@ -44,7 +44,7 @@ impl AllReducers {
             p: performance::Performance::default(),
             s: scalability::Scalability::default(),
             d: determinism::Determinism::default(),
-        x: execution::Execution::default(),
+            x: execution::Execution::default(),
             b: benefit::Benefit::default(),
             l: learning::Learning::default(),
             f: future::FutureProof::default(),

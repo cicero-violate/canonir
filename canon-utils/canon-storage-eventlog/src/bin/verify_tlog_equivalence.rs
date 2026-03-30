@@ -158,22 +158,8 @@ fn run_stress(json_path: &Path, bin_path: &Path) -> Result<()> {
 
 fn make_canon(source: &str, kind: &str, data: serde_json::Value) -> CanonEvent {
     let kind_enum = ::std::str::FromStr::from_str(kind).unwrap_or(canon_event::EventKind::Debug);
-    let payload = CanonPayload {
-        input: serde_json::Value::Null,
-        output: serde_json::Value::Null,
-        delta: serde_json::Value::Null,
-        meta: CanonPayloadMeta { file: String::new(), line: 0 },
-        data,
-    };
-    CanonEvent::new(
-        canon_event::EventId::new(canon_event::new_event_id()),
-        Vec::new(),
-        source.to_string(),
-        kind_enum,
-        now_ms(),
-        payload,
-        true,
-    )
+    let payload = CanonPayload { input: serde_json::Value::Null, output: serde_json::Value::Null, delta: serde_json::Value::Null, meta: CanonPayloadMeta { file: String::new(), line: 0 }, data };
+    CanonEvent::new(canon_event::EventId::new(canon_event::new_event_id()), Vec::new(), source.to_string(), kind_enum, now_ms(), payload, true)
 }
 
 fn now_ms() -> u64 {

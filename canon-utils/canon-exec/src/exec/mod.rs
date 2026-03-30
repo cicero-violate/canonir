@@ -1,5 +1,5 @@
-use canon_event::{AnalysisEvent, BashInvoke, RuntimeEvent, CargoEvent, EditEvent, EventId, FileEvent, LlmCall};
 use canon_event::EventEmitterHandle;
+use canon_event::{AnalysisEvent, BashInvoke, CargoEvent, EditEvent, EventId, FileEvent, LlmCall, RuntimeEvent};
 use std::path::PathBuf;
 
 pub mod analysis;

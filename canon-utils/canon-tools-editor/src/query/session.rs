@@ -32,13 +32,7 @@ impl AnalysisSession {
         edges.extend(graph_edges_from_csr(&ir.call_graph, "CALL", &node_symbols));
         edges.extend(graph_edges_from_csr(&ir.module_graph, "MODULE", &node_symbols));
         edges.extend(graph_edges_from_csr(&ir.cfg_graph, "CFG", &node_symbols));
-        Ok(Self {
-            module_files: index.module_files().clone(),
-            file_modules: index.file_modules().clone(),
-            files: index.files().clone(),
-            uses_crate_prefix: index.uses_crate_prefix(),
-            edges,
-        })
+        Ok(Self { module_files: index.module_files().clone(), file_modules: index.file_modules().clone(), files: index.files().clone(), uses_crate_prefix: index.uses_crate_prefix(), edges })
     }
 
     pub fn edges_by_kind(&self, edge_kind: &str) -> Result<Vec<GraphEdgeRecord>> {
@@ -62,10 +56,7 @@ fn graph_symbol_paths(ir: &canon_ir::CanonIR) -> HashMap<u32, String> {
             | CanonNodeKind::AssocType { name_id, .. }
             | CanonNodeKind::AssocConst { name_id, .. }
             | CanonNodeKind::Fn { name_id, .. } => {
-                let module_path = module_membership
-                    .get(&node.id.0)
-                    .cloned()
-                    .unwrap_or_else(|| "crate".to_string());
+                let module_path = module_membership.get(&node.id.0).cloned().unwrap_or_else(|| "crate".to_string());
                 format!("{}::{}", module_path, ir.lookup_name(*name_id))
             }
             _ => continue,
@@ -89,11 +80,7 @@ fn module_membership(ir: &canon_ir::CanonIR) -> HashMap<u32, String> {
     membership
 }
 
-fn graph_edges_from_csr(
-    graph: &canon_ir::csr_graph::CsrGraph<canon_ir::CanonId, canon_ir::EdgeKind>,
-    kind: &str,
-    node_symbols: &HashMap<u32, String>,
-) -> Vec<GraphEdgeRecord> {
+fn graph_edges_from_csr(graph: &canon_ir::csr_graph::CsrGraph<canon_ir::CanonId, canon_ir::EdgeKind>, kind: &str, node_symbols: &HashMap<u32, String>) -> Vec<GraphEdgeRecord> {
     let mut edges = Vec::new();
     for src in 0..graph.vertex_count() {
         for (dst, _) in graph.neighbours(NodeId(src as u32)) {
@@ -103,11 +90,7 @@ fn graph_edges_from_csr(
             let Some(dst_symbol) = node_symbols.get(&dst.0) else {
                 continue;
             };
-            edges.push(GraphEdgeRecord {
-                src: src_symbol.clone(),
-                dst: dst_symbol.clone(),
-                kind: kind.to_string(),
-            });
+            edges.push(GraphEdgeRecord { src: src_symbol.clone(), dst: dst_symbol.clone(), kind: kind.to_string() });
         }
     }
     edges

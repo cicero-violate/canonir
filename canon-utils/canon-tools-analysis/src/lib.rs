@@ -15,16 +15,12 @@ mod report_types;
 pub mod semantics;
 pub mod workspace;
 
-pub use invariants::invariant_validator::run_invariant_pipeline;
 pub use graph_artifacts::{
-    duplicate_definition_rename_candidates, graph_backed_module_hotspots,
-    graph_backed_module_moves, graph_backed_rename_candidates, graph_import_bindings,
-    latest_graph_artifact_path, load_graph_artifact, load_latest_workspace_graph_artifact,
-    module_cohesion_hotspots, resolve_graph_symbol_path, verify_graph_expectations,
-    GraphArtifactIndex, GraphArtifactSummary, GraphImportBinding, GraphModuleMoveCandidate,
-    GraphProofExpectation, GraphProofReport, GraphRenameCandidate, GraphResolvedSymbol,
-    ModuleCohesionHotspot,
+    duplicate_definition_rename_candidates, graph_backed_module_hotspots, graph_backed_module_moves, graph_backed_rename_candidates, graph_import_bindings, latest_graph_artifact_path,
+    load_graph_artifact, load_latest_workspace_graph_artifact, module_cohesion_hotspots, resolve_graph_symbol_path, verify_graph_expectations, GraphArtifactIndex, GraphArtifactSummary,
+    GraphImportBinding, GraphModuleMoveCandidate, GraphProofExpectation, GraphProofReport, GraphRenameCandidate, GraphResolvedSymbol, ModuleCohesionHotspot,
 };
+pub use invariants::invariant_validator::run_invariant_pipeline;
 pub use panic_types::PanicRecord;
 pub use repair::error_surface::{augment_with_errors, write_repair_surface};
 pub use report_pipeline::{generate_reports, generate_reports_for_crate, generate_reports_from_tlog};

@@ -1,11 +1,8 @@
-use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
 use crate::harness_repair::{HarnessRepairState, HarnessRepairTarget};
+use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
 use crate::scheduler::{DependencyTracker, Scheduler};
 use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopVerified, ToolResult};
-use canon_semantic_state::{
-    DevelopmentObjectiveKind, DevelopmentStrategyKind, ObjectiveTrendState, SemanticActionIntent,
-    SemanticExecutionResultRecord,
-};
+use canon_semantic_state::{DevelopmentObjectiveKind, DevelopmentStrategyKind, ObjectiveTrendState, SemanticActionIntent, SemanticExecutionResultRecord};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;

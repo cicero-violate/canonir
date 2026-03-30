@@ -83,29 +83,27 @@ fn apply_planning_event(event: &AnyEvent, state: &mut GoalGraphState) {
                 state.edges.push((from, to));
             }
         }
-        _ => {
-            match kind_str {
-                "node_started" => {
-                    let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    if let Some(node) = state.nodes.get_mut(&node_id) {
-                        node.status = "running".to_string();
-                    }
+        _ => match kind_str {
+            "node_started" => {
+                let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if let Some(node) = state.nodes.get_mut(&node_id) {
+                    node.status = "running".to_string();
                 }
-                "node_completed" => {
-                    let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    if let Some(node) = state.nodes.get_mut(&node_id) {
-                        node.status = "completed".to_string();
-                    }
-                }
-                "node_failed" => {
-                    let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    if let Some(node) = state.nodes.get_mut(&node_id) {
-                        node.status = "failed".to_string();
-                    }
-                }
-                _ => {}
             }
-        }
+            "node_completed" => {
+                let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if let Some(node) = state.nodes.get_mut(&node_id) {
+                    node.status = "completed".to_string();
+                }
+            }
+            "node_failed" => {
+                let node_id = payload.get("node_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                if let Some(node) = state.nodes.get_mut(&node_id) {
+                    node.status = "failed".to_string();
+                }
+            }
+            _ => {}
+        },
     }
     if canon.ts > state.seq_processed {
         state.seq_processed = canon.ts;

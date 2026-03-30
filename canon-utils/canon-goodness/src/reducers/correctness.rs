@@ -29,4 +29,3 @@ impl Reducer for Correctness {
         *self = Self::default();
     }
 }
-
