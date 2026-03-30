@@ -222,7 +222,7 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
    {"action":"run_command","cmd":"cargo test --workspace","cwd":"/workspace/ai_sandbox/canon"}
    {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon"}
 
-5. done — declare verification complete
+5. done — declare verification complete - DO NOT say done if there are still pending works to be done in the plan
    {"action":"done","reason":"{\"verified\":false,\"summary\":\"summary of findings: N tasks verified, M incorrect or missing\"}"}
    ⚠ done triggers cargo build --workspace then cargo test --workspace — fix any failures first.
 
