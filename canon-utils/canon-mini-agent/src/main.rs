@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock};
 
 const WORKSPACE: &str = "/workspace/ai_sandbox/canon";
 const PLAN_FILE: &str = "PLANS/mini-agent-plan.md";
-const WS_PORT_DEFAULT: u16 = 9102;
+const WS_PORT_DEFAULT: u16 = 9103;
 const MAX_STEPS: usize = 2000;
 const MAX_FULL_READ_LINES: usize = 500;
 const MAX_SNIPPET: usize = 3000;
