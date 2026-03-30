@@ -4,4 +4,6 @@ pub mod invariant_generator;
 pub mod invariant_lifecycle;
 pub mod invariant_sat;
 pub mod invariant_validator;
+pub mod constraint_precedence;
+pub mod persistence;
 pub mod kernel_invariants;

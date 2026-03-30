@@ -86,15 +86,14 @@ impl RouteContext {
     }
 
 
-    pub fn record_planning_completion(&mut self, status: &str, planned_count: Option<usize>) {
+    pub fn record_planning_completion(&mut self, status: &str, _planned_count: Option<usize>) {
         match status {
             "llm_failed" | "llm_timeout" => {
                 self.consecutive_llm_plan_failures += 1;
             }
             "ok" => {
-                if planned_count.unwrap_or(0) > 0 {
-                    self.consecutive_llm_plan_failures = 0;
-                }
+                // Reset on any successful planning completion, regardless of planned_count
+                self.consecutive_llm_plan_failures = 0;
             }
             _ => {}
         }

@@ -19,7 +19,7 @@ pub enum ControlDecision {
     InvariantViolation(&'static str),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ControlEvent {
     RouteSelectedEmitted,
     PendingRequestStarted,
@@ -75,6 +75,32 @@ pub fn step_control_state(mut state: ControlState, event: ControlEvent) -> Contr
         }
     }
     state
+}
+
+use std::collections::HashMap;
+
+pub fn reachability_table(
+) -> (
+    HashMap<(ControlState, ControlEvent), ControlState>,
+    HashMap<(ControlState, ControlEvent), ControlDecision>,
+) {
+    let mut state_table = HashMap::new();
+    let mut decision_table = HashMap::new();
+
+    let seeds = synthetic_control_seed_states();
+    let events = synthetic_control_events();
+
+    for s in seeds.iter().copied() {
+        for e in events.iter().copied() {
+            let next = step_control_state(s, e);
+            let decision = evaluate_control_state(next);
+
+            state_table.insert((s, e), next);
+            decision_table.insert((s, e), decision);
+        }
+    }
+
+    (state_table, decision_table)
 }
 
 impl ControlDecision {

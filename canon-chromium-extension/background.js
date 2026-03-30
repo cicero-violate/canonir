@@ -4,7 +4,7 @@
 // All messages tagged with tabId. TAB_READY (not TAB_OPENED) gates Rust TURN dispatch.
 
 const RUST_WS       = "ws://127.0.0.1:9100";
-const MINI_AGENT_WS = "ws://127.0.0.1:9102";
+const MINI_AGENT_WS = "ws://127.0.0.1:9103";
 
 // tabId → send function of the WS connection that owns that tab
 const tabWsOwner = new Map();

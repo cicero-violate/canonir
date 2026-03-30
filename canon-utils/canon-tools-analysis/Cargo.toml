@@ -24,6 +24,7 @@ canon-meta = { path = "../canon-meta" }
 once_cell = { workspace = true }
 canon-ir = { path = "../../canon-ir" }
 syn = { workspace = true, features = ["full"] }
+canon-invariant = { path = "../canon-invariant" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

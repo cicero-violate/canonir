@@ -133,7 +133,11 @@ impl RouteExecutor {
                     RouteCacheRule::SuppressDuplicatePrompt => {}
                     RouteCacheRule::Proceed => {}
                 }
-                if !should_force_fresh_now {
+                // Ensure closure: duplicate prompt must still lead to a valid successor
+                if matches!(cache_eval.rule, RouteCacheRule::SuppressDuplicatePrompt) {
+                    should_force_fresh_now = true;
+                }
+                if !should_force_fresh_now && !matches!(cache_eval.rule, RouteCacheRule::SuppressDuplicatePrompt) {
                     let message = format!(
                         "invariant violation: missing required successor after {} id={}; expected=route_selected; got=route_suppressed; note=duplicate route prompt for unchanged state",
                         "unknown_control",

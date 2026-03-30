@@ -8,6 +8,8 @@ use std::sync::{Mutex, OnceLock};
 
 pub mod control_harness;
 pub mod request_lifecycle_harness;
+pub mod constraint_harness;
+pub mod cross_product_harness;
 
 pub use control_harness::{evaluate_control_state, ControlDecision, ControlState, SyntheticControlMetrics};
 pub use request_lifecycle_harness::{evaluate_request_lifecycle_state, RequestLifecycleDecision, RequestLifecycleState, SyntheticRequestLifecycleMetrics};

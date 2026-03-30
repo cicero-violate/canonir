@@ -2585,7 +2585,19 @@ fn to_runtime_event(event: &RouteRowEvent) -> RuntimeEvent {
             plan_step_id: None,
         }),
         RouteRowEvent::PlanningCompleted { status, planned_count } => {
-            RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: 0, llm_request_id: Some(String::new()), planned_count: *planned_count, status: (*status).to_string() })
+            // Inject synthetic failure-aware routing hint via status normalization
+            // This enables downstream policy to distinguish repeated LLM failures
+            let normalized_status = match *status {
+                "llm_failed" | "llm_timeout" if *planned_count == 0 => "llm_failed_zero",
+                _ => *status,
+            };
+
+            RuntimeEvent::PlanningCompleted(PlanningCompleted {
+                tick: 0,
+                llm_request_id: Some(String::new()),
+                planned_count: *planned_count,
+                status: normalized_status.to_string(),
+            })
         }
     }
 }
