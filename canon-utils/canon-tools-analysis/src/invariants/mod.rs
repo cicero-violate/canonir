@@ -1,3 +1,4 @@
+pub mod bisimulation;
 pub mod invariant_discovery;
 pub mod invariant_generator;
 pub mod invariant_lifecycle;
