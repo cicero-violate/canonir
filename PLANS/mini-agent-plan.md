@@ -1,10 +1,10 @@
 # PLAN.md — Deterministic Loop Repair
 
-IMPORTANT - The logs are emitted here:
+IMPORTANT - The logs are emitted here, find the tail and fix it.
 archlinux in canon/state on  main                                                                                                                                                                                           2026-03-30 15:39:47
 ❯ ./watch_log.py 2>&1 | tee -a log.txt
 
-Check out log.txt
+Check out log.txt. 
 
 ---
 
