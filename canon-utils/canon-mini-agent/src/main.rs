@@ -162,7 +162,7 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
 
 3. apply_patch — update PLANS/mini-agent-plan.md with expanded steps
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n context\n+added step\n context\n*** End Patch"}
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n ## Step 2 — Remove Assignment  \n ← NOT VERIFIED: assignment עדיין קיים ב-test executor\n@@\n DELETE:\n@@\n self.awaiting_control_successor = match decision.lane.as_str() { ... }\n@@\n ---\n+SUBSTEPS:\n+1. run rg -n \"awaiting_control_successor =\".\n+2. open each match and locate assignment blocks.\n+3. delete the assignment expression.\n+4. remove any dependent variables or match arms.\n+5. confirm no remaining assignment references exist.\n*** End Patch"}
 
 4. run_command — inspect the codebase
    {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon"}
