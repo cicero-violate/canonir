@@ -323,7 +323,7 @@ impl RouteExecutor {
             {
                 crate::policy::DeterministicRouteRule::MissingTargetPlan
             } else {
-                crate::policy::DeterministicRouteRule::NoSemanticProgressPlan
+                crate::policy::DeterministicRouteRule::NoActionableFailureObserve
             },
         };
         let json = serde_json::json!({

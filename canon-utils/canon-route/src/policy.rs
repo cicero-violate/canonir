@@ -143,6 +143,7 @@ pub enum DeterministicRouteRule {
     StateDriftObserve,
     DoneVerify,
     SemanticProgressVerify,
+    NoActionableFailureObserve,
     NoSemanticProgressPlan,
     ContinueAct,
     PlannedToAct,
@@ -544,7 +545,7 @@ impl RouteProposal {
                 confidence: 0.95,
                 prompt_tag: "deterministic:no_semantic_progress_plan",
                 noop_reason: "route_executor_no_semantic_progress_plan",
-                rule: DeterministicRouteRule::NoSemanticProgressPlan,
+                rule: DeterministicRouteRule::NoActionableFailureObserve,
             },
             Self::InvalidPlanReplan => DeterministicRouteDecision {
                 route: RouteKind::Plan,
@@ -907,7 +908,7 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                     confidence: 0.95,
                     prompt_tag: "deterministic:no_actionable_failure_observe",
                     noop_reason: "route_executor_no_actionable_failure_observe",
-                    rule: DeterministicRouteRule::NoSemanticProgressPlan,
+                    rule: DeterministicRouteRule::NoActionableFailureObserve,
                 });
             } else {
                 if has_explicit_missing_target(ctx) {
@@ -1305,8 +1306,8 @@ fn apply_shared_route_constraint(
                 } else {
                     "route_executor_state_drift_observe"
                 },
-                rule: if reason.contains("no actionable failure") {
-                    DeterministicRouteRule::NoSemanticProgressPlan
+                    rule: if reason.contains("no actionable failure") {
+                    DeterministicRouteRule::NoActionableFailureObserve
                 } else {
                     DeterministicRouteRule::StateDriftObserve
                 },
@@ -1441,12 +1442,6 @@ pub fn has_actionable_failure(ctx: &RouteContext) -> bool {
         return true;
     }
 
-    if latest_no_semantic_progress(&ctx.recent_execution_results) {
-        return false;
-    }
-    if latest_no_semantic_progress(&ctx.recent_execution_results) {
-        return false;
-    }
     if latest_no_semantic_progress(&ctx.recent_execution_results) {
         return false;
     }
@@ -2460,7 +2455,7 @@ mod tests {
         };
         let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
         assert_eq!(decision.route, RouteKind::Observe);
-        assert_eq!(decision.rule, DeterministicRouteRule::NoSemanticProgressPlan);
+        assert_eq!(decision.rule, DeterministicRouteRule::NoActionableFailureObserve);
     }
 
     #[test]
