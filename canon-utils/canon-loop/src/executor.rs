@@ -481,6 +481,41 @@ impl LoopStageExecutor {
             .record_observation(observed.error_count, &observed.semantic_summary);
     }
 
+    fn handle_agent_registered(&mut self, payload: &serde_json::Value) {
+        if let Some(id) = payload.get("agent_id").and_then(|v| v.as_str()) {
+            let cap = payload.get("capacity").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+            self.ctx.scheduler.agent_capacity.insert(id.to_string(), cap);
+        }
+    }
+
+    fn handle_rustc_graph_artifact_written(
+        &mut self,
+        written: &canon_event::RustcGraphArtifactWritten,
+    ) {
+        if let Some(observed) = self.ctx.last_observed.as_mut() {
+            observed.semantic_summary.apply_graph_artifact_summary(
+                written.artifact_id.clone(),
+                written.node_count as usize,
+                written.edge_count as usize,
+                written.file_count as usize,
+                written.call_edge_count as usize,
+                written.module_edge_count as usize,
+                written.cfg_edge_count as usize,
+            );
+            self.ctx
+                .objective_trend_state
+                .record_observation(observed.error_count, &observed.semantic_summary);
+        }
+    }
+
+    fn handle_goodness_snapshot(&mut self, snapshot: &canon_event::GoodnessSnapshot) {
+        self.ctx.goodness = Some(snapshot.g);
+        self.ctx.delta_g = Some(snapshot.delta_g);
+        self.ctx
+            .objective_trend_state
+            .record_goodness(snapshot.g, snapshot.delta_g);
+    }
+
     fn handle_objective_trend_debug(&mut self, kind: &str) -> bool {
         match kind {
             "route_objective_contradiction" => {
@@ -827,24 +862,10 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.current_tick = *tick;
             }
             RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
-                if let Some(id) = payload.get("agent_id").and_then(|v| v.as_str()) {
-                    let cap = payload.get("capacity").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-                    self.ctx.scheduler.agent_capacity.insert(id.to_string(), cap);
-                }
+                self.handle_agent_registered(payload);
             }
             RuntimeEvent::RustcGraphArtifactWritten(written) => {
-                if let Some(observed) = self.ctx.last_observed.as_mut() {
-                    observed.semantic_summary.apply_graph_artifact_summary(
-                        written.artifact_id.clone(),
-                        written.node_count as usize,
-                        written.edge_count as usize,
-                        written.file_count as usize,
-                        written.call_edge_count as usize,
-                        written.module_edge_count as usize,
-                        written.cfg_edge_count as usize,
-                    );
-                    self.ctx.objective_trend_state.record_observation(observed.error_count, &observed.semantic_summary);
-                }
+                self.handle_rustc_graph_artifact_written(written);
             }
             RuntimeEvent::RustcCaptureCompleted(_) => {}
             RuntimeEvent::RustcCaptureFailed(failed) => {
@@ -877,9 +898,7 @@ impl EventConsumer for LoopStageExecutor {
                 self.handle_planning_completed(pc);
             }
             RuntimeEvent::GoodnessSnapshot(g) => {
-                self.ctx.goodness = Some(g.g);
-                self.ctx.delta_g = Some(g.delta_g);
-                self.ctx.objective_trend_state.record_goodness(g.g, g.delta_g);
+                self.handle_goodness_snapshot(g);
             }
             RuntimeEvent::RuntimeStateUpdated(updated) => {
                 self.handle_runtime_state_updated(updated);
