@@ -1,286 +1,293 @@
-# PLAN: Deterministic Simplification → Boundary Lock → Invariant Purity
-
-## Status (Validated Against Runtime)
-Completed:
-1. Behavior map and cleanup
-2. Route policy alignment + naming normalization
-3. Loop retry-policy narrowing
-4. Planner hint centralization
-5. Route executor thinning
-6. Loop executor partial extraction
-
-Observations:
-- Route policy is already highly structured with explicit rule enums and evaluations :contentReference[oaicite:0]{index=0}  
-- Matrix coverage is large but risks drift vs runtime truth :contentReference[oaicite:1]{index=1}  
-- Invariants correctly enforce transition legality but still risk semantic bleed :contentReference[oaicite:2]{index=2}  
-- Executors still contain orchestration + hidden policy coupling :contentReference[oaicite:3]{index=3} :contentReference[oaicite:4]{index=4}  
+# PLAN: Eliminate Duplication → Enforce Single Authority → Close Loop
 
 ---
 
-## Global Objective
-Minimize:
-- branching surface
-- duplicated decision paths
-- policy leakage into executors
-
-Maximize:
-- single ownership per concern
-- deterministic transition closure
-- invariant purity
+## Variables
+- P_r = route policy  
+- P_l = loop policy  
+- E = executors  
+- I = invariants  
+- T = transitions  
+- M = matrix  
 
 ---
 
-# Phase 6 — Loop Executor Collapse (Hard Boundary Extraction)
+## Equations
+1. Decision:
+   D = P_r ∪ P_l  
+   → all decisions originate in policy
 
-## Target
-`canon-loop/src/executor.rs`
+2. Purity:
+   E ∩ D = ∅  
+   I ∩ D = ∅  
+
+3. Transition:
+   ∀ t ∈ T: next(t) = I.required_successor(t)
+
+4. Consistency:
+   M ↔ (P_r, P_l)
+
+---
+
+## Objective
+Remove:
+- duplicated transition logic
+- executor-side decision making
+- invariant leakage into execution
+
+Achieve:
+- single source of truth
+- deterministic closure
+- zero ambiguity in control flow
+
+---
+
+# Phase 6 — Remove Executor Transition Authority
+
+## Problem
+Executor duplicates invariant logic:
+- `record_control_state`
+- `pending_required_successor`
 
 ## Actions
-- Extract full handlers:
-  - `handle_error_occurred(event)`
-  - `handle_planning_completed(event)`
-  - `handle_route_selected(event)`
-  - `handle_prompt_loaded(event)`
-  - `handle_runtime_state_updated(event)`
+- [ ] DELETE from executor:
+  - control state tracking
+  - successor expectation tracking
+- [ ] REMOVE:
+  - `record_control_state`
+  - `consume_control_successor`
 
-- Replace `on_event()` with:
-```rust
-match event {
-    ErrorOccurred => handle_error_occurred(...),
-    PlanningCompleted => handle_planning_completed(...),
-    _ => handle_small(...)
-}
-````
-
-* Deduplicate:
-
-  * result handling
-  * history mutation
-  * debug emission
+## Replace with
+- invariant-driven validation ONLY
 
 ## Constraint
-
-NO:
-
-* policy decisions
-* retry decisions
-* route shaping
-
-ONLY:
-
-* state update
-* emit
-* dispatch
+Executors MUST NOT:
+- know next state
+- track control graph
 
 ---
 
-# Phase 7 — Route / Loop Ownership Lock
+# Phase 7 — Enforce Policy-Only Decisions
 
-## Required Truth
-
-| Layer        | Responsibility       |
-| ------------ | -------------------- |
-| route policy | ALL route decisions  |
-| loop policy  | ALL retry / recovery |
-| executors    | ZERO decision logic  |
+## Problem
+Executors still interpret outcomes
 
 ## Actions
+- [ ] Scan executors:
+  - remove:
+    - conditional routing logic
+    - fallback decisions
+    - implicit recovery paths
+- [ ] Replace ALL branches with:
+```rust
+let decision = evaluate_*();
+apply(decision);
+````
 
-* Scan executors:
+## Rule
 
-  * delete:
-
-    * implicit routing
-    * fallback routing
-    * recovery heuristics
-* Ensure all decisions originate from:
-
-  * `evaluate_route_*`
-  * `evaluate_loop_*`
-
-## Validation
-
-* Every branch in executor maps to:
-
-  * a policy evaluation result
-  * OR a pure state update
+Executors = APPLY ONLY
 
 ---
 
-# Phase 8 — Invariant Purity Enforcement
-
-## Current
-
-* transition + successor enforcement exists 
-
-## Required
-
-Invariants = VALIDATION ONLY
-
-## Actions
-
-* Remove:
-
-  * heuristic recovery
-  * implicit behavior triggers
-* Keep ONLY:
-
-  * transition legality
-  * successor legality
-  * payload validity
-  * causal structure
-
-## Add Check
-
-```text
-if invariant influences route → INVALID DESIGN
-```
-
----
-
-# Phase 9 — Matrix ↔ Runtime Isomorphism
+# Phase 8 — Remove Invariant Leakage
 
 ## Problem
 
-Matrix may diverge from runtime logic 
+Loop executor calls:
+
+* `meta_invariant_*`
 
 ## Actions
 
-* For each matrix row:
+* [ ] REMOVE invariant calls from:
 
-  * map → exact runtime rule
-  * OR delete
+  * loop executor
+  * route executor
+* [ ] Move invariant evaluation to:
 
-## Enforce
+  * writer / append boundary ONLY
 
-1:1 mapping:
+## Constraint
 
-```
-matrix_row ↔ policy_rule ↔ runtime_effect
-```
-
-## Remove
-
-* dead rows
-* duplicate semantic cases
-* unused scenario families
+I = pure validation layer
 
 ---
 
-# Phase 10 — Deterministic Transition Closure
+# Phase 9 — Collapse Transition Authority
 
-## From invariants
+## Problem
 
-```
-RouteSelected → RequiredSuccessor
-```
+Two sources:
+
+* executor state tracking
+* invariant system
 
 ## Actions
 
-* Ensure ALL control transitions are closed:
+* [ ] Declare invariant layer as SINGLE authority
+* [ ] REMOVE all transition duplication from executors
+
+## Result
 
 ```
-∀ event:
-    next ∈ required_successor(event)
+transition_truth = invariants ONLY
 ```
 
-* Add audit:
+---
+
+# Phase 10 — Prove Matrix ↔ Runtime Mapping
+
+## Actions
+
+* [ ] For each matrix row:
+
+  * map → exact function:
+
+    * evaluate_route_*
+    * evaluate_loop_*
+* [ ] Build assertion:
 
 ```text
-missing_successor = INVALID SYSTEM STATE
+if matrix_row not reachable → delete
+if runtime rule not in matrix → add
 ```
 
 ## Goal
 
-ZERO:
+Bijective mapping:
 
-* dangling control states
-* double route_selected
-* illegal re-entry
+```
+M ↔ runtime
+```
 
 ---
 
-# Phase 11 — Executor Final Reduction
+# Phase 11 — Executor Collapse
 
-## Split only AFTER stability
+## Target
 
-Targets:
+Reduce `on_event()` to dispatcher
 
-* route executor:
+## Actions
 
-  * dispatch
-  * emit
-  * cache
-* loop executor:
+* [ ] Structure:
 
-  * event handlers
-  * stage transitions
-
-## Rule
-
-Split by:
-
-```
-(state mutation) vs (event emission) vs (dispatch)
+```rust
+match event {
+    A => handle_A(),
+    B => handle_B(),
+}
 ```
 
-NOT by file size.
+* [ ] Each handler:
+
+  * calls policy
+  * emits result
+  * updates state ONLY
+
+## Constraint
+
+NO branching inside handlers beyond:
+
+* match
+* direct apply
 
 ---
 
-# Phase 12 — Deterministic System Closure
+# Phase 12 — Close Deterministic Loop
 
-## Conditions
-
-* single route decision path
-* single retry path
-* invariant-gated transitions
-* no executor-side intelligence
-
-## System Form
+## Required System
 
 ```
 Event → Policy → Decision → Executor → Event
 ```
 
-Closed loop.
+## Actions
+
+* [ ] Verify:
+
+  * every control event has successor
+  * no duplicate route_selected
+  * no missing transitions
+* [ ] Add runtime assertion:
+
+```text
+invalid_transition → hard fail
+```
 
 ---
 
-# Definition of Done (Strict)
+# Phase 13 — Remove Hidden State Coupling
+
+## Problem
+
+Executor stores implicit system state
+
+## Actions
+
+* [ ] Audit executor fields:
+
+  * pending_request_id
+  * awaiting_control_successor
+  * last_control_kind
+* [ ] Remove anything not required for:
+
+  * emission
+  * dispatch
+
+## Rule
+
+State = event log, not executor memory
+
+---
+
+# Phase 14 — Final Structural Split
+
+## Split by function ONLY
+
+### Route Executor
+
+* dispatch
+* emit
+* cache
+
+### Loop Executor
+
+* event handling
+* stage execution
+
+## Do NOT split by size
+
+---
+
+# Definition of Done
 
 ## Structural
 
-* `on_event()` ≤ 30 lines
-* zero duplicated branching logic
-* no policy logic in executors
+* on_event ≤ 20–30 lines
+* no duplicated transition logic
+* no invariant calls in executors
 
 ## Logical
 
-* route decisions ONLY from route policy
-* loop recovery ONLY from loop policy
-* invariants DO NOT steer behavior
+* D = P_r ∪ P_l
+* E ∩ D = ∅
+* I ∩ D = ∅
 
 ## Behavioral
 
-* every control event has valid successor
-* no illegal transitions possible
-* no silent suppression paths
+* all transitions enforced by invariants
+* zero illegal control paths
+* zero silent suppression
 
 ## Consistency
 
-* matrix == runtime == emitted behavior
+* M == runtime == emitted behavior
 
 ---
 
 # Final State
-
-Let:
-
-* P_r = route policy
-* P_l = loop policy
-* E = executors
-* I = invariants
 
 ## System
 
@@ -309,5 +316,5 @@ min(branching) ∧ max(determinism)
 max(intelligence, efficiency, correctness, alignment) = GOOD
 ```
 
-
+```
 
