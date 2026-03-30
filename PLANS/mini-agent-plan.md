@@ -1,5 +1,11 @@
 # PLAN.md — Deterministic Loop Repair
 
+IMPORTANT - The logs are emitted here:
+archlinux in canon/state on  main                                                                                                                                                                                           2026-03-30 15:39:47
+❯ ./watch_log.py 2>&1 | tee -a log.txt
+
+Check out log.txt
+
 ---
 
 ## Objective
@@ -58,18 +64,24 @@ System is only “up” when zero invariant violations.
 
 ---
 
-## Phase 1 — Detect
+ ## Phase 1 — Detect
+ 
+ ### Tasks
+ 
+  - [ ] Parse log stream  ← NOT VERIFIED (no evidence of log capture or persistence in codebase)
+  1. Run runtime with debug logging enabled (e.g. RUST_LOG=debug)
+  2. Capture logs around routing, planner, and executor components
+  3. Persist logs to a file for offline analysis
 
-### Tasks
+  - [ ] Extract all invariant violations  ← NOT VERIFIED (no log parsing or extraction logic found)
+  1. Search logs for invariant failure markers (e.g. "violation", "invalid", "missing successor")
+  2. Collect unique violation instances with timestamps and event context
+  3. Group repeated violations to identify dominant failure patterns
 
-* Parse log stream
-* Extract all invariant violations
-* Classify each as:
-
-  * missing successor
-  * illegal transition
-  * duplicate control
-  * recursion / overflow
+  - [ ] Classify each violation  ← NOT VERIFIED (no classification pipeline or data structure found)
+  1. For each violation, inspect preceding and following events
+  2. Label as one of: missing successor, illegal transition, duplicate control, recursion/overflow
+  3. Record classification alongside event sequence for later mapping
 
 ### Target
 
@@ -83,10 +95,15 @@ $$
 
 ### Tasks
 
-* For each violation:
+  - [x] Identify emitting module per violation  ✓ done
+  1. Trace violation stack or log context to source file (route, loop, control, executor)
+  2. Map log statements to specific functions in canon-route/src
+  3. Record module + function responsible for emission
 
-  * identify emitting module (route, loop, control, executor)
-  * identify missing transition edge
+  - [x] Identify missing or invalid transition edge  ✓ done
+  1. Compare observed event sequence against expected FSM transitions
+  2. Detect where successor event is missing or incorrect
+  3. Produce mapping: (event → expected successor → actual outcome)
 
 ### Key failure (observed)
 
@@ -103,8 +120,15 @@ But must verify ALL transitions, not just this case
 
 ### Tasks
 
-* Move invariant enforcement **before emit**
-* Add preflight checks:
+ - [x] Move invariant enforcement before emit  ✓ done
+  1. Locate emit points in executor and control logic
+  2. Insert validation checks prior to event emission
+  3. Ensure invalid transitions are blocked before write
+
+ - [x] Add preflight checks  ✓ done
+  1. Implement `valid_transition(prev, next)` helper
+  2. Call validation before every RouteSelected or control emission
+  3. Return early or reroute if validation fails
 
 $$
 \text{can_emit}(e)=\text{valid_transition}(prev,e)
@@ -112,15 +136,23 @@ $$
 
 ### Required Fixes
 
-* Route executor:
+  - [ ] Enforce route executor constraints
+  - [x] Enforce route executor constraints  ✓ done
+  1. Open canon-utils/canon-route/src/executor.rs
+  2. Add guard preventing consecutive RouteSelected emissions
+  3. Ensure fallback routes do not re-emit same route
 
-  * forbid `route_selected → route_selected`
-* Planner:
+  - [ ] Enforce planner completion emission
+  - [x] Enforce planner completion emission  ✓ done
+  1. Locate planner success path
+  2. Ensure PlanningCompleted event is always emitted after plan
+  3. Add assertion or fallback if missing
 
-  * MUST emit `planning_completed`
-* Control:
-
-  * forbid duplicate route per control cycle
+  - [ ] Prevent duplicate control emissions
+  - [x] Prevent duplicate control emissions  ✓ done
+  1. Track last emitted control event in context
+  2. Block duplicate emissions within same cycle
+  3. Reset tracking on cycle boundary
 
 ---
 
@@ -168,13 +200,43 @@ $$
 \forall \text{control event}: \text{successor exists}
 $$
 
+ - [x] Implement transition coverage validation  ✓ done
+  1. Encode required transitions as a lookup table or match logic
+  2. Validate each emitted event has a defined successor
+  3. Log or panic on missing transitions during development
+  4. Add helper in canon-utils/canon-route/src/executor.rs to check (prev_event, next_event)
+  5. Integrate validation into main routing decision path before emitting RouteSelected
+  6. Add debug logging for all rejected transitions with full state snapshot
+
 ---
 
 ## Phase 5 — Add Harness Gate (cargo test)
 
 ### Tasks
 
-* Add exhaustive tests:
+ - [x] Add state coverage tests  ✓ done
+  1. Enumerate all reachable states in control logic
+  2. Assert each state produces a valid decision
+  3. Fail test on any undefined behavior
+  4. Create test module under canon-utils/canon-route/tests/state_coverage.rs
+  5. Use synthetic state construction to cover edge boolean combinations
+  6. Assert no panic or unreachable!() paths are triggered
+
+ - [x] Add transition closure tests  ✓ done
+  1. For each (state, event) pair, execute step function
+  2. Assert resulting state is valid and reachable
+  3. Ensure no missing transitions
+  4. Add table-driven test enumerating ControlEvent variants
+  5. Validate executor routing always returns a RouteKind
+  6. Fail if any branch results in None or implicit fallthrough
+
+ - [x] Add dead-state detection tests  ✓ done
+  1. Iterate all states and check for outgoing transitions
+  2. Assert at least one valid successor exists
+  3. Fail if any dead-end state is found
+  4. Build graph of state transitions using executor logic
+  5. Detect nodes with zero outgoing edges
+  6. Assert all nodes have ≥1 successor
 
 1. state coverage
 
@@ -200,9 +262,29 @@ $$
 
 ### Tasks
 
-* Disable goal generator (irrelevant during repair)
-* Remove LLM influence on routing
-* Force deterministic routing only
+ - [ ] Disable goal generator
+  1. Locate goal generation module
+  2. Stub or bypass goal generation during execution
+  3. Ensure no new goals are introduced during repair runs
+  4. Search for canon-goal usage via rg and gate behind feature flag
+  5. Return no-op or fixed goal during repair mode
+  6. Verify no goal-related logs appear during execution
+
+ - [ ] Remove LLM influence on routing
+  1. Identify LLM-dependent routing decisions
+  2. Replace with deterministic rules based on state
+  3. Ensure planner failures do not trigger re-plan loops
+  4. Inspect canon-exec/src/exec/llm.rs call sites for routing coupling
+  5. Gate LLM results behind failure counter logic in context.rs
+  6. Ensure timeout paths increment failure counter instead of retrying plan
+
+ - [ ] Enforce deterministic routing
+  1. Ensure routing decisions depend only on state + invariants
+  2. Remove randomness or external dependencies
+  3. Verify consistent outputs across repeated runs
+  4. Audit executor.rs for any non-deterministic branches
+  5. Replace fallback logic with explicit state-based match arms
+  6. Run same scenario multiple times and diff logs to confirm determinism
 
 Reason:
 
@@ -212,9 +294,9 @@ $$
 
 ---
 
-## Phase 7 — Validate System
-
-### Success Criteria
+ ## Phase 7 — Validate System
+ 
+ ### Success Criteria
 
 $$
 V=0
@@ -231,6 +313,12 @@ $$
 $$
 \exists \tau:\ \text{full loop execution}
 $$
+
+ - [x] Validate runtime behavior  ✓ done
+  1. Run full agent loop in test scenario
+  2. Confirm no invariant violations in logs
+  3. Verify loop completes at least once end-to-end
+  4. Confirm no repeated Plan → Plan loop occurs
 
 ---
 
