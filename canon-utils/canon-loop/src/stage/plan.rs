@@ -1615,7 +1615,7 @@ fn build_context_delta(
             );
             if policy == RetryPolicy::CorrectiveRetry {
                 format!(
-                    "{}\nRetry policy: corrective retry. Recent execution made no semantic progress; change the repair strategy before retrying.",
+                    "{}\nRetry policy: corrective retry. Change the repair strategy before retrying.",
                     llm_semantic_context.render_planner_delta_block()
                 )
             } else {

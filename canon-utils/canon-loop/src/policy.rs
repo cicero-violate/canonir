@@ -479,8 +479,6 @@ pub fn retry_policy_for_planning_context(
         RetryPolicy::CorrectiveRetry
     } else if semantic_no_progress_streak(recent_execution_results) >= 2 {
         RetryPolicy::CorrectiveRetry
-    } else if latest_no_semantic_progress(recent_execution_results) {
-        RetryPolicy::CorrectiveRetry
     } else {
         RetryPolicy::None
     }
@@ -514,12 +512,6 @@ pub fn planner_hint_lines(
         RetryPolicy::CorrectiveRetry => out.push(
             "Programmatic tip: fix the previous invalid payload directly; do not default to discovery unless file contents are missing.".to_string(),
         ),
-    }
-    if latest_no_semantic_progress(recent_execution_results) {
-        out.push(
-            "Programmatic tip: the last executed batch produced no semantic progress; change the repair strategy instead of retrying the same edit."
-                .to_string(),
-        );
     }
     if canon_semantic_state::latest_graph_proof_failed(recent_execution_results) {
         out.push(
@@ -642,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn no_semantic_progress_forces_corrective_retry_context() {
+    fn single_no_semantic_progress_does_not_force_corrective_retry_context() {
         let results = vec![SemanticExecutionResultRecord::new(
             "no_semantic_progress",
             "action failed",
@@ -651,11 +643,10 @@ mod tests {
         )];
         assert_eq!(
             retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()),
-            RetryPolicy::CorrectiveRetry
+            RetryPolicy::None
         );
         let hints =
             planner_hint_lines(None, 0, &results, &ObjectiveTrendState::default(), None, None).join("\n");
-        assert!(hints.contains("no semantic progress"));
         assert!(hints.contains("Recent execution semantics:"));
     }
 
@@ -769,6 +760,5 @@ mod tests {
     }
 }
 use canon_semantic_state::{
-    latest_no_semantic_progress, semantic_no_progress_streak, ObjectiveTrendState,
-    SemanticExecutionResultRecord,
+    semantic_no_progress_streak, ObjectiveTrendState, SemanticExecutionResultRecord,
 };

@@ -2244,7 +2244,7 @@ pub fn planner_recovery_rows() -> Vec<PlannerRecoveryRow> {
                 false,
             )],
             objective_trend_state: canon_semantic_state::ObjectiveTrendState::default(),
-            expected_retry: RetryPolicy::CorrectiveRetry,
+            expected_retry: RetryPolicy::None,
         },
         PlannerRecoveryRow {
             name: "planner_retry_trend_stalled",
