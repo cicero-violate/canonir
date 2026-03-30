@@ -1,4 +1,3 @@
-````markdown
 # PLAN.md — Final Elimination of Executor-Controlled Transitions
 
 ---
