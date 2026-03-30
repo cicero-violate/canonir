@@ -45,11 +45,28 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
    With "line":N the output starts at line N and shows up to 250 lines.
    ⚠ Always read a file before patching it. Never patch from memory.
-   ⚠ When applying a patch, copy context lines exactly as shown — the numbers are for reference only.
+   ⚠ read_file output is prefixed with line numbers ("42: code here"). Strip the "N: " prefix when
+     writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
+     WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
 
 3. apply_patch — create or update files
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: path/to/file.rs\n@@\n context\n+added line\n context\n*** End Patch"}
    {"action":"apply_patch","patch":"*** Begin Patch\n*** Add File: path/to/new.rs\n+line one\n+line two\n*** End Patch"}
+
+   To UPDATE an existing file, each @@ hunk needs 3 unchanged context lines around the change:
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn before_before() {}\n fn before() {}\n fn target() {\n-    old_body();\n+    new_body();\n }\n fn after() {}\n*** End Patch"}
+
+   Multiple hunks in one patch — each @@ is a separate location, each needs 3 context lines:
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn aaa() {}\n fn bbb() {}\n fn ccc() {\n+    extra_line();\n }\n fn ddd() {}\n@@\n fn xxx() {}\n fn yyy() {}\n fn zzz() {\n-    old();\n+    new();\n }\n fn www() {}\n*** End Patch"}
+
+   WRONG — @@ with only 1 context line per hunk causes anchor-miss failures:
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn ccc() {\n+    extra_line();\n@@\n fn zzz() {\n-    old();\n+    new();\n*** End Patch"}
+
+   Rules:
+   - Every @@ hunk must have AT LEAST 3 unchanged context lines (space-prefixed) around the edit.
+   - Never use @@ with only 1 context line — the patcher will fail to locate the anchor.
+   - Context lines must be copied EXACTLY from read_file output (minus the "N: " prefix).
+   - *** Add File for new files, *** Update File for existing files.
+   - NEVER use absolute paths inside the patch string.
 
 4. run_command — run shell commands for discovery or verification
    {"action":"run_command","cmd":"cargo check -p some-crate","cwd":"/workspace/ai_sandbox/canon"}

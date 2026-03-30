@@ -246,6 +246,10 @@ fn parse_update_chunk(lines: &[&str], starting_line_number: usize) -> Result<(Up
         } else if let Some(rest) = trimmed.strip_prefix(' ') {
             old_lines.push(rest.to_string());
             new_lines.push(rest.to_string());
+        } else if trimmed.is_empty() {
+            // bare blank line — treat as blank context line
+            old_lines.push(String::new());
+            new_lines.push(String::new());
         } else {
             return Err(InvalidHunkError { message: format!("unexpected line in update chunk: {trimmed}"), line_number: current_line_number });
         }
@@ -303,6 +307,29 @@ mod tests {
     fn parse_patch_rejects_missing_boundary_markers() {
         let err = parse_patch("*** Update File: canon-utils/foo.rs").expect_err("patch without begin/end markers must fail");
         assert!(matches!(err, ParseError::InvalidPatchError(_)));
+    }
+
+    #[test]
+    fn parse_patch_accepts_blank_context_lines_without_space_prefix() {
+        let patch = "\
+*** Begin Patch
+*** Update File: PLANS/plan.md
+@@
+ section one
+
+ section two
+- old line
++ new line
+*** End Patch";
+        let parsed = parse_patch(patch).expect("blank context lines should be tolerated");
+        assert_eq!(parsed.hunks.len(), 1);
+        match &parsed.hunks[0] {
+            Hunk::UpdateFile { chunks, .. } => {
+                let chunk = &chunks[0];
+                assert!(chunk.old_lines.contains(&String::new()), "blank line should appear in old_lines");
+            }
+            other => panic!("expected update-file hunk, got {other:?}"),
+        }
     }
 
     #[test]

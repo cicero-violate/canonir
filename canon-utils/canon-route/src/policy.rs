@@ -132,6 +132,7 @@ pub enum DeterministicRouteRule {
     DoneVerify,
     SemanticProgressVerify,
     NoActionableFailureObserve,
+    LlmPlanTimeoutObserve,
     NoSemanticProgressPlan,
     ContinueAct,
     PlannedToAct,

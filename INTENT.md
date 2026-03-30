@@ -1,4 +1,18 @@
-It gets stuck, fix it
+# INTENT
+## Objective
+Stop the infinite plan loop caused by LLM planner failures by tracking consecutive failures and routing to observe instead of repeatedly selecting plan.
+## Constraints
+- no build break
+- no test failure
+## Targets
+- canon-utils/canon-route/src/context.rs
+- canon-utils/canon-route/src/executor.rs
+## Success Criteria
+- consecutive LLM planning failures increment on llm_failed/timeout and reset on success
+- routing switches to observe when failures ≥ 2
+- router_disabled_fallback no longer hardcodes RouteKind::Plan
+- infinite plan → plan loop is eliminated
+- runtime progresses past LLM timeout scenario without looping
 
 archlinux in canon on  main                                                                                                                                                                                                 2026-03-30 12:50:20
 ❯ cargo run --bin canon-runtime-supervisor

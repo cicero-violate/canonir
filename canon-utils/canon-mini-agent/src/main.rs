@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock};
 
 const WORKSPACE: &str = "/workspace/ai_sandbox/canon";
 const PLAN_FILE: &str = "PLANS/mini-agent-plan.md";
-const WS_PORT_DEFAULT: u16 = 9100;
+const WS_PORT_DEFAULT: u16 = 9102;
 const MAX_STEPS: usize = 2000;
 const MAX_FULL_READ_LINES: usize = 500;
 const MAX_SNIPPET: usize = 3000;
@@ -45,11 +45,28 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
    With "line":N the output starts at line N and shows up to 250 lines.
    ⚠ Always read a file before patching it. Never patch from memory.
-   ⚠ When applying a patch, copy context lines exactly as shown — the numbers are for reference only.
+   ⚠ read_file output is prefixed with line numbers ("42: code here"). Strip the "N: " prefix when
+     writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
+     WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
 
 3. apply_patch — create or update files
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: path/to/file.rs\n@@\n context\n+added line\n context\n*** End Patch"}
    {"action":"apply_patch","patch":"*** Begin Patch\n*** Add File: path/to/new.rs\n+line one\n+line two\n*** End Patch"}
+
+   To UPDATE an existing file, each @@ hunk needs 3 unchanged context lines around the change:
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn before_before() {}\n fn before() {}\n fn target() {\n-    old_body();\n+    new_body();\n }\n fn after() {}\n*** End Patch"}
+
+   Multiple hunks in one patch — each @@ is a separate location, each needs 3 context lines:
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn aaa() {}\n fn bbb() {}\n fn ccc() {\n+    extra_line();\n }\n fn ddd() {}\n@@\n fn xxx() {}\n fn yyy() {}\n fn zzz() {\n-    old();\n+    new();\n }\n fn www() {}\n*** End Patch"}
+
+   WRONG — @@ with only 1 context line per hunk causes anchor-miss failures:
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn ccc() {\n+    extra_line();\n@@\n fn zzz() {\n-    old();\n+    new();\n*** End Patch"}
+
+   Rules:
+   - Every @@ hunk must have AT LEAST 3 unchanged context lines (space-prefixed) around the edit.
+   - Never use @@ with only 1 context line — the patcher will fail to locate the anchor.
+   - Context lines must be copied EXACTLY from read_file output (minus the "N: " prefix).
+   - *** Add File for new files, *** Update File for existing files.
+   - NEVER use absolute paths inside the patch string.
 
 4. run_command — run shell commands for discovery or verification
    {"action":"run_command","cmd":"cargo check -p some-crate","cwd":"/workspace/ai_sandbox/canon"}
@@ -78,6 +95,76 @@ Keep the rest of the plan file intact — only change the line(s) you just compl
 - Use run_command for cargo builds, tests, and shell discovery.
 - Never operate outside /workspace/ai_sandbox/canon.
 - Never emit destructive commands (rm -rf, git reset --hard, git clean -f, etc.).
+- Output format: exactly one JSON array in a ```json code block. No prose outside it.
+"#;
+
+const SYSTEM_INSTRUCTIONS_DISCOVERY: &str = r#"You are the canon discovery agent.
+
+Your job is to capture a comprehensive snapshot of the project so that other agents (planner, executor) have full context before they begin. You produce a structured report written to PLANS/discovery.md.
+
+You work inside the canon workspace at /workspace/ai_sandbox/canon. All relative file paths resolve against this workspace root.
+
+Each turn you receive either:
+  (a) the initial instruction; or
+  (b) the result of your last action.
+
+You respond with exactly one action per turn, wrapped in a `json` code block:
+
+```json
+[ { "action": "..." } ]
+```
+
+━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. list_dir — list directory contents
+   {"action":"list_dir","path":"canon-utils"}
+
+2. read_file — read a source file; output is line-numbered ("42: code here")
+   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs"}
+   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
+   With "line":N the output starts at line N and shows up to 250 lines.
+   ⚠ read_file output is prefixed with line numbers ("42: code here"). Strip the "N: " prefix when
+     writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
+     WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
+
+3. apply_patch — write the discovery report
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Add File: PLANS/discovery.md\n+# Discovery Report\n+...\n*** End Patch"}
+
+   To UPDATE an existing file, each @@ hunk needs 3 unchanged context lines around the change:
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/discovery.md\n@@\n line_before_before\n line_before\n target_line\n+new content\n line_after\n*** End Patch"}
+
+   Rules:
+   - Every @@ hunk must have AT LEAST 3 unchanged context lines (space-prefixed) around the edit.
+   - Never use @@ with only 1 context line — the patcher will fail to locate the anchor.
+   - Context lines must be copied EXACTLY from read_file output (minus the "N: " prefix).
+
+4. run_command — run shell commands to inspect the workspace
+   {"action":"run_command","cmd":"find canon-utils -name '*.rs' | head -60","cwd":"/workspace/ai_sandbox/canon"}
+   {"action":"run_command","cmd":"cargo check --workspace 2>&1 | tail -30","cwd":"/workspace/ai_sandbox/canon"}
+   {"action":"run_command","cmd":"rg -l '#\\[cfg(test)\\]' canon-utils/","cwd":"/workspace/ai_sandbox/canon"}
+
+5. done — declare discovery complete
+   {"action":"done","reason":"discovery complete — report written to PLANS/discovery.md"}
+
+━━━ DISCOVERY PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Collect and write the following into PLANS/discovery.md:
+
+1. File tree — run find or list_dir to enumerate all source files (.rs, .toml).
+2. Module structure — list crates in canon-utils/ and their src/ contents.
+3. Compiler state — run cargo check --workspace and capture errors/warnings.
+4. Test surface — find all files containing #[cfg(test)] or #[test].
+5. Plan status — read PLANS/mini-agent-plan.md and summarize pending vs done tasks.
+6. Key observations — anything unusual: missing modules, large files, TODO markers.
+
+Write all findings as a single apply_patch creating/overwriting PLANS/discovery.md.
+Call done when the report is written.
+
+━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- Only write to PLANS/discovery.md — never edit source files.
+- Emit exactly one action per turn.
+- Run commands first to gather data, then write the report in one patch.
 - Output format: exactly one JSON array in a ```json code block. No prose outside it.
 "#;
 
@@ -118,9 +205,17 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs"}
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
    With "line":N the output starts at line N and shows up to 250 lines.
+   ⚠ read_file output is prefixed with line numbers ("42: code here"). Strip the "N: " prefix when
+     writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
+     WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
 
 3. apply_patch — correct the plan file if a status mark is wrong
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n- [x] task ✓ done\n+- [ ] task  ← NOT VERIFIED\n*** End Patch"}
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n line_before_before\n line_before\n- [x] task ✓ done\n+- [ ] task  ← NOT VERIFIED\n line_after\n*** End Patch"}
+
+   Rules:
+   - Every @@ hunk needs AT LEAST 3 unchanged context lines (space-prefixed) around the change.
+   - WRONG: @@\n- [x] task\n+- [ ] task  (no context — will anchor-miss)
+   - RIGHT: @@\n line_above\n line_above2\n- [x] task\n+- [ ] task\n line_below
 
 4. run_command — run build/test commands to verify correctness
    {"action":"run_command","cmd":"cargo check -p some-crate","cwd":"/workspace/ai_sandbox/canon"}
@@ -175,9 +270,18 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
 2. read_file — read a source file; output is line-numbered ("42: code here")
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs"}
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
+   ⚠ read_file output is prefixed with line numbers ("42: code here"). Strip the "N: " prefix when
+     writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
+     WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
 
 3. apply_patch — update PLANS/mini-agent-plan.md with expanded steps
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n ## Step 2 — Remove Assignment  \n ← NOT VERIFIED: assignment עדיין קיים ב-test executor\n@@\n DELETE:\n@@\n self.awaiting_control_successor = match decision.lane.as_str() { ... }\n@@\n ---\n+SUBSTEPS:\n+1. run rg -n \"awaiting_control_successor =\".\n+2. open each match and locate assignment blocks.\n+3. delete the assignment expression.\n+4. remove any dependent variables or match arms.\n+5. confirm no remaining assignment references exist.\n*** End Patch"}
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n line_before_before\n line_before\n - [ ] task to expand\n+  1. sub-step one\n+  2. sub-step two\n line_after\n line_after_after\n*** End Patch"}
+
+   Rules:
+   - Every @@ hunk needs AT LEAST 3 unchanged context lines (space-prefixed) around the change.
+   - NEVER chain multiple @@ blocks with only 1 context line each — every anchor needs 3 lines.
+   - WRONG: @@\n - [ ] task\n+  1. sub-step\n@@\n - [ ] task2\n+  1. sub-step
+   - RIGHT: @@\n prev_line\n prev_line2\n - [ ] task\n+  1. sub-step\n next_line\n next_line2
 
 4. run_command — inspect the codebase
    {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon"}
@@ -679,11 +783,12 @@ async fn main() -> Result<()> {
         .find(|w| w[0] == "--start")
         .map(|w| w[1].as_str())
         .unwrap_or("executor");
-    if !matches!(start_role, "executor" | "verifier" | "planner" | "intent") {
-        bail!("invalid --start value: {start_role} (expected executor|verifier|planner|intent)");
+    if !matches!(start_role, "executor" | "verifier" | "planner" | "intent" | "discovery") {
+        bail!("invalid --start value: {start_role} (expected executor|verifier|planner|intent|discovery)");
     }
     let is_verifier  = !orchestrate && args.iter().any(|a| a == "--verifier");
     let is_planner   = !orchestrate && args.iter().any(|a| a == "--planner");
+    let is_discovery = !orchestrate && args.iter().any(|a| a == "--discovery");
     let ws_port: u16 = args.windows(2)
         .find(|w| w[0] == "--port")
         .and_then(|w| w[1].parse().ok())
@@ -715,6 +820,21 @@ async fn main() -> Result<()> {
                 _ => ["executor", "verifier", "planner", "intent"],
             };
 
+            // ── Discovery phase (runs before all other agents every cycle) ──────
+            {
+                let ep = find_endpoint(&config, "discovery")?.clone();
+                let plan = std::fs::read_to_string(&plan_path)
+                    .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+                let prompt = format!(
+                    "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\n\
+                    Plan (from {PLAN_FILE}):\n{plan}\n\n\
+                    Explore the workspace thoroughly and write a full discovery report to PLANS/discovery.md. \
+                    Emit exactly one action to begin."
+                );
+                eprintln!("[orchestrate] cycle={} starting discovery", cycle + 1);
+                let _ = run_agent("discovery", SYSTEM_INSTRUCTIONS_DISCOVERY, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await;
+            }
+
             let mut verify_result: Option<String> = None;
 
             for role in order {
@@ -738,11 +858,14 @@ DO NOT modify any other file."
                     "executor" => {
                         let plan = std::fs::read_to_string(&plan_path)
                             .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+                        let discovery = std::fs::read_to_string(workspace.join("PLANS/discovery.md")).unwrap_or_default();
                         let ep = find_endpoint(&config, "mini_agent")?.clone();
                         eprintln!("[orchestrate] starting executor");
-                        let prompt = format!(
-                            "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin."
-                        );
+                        let prompt = if discovery.is_empty() {
+                            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.")
+                        } else {
+                            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nDiscovery report (from PLANS/discovery.md):\n{discovery}\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.")
+                        };
                         let _exec_result = run_agent("executor", SYSTEM_INSTRUCTIONS_EXECUTOR, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
                     }
                     "verifier" => {
@@ -788,6 +911,8 @@ DO NOT modify any other file."
             ("verifier", SYSTEM_INSTRUCTIONS_VERIFIER)
         } else if is_planner {
             ("mini_planner", SYSTEM_INSTRUCTIONS_PLANNER)
+        } else if is_discovery {
+            ("discovery", SYSTEM_INSTRUCTIONS_DISCOVERY)
         } else {
             ("mini_agent", SYSTEM_INSTRUCTIONS_EXECUTOR)
         };
@@ -806,8 +931,15 @@ DO NOT modify any other file."
             format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan to verify (from {PLAN_FILE}):\n{plan}\n\nBegin by reading the plan and identifying all tasks marked `- [x]`. Verify each one. Emit exactly one action to begin.")
         } else if is_planner {
             format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCurrent plan (from {PLAN_FILE}):\n{plan}\n\nExpand all pending tasks (`- [ ]`) into concrete, actionable steps. Emit exactly one action to begin.")
+        } else if is_discovery {
+            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan (from {PLAN_FILE}):\n{plan}\n\nExplore the workspace thoroughly and write a full discovery report to PLANS/discovery.md. Emit exactly one action to begin.")
         } else {
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.")
+            let discovery = std::fs::read_to_string(workspace.join("PLANS/discovery.md")).unwrap_or_default();
+            if discovery.is_empty() {
+                format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.")
+            } else {
+                format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nDiscovery report (from PLANS/discovery.md):\n{discovery}\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.")
+            }
         };
 
         let reason = run_agent(role, instructions, initial_prompt, &endpoint, &bridge, &workspace, &config, &tabs, true).await?;

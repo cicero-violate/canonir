@@ -64,6 +64,7 @@ pub struct RouteContext {
     pub batch_settled: Option<(u32, bool)>, // (result_count, any_failed)
     batch_result_count: u32,
     batch_any_failed: bool,
+    pub consecutive_llm_plan_failures: u32,
     /// True when the current batch contains only llm.plan calls — routing deferred to LoopPlanned.
     pub batch_is_plan_only: bool,
     pub last_invalid_plan_reason: Option<String>,
@@ -83,6 +84,22 @@ impl RouteContext {
     pub fn new() -> Self {
         Self::default()
     }
+
+
+    pub fn record_planning_completion(&mut self, status: &str, planned_count: Option<usize>) {
+        match status {
+            "llm_failed" | "llm_timeout" => {
+                self.consecutive_llm_plan_failures += 1;
+            }
+            "ok" => {
+                if planned_count.unwrap_or(0) > 0 {
+                    self.consecutive_llm_plan_failures = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+
 
     fn goal_is_placeholder(goal: &str) -> bool {
         let trimmed = goal.trim();

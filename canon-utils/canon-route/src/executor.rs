@@ -170,6 +170,9 @@ impl RouteExecutor {
     }
 
     fn router_disabled_fallback_rule(&self) -> crate::policy::DeterministicRouteRule {
+        if self.ctx.consecutive_llm_plan_failures >= 2 {
+            return crate::policy::DeterministicRouteRule::LlmPlanTimeoutObserve;
+        }
         if self.ctx.last_invalid_plan_reason.is_some() {
             crate::policy::DeterministicRouteRule::InvalidPlanReplan
         } else if self.ctx.semantic_summary.validation_blocked_by_preconditions {
@@ -177,18 +180,41 @@ impl RouteExecutor {
         } else if self.ctx.semantic_summary.planning_preconditions.iter().any(|line| line.contains("must_bootstrap_workspace=true")) {
             crate::policy::DeterministicRouteRule::MissingTargetPlan
         } else {
-            crate::policy::DeterministicRouteRule::NoActionableFailureObserve
+            crate::policy::DeterministicRouteRule::MissingTargetPlan
         }
     }
 
     fn router_disabled_fallback(&self, prompt_hash: u64) -> DeterministicRouteDecision {
+        let rule = self.router_disabled_fallback_rule();
+        let (route, rationale, prompt_tag, noop_reason) = match rule {
+            crate::policy::DeterministicRouteRule::LlmPlanTimeoutObserve => {
+                (
+                    RouteKind::Observe,
+                    format!(
+                        "router_llm_disabled; consecutive_llm_plan_failures={}; routing to observe (timeout fallback) (prompt_hash={prompt_hash:016x})",
+                        self.ctx.consecutive_llm_plan_failures
+                    ),
+                    "deterministic:router_llm_timeout_observe",
+                    "route_executor_llm_timeout_observe",
+                )
+            }
+            _ => (
+                RouteKind::Plan,
+                format!(
+                    "router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"
+                ),
+                "deterministic:router_llm_disabled_plan",
+                "route_executor_router_llm_disabled_plan",
+            ),
+        };
+
         DeterministicRouteDecision {
-            route: RouteKind::Plan,
-            rationale: format!("router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"),
+            route,
+            rationale,
             confidence: 0.90,
-            prompt_tag: "deterministic:router_llm_disabled_plan",
-            noop_reason: "route_executor_router_llm_disabled_plan",
-            rule: self.router_disabled_fallback_rule(),
+            prompt_tag,
+            noop_reason,
+            rule,
         }
     }
 
@@ -642,12 +668,15 @@ impl EventConsumer for RouteExecutor {
             | RuntimeEvent::RustcCaptureFailed(_)
             | RuntimeEvent::LoopObserved(_)
             | RuntimeEvent::LoopPlanned(_)
-            | RuntimeEvent::PlanningCompleted(_)
             | RuntimeEvent::LoopActed(_)
             | RuntimeEvent::LoopVerified(_)
             | RuntimeEvent::VerifierPolicyUpdated(_)
             | RuntimeEvent::LoopRewarded(_)
             | RuntimeEvent::RouteSelected(_) => EventOutcome::NoOp("route_executor_noop"),
+            RuntimeEvent::PlanningCompleted(pc) => {
+                self.ctx.record_planning_completion(&pc.status, Some(pc.planned_count));
+                EventOutcome::NoOp("route_executor_noop")
+            }
         }
     }
 }
@@ -736,7 +765,21 @@ impl RouteExecutor {
                 }),
             );
             let tid = self.current_trigger.clone().expect("emit_deterministic_decision called without current_trigger set");
-            emitter.emit_child(RuntimeEvent::Debug(canon_event::DebugEvent { source: "route_executor".to_string(), kind: kind.to_string(), payload }), vec![tid.clone()], file!(), line!());
+            // include parent id to avoid identical payload hashes across iterations
+            let mut enriched = payload.clone();
+            if let Some(obj) = enriched.as_object_mut() {
+                obj.insert("parent_event_id".to_string(), serde_json::json!(tid.to_string()));
+            }
+            emitter.emit_child(
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "route_executor".to_string(),
+                    kind: kind.to_string(),
+                    payload: enriched,
+                }),
+                vec![tid.clone()],
+                file!(),
+                line!(),
+            );
             self.emit_recovery_for_expected_successor(emitter, tid);
             return;
         }

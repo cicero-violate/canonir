@@ -104,6 +104,14 @@ role = "mini_agent"
 stateful = true
 max_tabs = 1
 
+[[llm.endpoints]]
+id = "discovery_chatgpt"
+url = "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118"
+role_markdown = "builtin:planner"
+role = "discovery"
+stateful = true
+max_tabs = 1
+
 
 [llm.roles.mini_planner.weights]
 mini_planner_chatgpt = 100
@@ -275,6 +283,12 @@ harness_eventlog_chatgpt = 100
 [llm.roles.harness_eventlog]
 burst = 1
 
+[llm.roles.discovery.weights]
+discovery_chatgpt = 100
+
+[llm.roles.discovery]
+burst = 1
+
 [llm.roles.exec.weights]
 exec_chatgpt_a = 100
 exec_chatgpt_b = 100
@@ -370,6 +384,13 @@ tool_capabilities = ["apply_patch", "bash"]
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/69c8f86cf14c81a0a1a9b4487bccd784"
 agent_id = "harness_eventlog"
+role = "builtin:planner"
+goal = "AGENT_GOAL.md"
+tool_capabilities = ["apply_patch", "bash"]
+
+[[agents.cards]]
+agent_url = "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118"
+agent_id = "discovery"
 role = "builtin:planner"
 goal = "AGENT_GOAL.md"
 tool_capabilities = ["apply_patch", "bash"]
