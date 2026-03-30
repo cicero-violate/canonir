@@ -76,6 +76,7 @@ fn should_count_as_noop_violation(consumer: &str, reason: &str) -> bool {
                 | "route_executor_unrelated_completion"
                 | "route_executor_unrelated_failure"
                 | "route_executor_noop"
+                | "route_executor_missing_target_plan"
         ),
         "loop_stage_executor" => !matches!(
             reason,

@@ -78,6 +78,13 @@ impl LoopStageExecutor {
             self.ctx.pending_required_successor = Some(expected.to_string());
         }
     }
+
+    fn consume_control_successor(&mut self, event: &RuntimeEvent) {
+        let event_kind = canon_event::event_kind_str(event);
+        if self.ctx.pending_required_successor.as_deref() == Some(event_kind) {
+            self.ctx.pending_required_successor = None;
+        }
+    }
     fn emit_debug(&self, trigger_id: &EventId, kind: &str, reason: &str, payload: serde_json::Value) {
         if let Some(emitter) = self.ctx.emitter.as_ref() {
             emitter.emit_child(
@@ -517,6 +524,8 @@ impl EventConsumer for LoopStageExecutor {
                 }
             }
         }
+        self.consume_control_successor(event);
+
         let mut trigger_observe = false;
         let force_observe_recovery = recovery_eval
             .as_ref()
@@ -940,6 +949,7 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::InvariantDiscovered(_)
             | RuntimeEvent::RustcCaptureStarted(_) => {}
         }
+        self.consume_control_successor(event);
         self.record_control_state(event, &trigger_id);
 
         let suppress_observe_on_invariant =

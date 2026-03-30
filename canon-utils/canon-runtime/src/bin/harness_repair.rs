@@ -837,11 +837,17 @@ fn derive_next_action_hint(result: &str) -> Option<String> {
     }
 
     // compiler or runtime error with file:line
-    if let Some((file, line)) = extract_primary_file_line(result) {
-        return Some(format!(
-            r#"{{"action":"read_file","path":"{}","line":{}}}"#,
-            file, line
-        ));
+    // avoid infinite local-fallback loops on repeated read_file outcomes
+    if !result.contains("step=1 action=read_file")
+        && !result.contains("step=2 action=read_file")
+        && !result.contains("step=3 action=read_file")
+    {
+        if let Some((file, line)) = extract_primary_file_line(result) {
+            return Some(format!(
+                r#"{{"action":"read_file","path":"{}","line":{}}}"#,
+                file, line
+            ));
+        }
     }
 
     // assertion failures

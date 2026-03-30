@@ -12,34 +12,54 @@ Prefer the smallest fix that restores a valid control transition.
 Add a synthetic reproduction for the observed event sequence.
 
 Likely files:
+
+canon-utils/canon-exec/src/exec/bash.rs
+canon-utils/canon-exec/src/exec/llm.rs
 canon-utils/canon-loop/src/executor.rs
+canon-utils/canon-loop/src/stage/plan.rs
 canon-utils/canon-route/src/executor.rs
 canon-utils/canon-runtime-events/src/tlog/binary.rs
 canon-utils/canon-runtime/src/bus.rs
+canon-utils/canon-runtime/src/consumers/capability_executor.rs
+canon-utils/canon-runtime/src/consumers/diagnostics_consumer.rs
+canon-utils/canon-runtime/src/consumers/goal_gen_consumer.rs
 canon-utils/canon-runtime/src/consumers/repair_control_consumer.rs
 
 Likely file:line anchors:
-canon-utils/canon-loop/src/executor.rs:296
-canon-utils/canon-loop/src/executor.rs:300
-canon-utils/canon-loop/src/executor.rs:91
-canon-utils/canon-route/src/executor.rs:853
-canon-utils/canon-runtime-events/src/tlog/binary.rs:383
-canon-utils/canon-runtime/src/bus.rs:239
-canon-utils/canon-runtime/src/consumers/repair_control_consumer.rs:510
+:0
+canon-utils/canon-exec/src/exec/bash.rs:41
+canon-utils/canon-exec/src/exec/llm.rs:373
+canon-utils/canon-exec/src/exec/llm.rs:409
+canon-utils/canon-exec/src/exec/llm.rs:410
+canon-utils/canon-loop/src/executor.rs:303
+canon-utils/canon-loop/src/executor.rs:307
+canon-utils/canon-loop/src/executor.rs:98
+canon-utils/canon-loop/src/stage/plan.rs:1148
+canon-utils/canon-loop/src/stage/plan.rs:1164
+canon-utils/canon-loop/src/stage/plan.rs:1220
+canon-utils/canon-route/src/executor.rs:861
+canon-utils/canon-route/src/executor.rs:98
+canon-utils/canon-runtime-events/src/tlog/binary.rs:424
+canon-utils/canon-runtime/src/bus.rs:240
+canon-utils/canon-runtime/src/consumers/capability_executor.rs:82
+canon-utils/canon-runtime/src/consumers/diagnostics_consumer.rs:140
+canon-utils/canon-runtime/src/consumers/goal_gen_consumer.rs:157
+canon-utils/canon-runtime/src/consumers/goal_gen_consumer.rs:427
+canon-utils/canon-runtime/src/consumers/repair_control_consumer.rs:483
 
 Recent event excerpt:
-kind=unknown actor=plan at=canon-utils/canon-loop/src/executor.rs:300
-kind=error_occurred actor=event-runtime at=canon-utils/canon-runtime/src/consumers/repair_control_consumer.rs:510
-kind=planning_completed actor=supervisor at=canon-utils/canon-runtime-events/src/tlog/binary.rs:383
-kind=planning_completed actor=loop_stage_executor debug_kind=observe_suppressed_due_to_pending_successor at=canon-utils/canon-loop/src/executor.rs:91
-kind=unknown at=canon-utils/canon-loop/src/executor.rs:296
-kind=error_occurred actor=event-runtime at=canon-utils/canon-runtime/src/consumers/repair_control_consumer.rs:510
-kind=route_selected actor=supervisor at=canon-utils/canon-route/src/executor.rs:853
-kind=unknown at=canon-utils/canon-runtime/src/bus.rs:239
-kind=error_occurred actor=event-runtime at=canon-utils/canon-runtime/src/bus.rs:239
-kind=route_selected actor=loop_stage_executor debug_kind=observe_suppressed_due_to_pending_successor at=canon-utils/canon-loop/src/executor.rs:91
-kind=unknown actor=plan at=canon-utils/canon-loop/src/executor.rs:300
-kind=error_occurred actor=event-runtime at=canon-utils/canon-runtime/src/consumers/repair_control_consumer.rs:510
+kind=unknown at=canon-utils/canon-runtime/src/bus.rs:240
+kind=error_occurred actor=event-runtime at=canon-utils/canon-runtime/src/bus.rs:240
+kind=unknown at=canon-utils/canon-loop/src/stage/plan.rs:1148
+kind=unknown actor=event-runtime at=canon-utils/canon-loop/src/stage/plan.rs:1164
+kind=planning_completed actor=loop_stage_executor debug_kind=observe_suppressed_due_to_pending_successor at=canon-utils/canon-loop/src/executor.rs:98
+kind=error_occurred actor=llm_executor message=llm call timed out at=canon-utils/canon-exec/src/exec/llm.rs:409
+kind=capability_failed actor=event-runtime message=llm call timed out at=canon-utils/canon-exec/src/exec/llm.rs:410
+kind=capability_failed actor=event-runtime message=llm call timed out at=canon-utils/canon-exec/src/exec/llm.rs:410
+kind=unknown at=canon-utils/canon-loop/src/stage/plan.rs:1220
+kind=planning_completed actor=plan at=canon-utils/canon-loop/src/executor.rs:303
+kind=route_selected actor=supervisor at=canon-utils/canon-route/src/executor.rs:861
+kind=planning_completed actor=loop_stage_executor debug_kind=observe_suppressed_due_to_pending_successor at=canon-utils/canon-loop/src/executor.rs:98
 
 Repair requirements:
 - Fix the control-path bug surfaced by the event log.

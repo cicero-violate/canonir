@@ -38,14 +38,14 @@ pub fn init_bash_worker() {
                                 stdout: String::from_utf8_lossy(&output.stdout).to_string(),
                                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
                             }),
-                        }), vec![trigger_id], file!(), line!());
+                        }), vec![trigger_id.clone()], file!(), line!());
                     }
                     Err(err) => {
                         emitter.emit_child(RuntimeEvent::CapabilityFailed(CapabilityFailed {
                             request_id,
                             capability: "bash",
                             error: err.to_string(),
-                        }), vec![trigger_id], file!(), line!());
+                        }), vec![trigger_id.clone()], file!(), line!());
                     }
                 }
             }

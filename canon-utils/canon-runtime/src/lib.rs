@@ -9,7 +9,7 @@ use bus::EventBus;
 use canon_invariant::{invariant_violation_delta, invariant_violation_state};
 use canon_event::BinarySegmentWriter;
 use canon_event::{
-    new_error_occurred, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CapabilityCompleted, CapabilityFailed, Code, DebugEvent, ErrorOccurred, EventConsumer, EventDelta, EventEmitter,
+    new_error_occurred, AnalysisEvent, AnalysisRun, AnalysisWorkspace, CapabilityCompleted, CapabilityFailed, Code, DebugEvent, ErrorOccurred, EventClass, EventConsumer, EventDelta, EventEmitter,
     EventEmitterHandle, PromptLoaded, RuntimeEvent, RuntimeStateUpdated, RustcEvent, RustcState, Tick,
 };
 use canon_event::{EdgeDefined, EdgeRemoved, FileSeen, NodeDefined, NodeRemoved, NodeUpdated};
@@ -172,6 +172,14 @@ impl EventRuntime {
                 if self.dispatched_ids.remove(&canon.id) {
                     processed += 1;
                     continue;
+                }
+                // Sync the writer's pending FSM state for control events produced by other
+                // processes (supervisor, planner). Without this the per-process in-memory
+                // pending state diverges and spuriously rejects the next write from here.
+                if let Some(writer_arc) = self.tlog_writer.as_ref() {
+                    if let Ok(w) = writer_arc.lock() {
+                        w.notify_replayed_event(canon);
+                    }
                 }
                 // Preserve the original causal parent chain from the tlog entry.
                 // Without this, replayed events (e.g. capability_completed written by
@@ -604,7 +612,12 @@ impl EventRuntime {
         // Drop consecutive identical events of the same kind (same data hash).
         // This prevents tlog bloat when consumers fire the same event repeatedly
         // (e.g. route_tick, goodness_snapshot) without any state change.
-        if wire.kind != canon_event::EventKind::RouteSelected {
+        // IMPORTANT: Control events are NEVER deduplicated. bus.dispatch runs before
+        // append_runtime_event, so consumers (e.g. RouteExecutor) already update their
+        // FSM state when a control event is dispatched. If the write is then silently
+        // dropped by the dedup gate, BinarySegmentWriter.pending diverges from consumer
+        // state and the next control-event write fails with "missing required successor".
+        if wire.kind.class() != EventClass::Control {
             let content_hash = {
                 use std::hash::{Hash, Hasher};
                 let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -613,6 +626,10 @@ impl EventRuntime {
                 h.finish()
             };
             if self.last_kind_hash.get(&wire.kind) == Some(&content_hash) {
+                eprintln!(
+                    "[runtime][dedup_drop] kind={} id={} — skipping consecutive duplicate",
+                    wire.kind, wire.id
+                );
                 return; // identical consecutive event for this kind — skip write
             }
             self.last_kind_hash.insert(wire.kind, content_hash);

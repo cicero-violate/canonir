@@ -188,6 +188,28 @@ impl BinarySegmentWriter {
         self
     }
 
+    /// Advance the in-memory pending-required-successor FSM to reflect a control event
+    /// that was written by another process and read back from the tlog. Does not write
+    /// anything; only updates `pending` so subsequent writes from this process are not
+    /// spuriously rejected by the `missing required successor` invariant check.
+    pub fn notify_replayed_event(&self, event: &CanonEvent) {
+        if event.kind.class() != EventClass::Control {
+            return;
+        }
+        let next_pending = invariants::required_successor(event).map(|p| PendingState {
+            expected: p.expected,
+            parent: p.parent,
+            source_kind: p.source_kind,
+            note: p.note,
+        });
+        eprintln!(
+            "[tlog][notify_replayed] kind={} id={} actor={} next_expected={:?}",
+            event.kind, event.id, event.actor,
+            next_pending.as_ref().map(|p| p.expected.to_string())
+        );
+        *self.pending.lock().expect("pending poisoned") = next_pending;
+    }
+
     pub fn write_canon_event(&self, event: &CanonEvent) -> Result<()> {
         if let Some(retry_err) = self.check_invalid_retry(event)? {
             return Err(retry_err);
@@ -216,6 +238,11 @@ impl BinarySegmentWriter {
                 if event.kind.class() == EventClass::Effect {
                     // effect events neither discharge nor mutate the control FSM
                 } else if event.kind != req.expected {
+                    eprintln!(
+                        "[tlog][pending_violation] got={} id={} actor={} expected={} after={} parent={} note={}",
+                        event.kind, event.id, event.actor,
+                        req.expected, req.source_kind, req.parent, req.note
+                    );
                     let err = anyhow::anyhow!(
                         "invariant violation: missing required successor after {} id={}; expected={}; got={}; note={}",
                         req.source_kind,
@@ -228,6 +255,10 @@ impl BinarySegmentWriter {
                     *pending = None;
                     return Err(err);
                 } else {
+                    eprintln!(
+                        "[tlog][pending_discharged] kind={} id={} discharged_expected={} after={}",
+                        event.kind, event.id, req.expected, req.source_kind
+                    );
                     required_successor_override = true;
                     *pending = None;
                 }
@@ -238,6 +269,10 @@ impl BinarySegmentWriter {
             let content_hash = event_content_hash(event);
             let mut dedup = self.dedup.lock().expect("dedup cache poisoned");
             if !dedup.insert_if_new(content_hash) {
+                eprintln!(
+                    "[tlog][dedup_reject] kind={} id={} actor={} content_hash_collision",
+                    event.kind, event.id, event.actor
+                );
                 let err = anyhow::anyhow!(
                     "invariant violation: duplicate event within dedup window kind={}; id={}",
                     event.kind,
@@ -250,12 +285,18 @@ impl BinarySegmentWriter {
 
         self.write_canon_event_inner(event)?;
         if event.kind.class() == EventClass::Control {
-            *self.pending.lock().expect("pending poisoned") = invariants::required_successor(event).map(|p| PendingState {
+            let next = invariants::required_successor(event).map(|p| PendingState {
                 expected: p.expected,
                 parent: p.parent,
                 source_kind: p.source_kind,
                 note: p.note,
             });
+            eprintln!(
+                "[tlog][pending_set] after_kind={} after_id={} next_expected={:?}",
+                event.kind, event.id,
+                next.as_ref().map(|p| p.expected.to_string())
+            );
+            *self.pending.lock().expect("pending poisoned") = next;
         }
         Ok(())
     }

@@ -482,12 +482,27 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 .as_ref()
                 .map(|observed| observed.semantic_summary.clone())
                 .unwrap_or_default();
+            // ExecState checks real filesystem state (does Cargo.toml exist?) against the
+            // semantic target — i.e., the project being created/repaired, NOT the cwd from
+            // which the command runs. Using cwd here incorrectly treats a parent workspace
+            // as an "existing Cargo project", which blocks `cargo new` on bootstrap.
+            let constraint_target_root = semantic_summary
+                .target_root
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(cwd));
+            eprintln!(
+                "[act_stage] exec_state target_root={} cwd={} real_cargo_toml={}",
+                constraint_target_root.display(),
+                cwd,
+                constraint_target_root.join("Cargo.toml").exists(),
+            );
             let target_root = PathBuf::from(cwd);
             let mut exec_action = ExecAction::RunCommand {
                 cmd: cmd.to_string(),
                 cwd: target_root.clone(),
             };
-            let exec_state = ExecState::from_semantic_summary(&target_root, &semantic_summary);
+            let exec_state = ExecState::from_semantic_summary(&constraint_target_root, &semantic_summary);
             let mut rewrite_debug_event = None;
             match validate_exec_action(&exec_state, &exec_action) {
                 ExecDecision::Allow => {}

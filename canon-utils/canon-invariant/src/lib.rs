@@ -489,22 +489,7 @@ fn evaluate_discovered_invariants(ctx: &ConstraintContext) -> Option<ConstraintD
                     ));
                 }
             }
-            DiscoveredInvariant::ForceObserveWhenNoActionableFailure => {
-                if ctx.route == Some(ConstraintRoute::Plan)
-                    && (ctx.state.failure_class_no_actionable
-                        || (ctx.state.recent_no_semantic_progress
-                            && !ctx.state.actionable_failure))
-                    && !ctx.state.validation_blocked
-                    && !ctx.state.entrypoint_missing
-                    && !ctx.state.module_gaps_present
-                    && ctx.state.real_path_exists
-                {
-                    return Some(ConstraintDecision::RewriteRoute(
-                        ConstraintRoute::Observe,
-                        "discovered_invariant_no_actionable_failure: repeated no-actionable-failure plans require observation refresh instead",
-                    ));
-                }
-            }
+            DiscoveredInvariant::ForceObserveWhenNoActionableFailure => {}
             DiscoveredInvariant::ForcePlanWhenValidationBlocked => {
                 if matches!(ctx.route, Some(ConstraintRoute::Verify | ConstraintRoute::Conclude))
                     && ctx.state.actionable_failure
@@ -860,9 +845,20 @@ pub fn evaluate_constraint_context(ctx: &ConstraintContext) -> ConstraintDecisio
             && !ctx.state.module_gaps_present
             && ctx.state.real_path_exists
         {
-            return ConstraintDecision::RewriteRoute(
-                ConstraintRoute::Observe,
-                "meta_invariant_no_actionable_failure: no actionable failure is scoped; refresh observation instead of repair replanning",
+            eprintln!(
+                "[constraint][plan_stays_plan] route={} deterministic_route={:?} failure_class_no_actionable={} recent_no_semantic_progress={} actionable_failure={} validation_blocked={} entrypoint_missing={} module_gaps_present={} real_path_exists={} real_cargo_project={} semantic_path_exists={} semantic_cargo_project={}",
+                route.as_str(),
+                ctx.deterministic_route.map(|r| r.as_str()),
+                ctx.state.failure_class_no_actionable,
+                ctx.state.recent_no_semantic_progress,
+                ctx.state.actionable_failure,
+                ctx.state.validation_blocked,
+                ctx.state.entrypoint_missing,
+                ctx.state.module_gaps_present,
+                ctx.state.real_path_exists,
+                ctx.state.real_cargo_project,
+                ctx.state.semantic_path_exists,
+                ctx.state.semantic_cargo_project,
             );
         }
         if matches!(route, ConstraintRoute::Verify | ConstraintRoute::Conclude)

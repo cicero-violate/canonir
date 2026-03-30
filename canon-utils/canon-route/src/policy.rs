@@ -315,6 +315,23 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
         deterministic_route: None,
     }) {
         ConstraintDecision::RewriteRoute(ConstraintRoute::Observe, reason) => {
+            eprintln!(
+                "[policy][apply_route_policy][observe_rewrite] reason={} lane_before={} planned_pending={} invalid_plan_batches={} target_missing={} failure_class={:?} failure_scope={:?} no_progress={} actionable_failure={} validation_blocked={} compiler_repair_required={} planning_preconditions={} compiler_hints={} module_gaps={}",
+                reason,
+                decision.lane.as_str(),
+                ctx.planned_pending,
+                ctx.consecutive_invalid_plan_batches,
+                has_explicit_missing_target(ctx),
+                ctx.semantic_summary.primary_failure_class(),
+                ctx.semantic_summary.failure_scope,
+                latest_no_semantic_progress(&ctx.recent_execution_results),
+                has_actionable_failure(ctx),
+                ctx.validation_blocked_state(),
+                ctx.semantic_summary.compiler_repair_required,
+                ctx.semantic_summary.planning_preconditions.len(),
+                ctx.semantic_summary.compiler_hints.len(),
+                ctx.semantic_summary.module_gaps.len(),
+            );
             decision.lane = RouteKind::Observe;
             decision.should_stop = false;
             decision.changed = true;
@@ -522,35 +539,13 @@ impl RouteProposal {
                 noop_reason: "route_executor_blocked_validation_plan",
                 rule: DeterministicRouteRule::BlockedValidationPlan,
             },
-            Self::NoSemanticProgressPlan => {
-                if true {
-                    DeterministicRouteDecision {
-                        route: RouteKind::Observe,
-                        rationale: "no progress and no actionable failure".to_string(),
-                        confidence: 0.95,
-                        prompt_tag: "deterministic:no_actionable_failure_observe",
-                        noop_reason: "route_executor_no_actionable_failure_observe",
-                        rule: DeterministicRouteRule::NoActionableFailureObserve,
-                    }
-                } else {
-                    DeterministicRouteDecision {
-                route: RouteKind::Observe,
-                rationale: "no progress and no actionable failure".to_string(),
+            Self::NoSemanticProgressPlan => DeterministicRouteDecision {
+                route: RouteKind::Plan,
+                rationale: "no semantic progress; replan instead of refreshing observe".to_string(),
                 confidence: 0.95,
-                prompt_tag: "deterministic:no_actionable_failure_observe",
-                noop_reason: "route_executor_no_actionable_failure_observe",
-                rule: {
-                    if ctx.semantic_summary.complete
-                        && (!ctx.semantic_summary.path_exists
-                            || !ctx.semantic_summary.cargo_project)
-                    {
-                        DeterministicRouteRule::StateDriftObserve
-                    } else {
-                        DeterministicRouteRule::NoActionableFailureObserve
-                    }
-                },
-                    }
-                }
+                prompt_tag: "deterministic:no_semantic_progress_plan",
+                noop_reason: "route_executor_no_semantic_progress_plan",
+                rule: DeterministicRouteRule::NoSemanticProgressPlan,
             },
             Self::InvalidPlanReplan => DeterministicRouteDecision {
                 route: RouteKind::Plan,
@@ -662,7 +657,23 @@ fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
     if ctx.planned_pending == 0
         && ctx.semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure")
         && !ctx.finish_ready
+        && latest_no_semantic_progress(&ctx.recent_execution_results)
     {
+        eprintln!(
+            "[policy][no_actionable_failure] firing NoSemanticProgressPlan: failure_class={:?} complete={} path_exists={} cargo_project={} module_gaps={} compiler_hints={} compiler_repair_required={:?} validation_blocked={:?} planning_preconditions={} finish_ready={} planned_pending={} consecutive_invalid={}",
+            ctx.semantic_summary.failure_class,
+            ctx.semantic_summary.complete,
+            ctx.semantic_summary.path_exists,
+            ctx.semantic_summary.cargo_project,
+            ctx.semantic_summary.module_gaps.len(),
+            ctx.semantic_summary.compiler_hints.len(),
+            ctx.semantic_summary.compiler_repair_required,
+            ctx.semantic_summary.validation_blocked_by_preconditions,
+            ctx.semantic_summary.planning_preconditions.len(),
+            ctx.finish_ready,
+            ctx.planned_pending,
+            ctx.consecutive_invalid_plan_batches,
+        );
         return Some(RouteProposal::NoSemanticProgressPlan);
     }
     if ctx.context_ready && ctx.planned_pending == 0 && ctx.consecutive_invalid_plan_batches > 0 {
@@ -868,6 +879,12 @@ pub fn evaluate_route_dispatch(
 }
 
 pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -> Option<DeterministicRouteDecision> {
+    // Deterministic routing only applies to control-path events. Debug, Code, and
+    // ErrorOccurred events are effect/diagnostic events; routing them deterministically
+    // causes infinite recursion when recovery_event Debug emissions are re-processed.
+    if matches!(event, RuntimeEvent::Debug(_) | RuntimeEvent::Code(_) | RuntimeEvent::ErrorOccurred(_)) {
+        return None;
+    }
     // Module gaps must always force planning regardless of event type
     if !ctx.semantic_summary.module_gaps.is_empty() {
         return Some(DeterministicRouteDecision {
@@ -910,16 +927,12 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                 ctx.semantic_summary.module_gaps.len(),
             ) {
                 return Some(DeterministicRouteDecision {
-                    route: RouteKind::Observe,
-                    rationale: "no progress and no actionable failure".to_string(),
+                    route: RouteKind::Plan,
+                    rationale: "no semantic progress; replan instead of refreshing observe".to_string(),
                     confidence: 0.95,
-                    prompt_tag: "deterministic:no_actionable_failure_observe",
-                    noop_reason: "route_executor_no_actionable_failure_observe",
-                    rule: if workspace_state_drift_detected(&ctx.semantic_summary) {
-                        DeterministicRouteRule::StateDriftObserve
-                    } else {
-                        DeterministicRouteRule::NoActionableFailureObserve
-                    },
+                    prompt_tag: "deterministic:no_semantic_progress_plan",
+                    noop_reason: "route_executor_no_semantic_progress_plan",
+                    rule: DeterministicRouteRule::NoSemanticProgressPlan,
                 });
             } else {
                 if has_explicit_missing_target(ctx) {
@@ -1236,6 +1249,23 @@ fn apply_shared_route_constraint(
     ctx: &RouteContext,
     decision: DeterministicRouteDecision,
 ) -> Option<DeterministicRouteDecision> {
+    eprintln!(
+        "[policy][shared_constraint][input] route={} rule={:?} target_missing={} validation_blocked={} compiler_repair_required={} failure_class={:?} failure_scope={:?} no_progress={} actionable_failure={} planned_pending={} invalid_plan_batches={} planning_preconditions={} compiler_hints={} module_gaps={}",
+        decision.route.as_str(),
+        decision.rule,
+        has_explicit_missing_target(ctx),
+        ctx.validation_blocked_state(),
+        ctx.semantic_summary.compiler_repair_required,
+        ctx.semantic_summary.primary_failure_class(),
+        ctx.semantic_summary.failure_scope,
+        latest_no_semantic_progress(&ctx.recent_execution_results),
+        has_actionable_failure(ctx),
+        ctx.planned_pending,
+        ctx.consecutive_invalid_plan_batches,
+        ctx.semantic_summary.planning_preconditions.len(),
+        ctx.semantic_summary.compiler_hints.len(),
+        ctx.semantic_summary.module_gaps.len(),
+    );
     if matches!(decision.rule, DeterministicRouteRule::SemanticProgressVerify)
         && !ctx.validation_blocked_state()
         && ctx.semantic_summary.module_gaps.is_empty()
@@ -1270,6 +1300,22 @@ fn apply_shared_route_constraint(
                 route_to_constraint(decision.route),
                 state,
             ));
+            eprintln!(
+                "[policy][constraint_rewrite] original_route={} -> observe; reason={} real_path_exists={} real_cargo_project={} semantic_path_exists={} semantic_cargo_project={} failure_class_no_actionable={} recent_no_semantic_progress={} actionable_failure={} validation_blocked={} entrypoint_missing={} module_gaps_present={} rule={:?}",
+                decision.route.as_str(),
+                reason,
+                real_path_exists,
+                state.real_cargo_project,
+                state.semantic_path_exists,
+                state.semantic_cargo_project,
+                state.failure_class_no_actionable,
+                state.recent_no_semantic_progress,
+                state.actionable_failure,
+                state.validation_blocked,
+                state.entrypoint_missing,
+                state.module_gaps_present,
+                decision.rule,
+            );
             Some(DeterministicRouteDecision {
                 route: RouteKind::Observe,
                 rationale: reason.to_string(),
@@ -2179,6 +2225,7 @@ mod tests {
     fn apply_route_policy_forces_plan_for_missing_target_without_work() {
         let mut ctx = RouteContext::default();
         ctx.semantic_summary.complete = true;
+        ctx.semantic_summary.target_root = Some("/tmp/semantic-target".to_string());
         ctx.semantic_summary.path_exists = false;
         let mut d = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
         let rules = apply_route_policy(

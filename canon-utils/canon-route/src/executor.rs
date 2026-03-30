@@ -850,6 +850,14 @@ impl RouteExecutor {
             "conclude" => Some("loop_rewarded".to_string()),
             _ => None,
         };
+        eprintln!(
+            "[route_executor][emit] route_selected lane={} trigger={:?} last_control={:?} pending_succ={:?} awaiting={:?}",
+            decision.lane.as_str(),
+            self.current_trigger,
+            self.last_control_kind,
+            self.pending_required_successor,
+            self.awaiting_control_successor,
+        );
         emitter.emit_with_parents(route_event, vec![tid], file!(), line!());
         if self.pending_required_successor.as_deref() == Some("route_selected") {
             self.last_route_emitted_for_control_id = self.last_control_event_id.clone();
@@ -874,6 +882,15 @@ impl RouteExecutor {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
+        eprintln!(
+            "[route_executor][det] rule={} route={} trigger={:?} last_control={:?} pending_succ={:?} awaiting={:?}",
+            deterministic.prompt_tag,
+            deterministic.route.as_str(),
+            self.current_trigger,
+            self.last_control_kind,
+            self.pending_required_successor,
+            self.awaiting_control_successor,
+        );
         let emit_eval = evaluate_route_emit(RouteEmitState {
             awaiting_control_successor: self.awaiting_control_successor.as_deref(),
             last_control_kind: self.last_control_kind.as_deref(),
@@ -989,6 +1006,13 @@ impl RouteExecutor {
             _ => None,
         };
         if let Some(expected) = next {
+            eprintln!(
+                "[route_executor][ctrl] event={} trigger={} prev_pending={:?} -> new_pending={}",
+                canon_event::event_kind_str(event),
+                trigger_id,
+                self.pending_required_successor,
+                expected,
+            );
             self.last_control_event_id = Some(trigger_id.to_string());
             self.last_control_kind = Some(canon_event::event_kind_str(event).to_string());
             self.pending_required_successor = Some(expected.to_string());

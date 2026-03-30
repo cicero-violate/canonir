@@ -204,16 +204,19 @@ impl EventConsumer for EventRepairTriggerConsumer {
                 let src = e.source.as_str();
                 let kind = e.kind.as_str();
                 let msg = e.message.to_ascii_lowercase();
+                if msg.contains("missing required successor")
+                    || msg.contains("got=route_selected")
+                    || msg.contains("expected=planning_completed")
+                {
+                    return EventOutcome::NoOp("event_repair_trigger_skip_control_fsm_violation");
+                }
                 if msg.contains("llm call timed out")
-                    || msg.contains("invariant violation")
                     || msg.contains("noop_spam")
                     || msg.contains("missing_target")
                     || kind == "act_stall"
                     || kind == "control_desync"
                     || kind == "plan_invariant_violation"
                     || msg.contains("scheduler is empty")
-                    || msg.contains("missing required successor")
-                    || src.contains("invariant")
                     || src.contains("constraint")
                 {
                     let failure_output = format!(
@@ -246,27 +249,7 @@ impl EventConsumer for EventRepairTriggerConsumer {
                     self.submit_repair_job(failure_output, incident_context);
                 }
             }
-            RuntimeEvent::RouteSelected(e) => {
-                let prompt = e.prompt.to_ascii_lowercase();
-                let rationale = e.rationale.to_ascii_lowercase();
-                if prompt.contains("missing_target")
-                    || prompt.contains("deterministic:")
-                    || rationale.contains("missing target")
-                {
-                    let failure_output = format!(
-                        "AUTO-TRIGGERED WORKSPACE REPAIR\nreason=route_selected_bad_class\nroute_prompt={}\nroute_rationale={}",
-                        e.prompt,
-                        e.rationale
-                    );
-                    let incident_context = format!(
-                        "incident_kind=auto_route_trigger\nroute_prompt={}\nroute_rationale={}\nworkspace={}",
-                        e.prompt,
-                        e.rationale,
-                        self.workspace.display()
-                    );
-                    self.submit_repair_job(failure_output, incident_context);
-                }
-            }
+            RuntimeEvent::RouteSelected(_) => {}
             _ => {}
         }
         EventOutcome::NoOp("event_repair_trigger_noop")
