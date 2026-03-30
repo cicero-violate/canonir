@@ -463,9 +463,7 @@ impl LoopStageExecutor {
     fn handle_rustc_capture_failed(&mut self, failed: &canon_event::RustcCaptureFailed) -> bool {
         if let Some(observed) = self.ctx.last_observed.as_mut() {
             observed.semantic_summary.apply_rustc_capture_failure(&failed.message);
-            self.ctx
-                .objective_trend_state
-                .record_observation(observed.error_count, &observed.semantic_summary);
+            self.ctx.objective_trend_state.record_observation(observed.error_count, &observed.semantic_summary);
         }
         self.ctx.error_count = self.ctx.error_count.saturating_add(1);
         self.record_compiler_error("rustc_capture_failed", "error", &failed.message);
@@ -476,9 +474,7 @@ impl LoopStageExecutor {
         self.ctx.last_observed = Some(observed.clone());
         self.ctx.last_observed_tick = Some(observed.tick);
         self.ctx.errors_before = observed.error_count;
-        self.ctx
-            .objective_trend_state
-            .record_observation(observed.error_count, &observed.semantic_summary);
+        self.ctx.objective_trend_state.record_observation(observed.error_count, &observed.semantic_summary);
     }
 
     fn handle_agent_registered(&mut self, payload: &serde_json::Value) {
@@ -488,10 +484,7 @@ impl LoopStageExecutor {
         }
     }
 
-    fn handle_rustc_graph_artifact_written(
-        &mut self,
-        written: &canon_event::RustcGraphArtifactWritten,
-    ) {
+    fn handle_rustc_graph_artifact_written(&mut self, written: &canon_event::RustcGraphArtifactWritten) {
         if let Some(observed) = self.ctx.last_observed.as_mut() {
             observed.semantic_summary.apply_graph_artifact_summary(
                 written.artifact_id.clone(),
@@ -502,18 +495,24 @@ impl LoopStageExecutor {
                 written.module_edge_count as usize,
                 written.cfg_edge_count as usize,
             );
-            self.ctx
-                .objective_trend_state
-                .record_observation(observed.error_count, &observed.semantic_summary);
+            self.ctx.objective_trend_state.record_observation(observed.error_count, &observed.semantic_summary);
         }
     }
 
     fn handle_goodness_snapshot(&mut self, snapshot: &canon_event::GoodnessSnapshot) {
         self.ctx.goodness = Some(snapshot.g);
         self.ctx.delta_g = Some(snapshot.delta_g);
-        self.ctx
-            .objective_trend_state
-            .record_goodness(snapshot.g, snapshot.delta_g);
+        self.ctx.objective_trend_state.record_goodness(snapshot.g, snapshot.delta_g);
+    }
+
+    fn handle_subtask_result(&mut self, result: &canon_event::SubTaskResult) {
+        self.ctx.context_merger.absorb(result, &result.agent_id);
+    }
+
+    fn handle_tool_result(&mut self, result: &canon_event::ToolResult) {
+        if result.kind != "llm.plan" {
+            self.ctx.batch_tool_results.push(result.clone());
+        }
     }
 
     fn handle_objective_trend_debug(&mut self, kind: &str) -> bool {
@@ -668,7 +667,7 @@ impl LoopStageExecutor {
         }
     }
 
-    fn handle_recovery_event(&mut self, event: &RuntimeEvent, trigger_id: &EventId, recovery_eval: &Option<(Option<&str>, crate::policy::RecoveryEventEvaluation)>) -> Option<EventOutcome> {
+    fn handle_recovery_event(&mut self, event: &RuntimeEvent, trigger_id: &EventId, recovery_eval: &Option<(Option<String>, crate::policy::RecoveryEventEvaluation)>) -> Option<EventOutcome> {
         let RuntimeEvent::Debug(debug) = event else {
             return None;
         };
@@ -676,7 +675,7 @@ impl LoopStageExecutor {
             return None;
         }
 
-        let expected = recovery_eval.as_ref().and_then(|(expected, _)| *expected).unwrap_or("unknown");
+        let expected = recovery_eval.as_ref().and_then(|(expected, _)| expected.as_deref()).unwrap_or("unknown");
         self.emit_debug(
             trigger_id,
             "recovery_received",
@@ -725,22 +724,15 @@ impl LoopStageExecutor {
         None
     }
 
-    fn apply_runtime_evaluation(&mut self, trigger_id: &EventId, event: &RuntimeEvent, force_observe_recovery: bool, trigger_observe: bool) -> Option<EventOutcome> {
-        let suppress_observe_on_invariant = matches!(event, RuntimeEvent::ErrorOccurred(err) if err.kind == "invariant_violation")
-            || matches!(event, RuntimeEvent::Code(code) if matches!(code.delta.event, canon_event::RustcEvent::InvariantViolation(_)));
-
-        let runtime_eval = evaluate_loop_runtime(
-            self.ctx.halted,
-            force_observe_recovery,
-            trigger_observe,
-            suppress_observe_on_invariant,
-            self.ctx.pending_required_successor.as_deref(),
-            matches!(event, RuntimeEvent::RouteSelected(_)),
-        );
-
-        if runtime_eval.observe_mode == ObserveExecutionMode::Forced {
+    fn handle_runtime_observe_mode(
+        &mut self,
+        trigger_id: &EventId,
+        event: &RuntimeEvent,
+        observe_mode: ObserveExecutionMode,
+    ) {
+        if observe_mode == ObserveExecutionMode::Forced {
             self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
-        } else if runtime_eval.observe_mode == ObserveExecutionMode::SuppressedByPendingSuccessor {
+        } else if observe_mode == ObserveExecutionMode::SuppressedByPendingSuccessor {
             self.emit_debug(
                 trigger_id,
                 "observe_suppressed_due_to_pending_successor",
@@ -752,9 +744,29 @@ impl LoopStageExecutor {
                     "trigger_kind": canon_event::event_kind_str(event),
                 }),
             );
-        } else if runtime_eval.observe_mode == ObserveExecutionMode::Triggered {
+        } else if observe_mode == ObserveExecutionMode::Triggered {
             self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Triggered);
         }
+    }
+
+    fn suppresses_observe_on_invariant(event: &RuntimeEvent) -> bool {
+        matches!(event, RuntimeEvent::ErrorOccurred(err) if err.kind == "invariant_violation")
+            || matches!(event, RuntimeEvent::Code(code) if matches!(code.delta.event, canon_event::RustcEvent::InvariantViolation(_)))
+    }
+
+    fn apply_runtime_evaluation(&mut self, trigger_id: &EventId, event: &RuntimeEvent, force_observe_recovery: bool, trigger_observe: bool) -> Option<EventOutcome> {
+        let suppress_observe_on_invariant = Self::suppresses_observe_on_invariant(event);
+
+        let runtime_eval = evaluate_loop_runtime(
+            self.ctx.halted,
+            force_observe_recovery,
+            trigger_observe,
+            suppress_observe_on_invariant,
+            self.ctx.pending_required_successor.as_deref(),
+            matches!(event, RuntimeEvent::RouteSelected(_)),
+        );
+
+        self.handle_runtime_observe_mode(trigger_id, event, runtime_eval.observe_mode);
 
         if runtime_eval.halt_blocks_stage {
             if runtime_eval.warn_route_selected_while_halted {
@@ -785,6 +797,30 @@ impl LoopStageExecutor {
         None
     }
 
+    fn build_recovery_eval(event: &RuntimeEvent, pending_required_successor: Option<&str>, has_last_verified: bool) -> Option<(Option<String>, crate::policy::RecoveryEventEvaluation)> {
+        let RuntimeEvent::Debug(debug) = event else {
+            return None;
+        };
+        if debug.kind != "recovery_event" {
+            return None;
+        }
+        let expected = debug.payload.get("context").and_then(|v| v.get("expected_successor")).and_then(|v| v.as_str()).map(str::to_string);
+        Some((expected.clone(), evaluate_recovery_event(expected.as_deref(), pending_required_successor, has_last_verified)))
+    }
+
+    fn recovery_forces_observe(
+        recovery_eval: &Option<(Option<String>, crate::policy::RecoveryEventEvaluation)>,
+    ) -> bool {
+        recovery_eval
+            .as_ref()
+            .is_some_and(|(_, eval)| eval.force_observe_recovery)
+    }
+
+    fn advance_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {
+        self.consume_control_successor(event);
+        self.record_control_state(event, trigger_id);
+    }
+
     fn execute_stage_event(&mut self, trigger_id: &EventId, event: &RuntimeEvent) -> EventOutcome {
         let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
             return EventOutcome::NoOp("loop_stage_not_stage_event");
@@ -795,13 +831,7 @@ impl LoopStageExecutor {
         }
         match res {
             Ok(result) => self.emit_stage_result(trigger_id, result),
-            Err(err) => self.emit_error(
-                trigger_id,
-                "loop_stage_execution",
-                err.to_string(),
-                "error",
-                serde_json::json!({ "event": format!("{:?}", event) }),
-            ),
+            Err(err) => self.emit_error(trigger_id, "loop_stage_execution", err.to_string(), "error", serde_json::json!({ "event": format!("{:?}", event) })),
         }
         EventOutcome::NoOp("loop_stage_async")
     }
@@ -850,23 +880,12 @@ impl EventConsumer for LoopStageExecutor {
             self.emit_invariant_violation(&trigger_id, feature, &reason, context);
             return EventOutcome::NoOp("verifier_sequence_invariant_violation");
         }
-        let recovery_eval = if let RuntimeEvent::Debug(debug) = event {
-            if debug.kind == "recovery_event" {
-                let expected = debug.payload.get("context").and_then(|v| v.get("expected_successor")).and_then(|v| v.as_str());
-                Some((expected, evaluate_recovery_event(expected, self.ctx.pending_required_successor.as_deref(), self.ctx.last_verified.is_some())))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let recovery_eval = Self::build_recovery_eval(event, self.ctx.pending_required_successor.as_deref(), self.ctx.last_verified.is_some());
         if let Some(outcome) = self.handle_recovery_event(event, &trigger_id, &recovery_eval) {
             return outcome;
         }
-        self.consume_control_successor(event);
-
         let mut trigger_observe = false;
-        let force_observe_recovery = recovery_eval.as_ref().is_some_and(|(_, eval)| eval.force_observe_recovery);
+        let force_observe_recovery = Self::recovery_forces_observe(&recovery_eval);
         match event {
             RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {}
             RuntimeEvent::Debug(debug) if self.handle_objective_trend_debug(debug.kind.as_str()) => {}
@@ -905,7 +924,7 @@ impl EventConsumer for LoopStageExecutor {
                 self.handle_loop_verified(v);
             }
             RuntimeEvent::SubTaskResult(r) => {
-                self.ctx.context_merger.absorb(r, &r.agent_id);
+                self.handle_subtask_result(r);
             }
             RuntimeEvent::LoopPlanned(p) => {
                 if let Some(outcome) = self.handle_loop_planned(&trigger_id, p) {
@@ -931,7 +950,7 @@ impl EventConsumer for LoopStageExecutor {
                 self.handle_error_occurred(err, &mut trigger_observe);
             }
             RuntimeEvent::ToolResult(r) if r.kind != "llm.plan" => {
-                self.ctx.batch_tool_results.push(r.clone());
+                self.handle_tool_result(r);
             }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
@@ -965,8 +984,7 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::InvariantDiscovered(_)
             | RuntimeEvent::RustcCaptureStarted(_) => {}
         }
-        self.consume_control_successor(event);
-        self.record_control_state(event, &trigger_id);
+        self.advance_control_state(event, &trigger_id);
 
         if let Some(outcome) = self.apply_runtime_evaluation(&trigger_id, event, force_observe_recovery, trigger_observe) {
             return outcome;
