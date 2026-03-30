@@ -1,332 +1,300 @@
-```markdown id="final-imperative-plan"
-# PLAN: Hard Delete Residual State → Enforce Single Authority → Achieve Closure
+````markdown
+# PLAN.md — Final Elimination of Executor-Controlled Transitions
 
 ---
 
 ## Variables
-- P_r = route policy  
-- P_l = loop policy  
-- E = executors  
-- I = invariants  
-- M = matrix  
-- T = transitions  
+- P = policy (route + loop)
+- I = invariants
+- E = executors
+- T = transitions
+- S = system state
 
 ---
 
 ## Equations
-\[
-D = P_r \cup P_l
-\]
-\[
-E \cap D = \varnothing
-\]
-\[
-I \cap D = \varnothing
-\]
-\[
-\forall t \in T:\; next(t) = I.required\_successor(t)
-\]
+1. Decision:
+   D = P
+
+2. Transition Authority:
+   T = I
+
+3. Purity:
+   E ∩ D = ∅  
+   E ∩ T = ∅  
+
+4. System:
+   S = Event → P → E → Event
 
 ---
 
-# OBJECTIVE (NON-NEGOTIABLE)
+## Objective
 
-DELETE the concept:
-```
+Remove ALL executor-owned transition logic.
 
-awaiting_control_successor
+Eliminate:
+- awaiting_control_successor
+- successor consumption
+- executor-based gating
 
+Achieve:
+- single authority (invariants)
+- zero duplication
+- deterministic closure
+
+---
+
+# Phase 1 — Hard Delete Executor Transition System
+
+## Step 1 — Remove State
+
+DELETE:
+```rust
+awaiting_control_successor: Option<String>
 ````
 
 FROM:
-- policy
-- matrix
-- executor
 
-Achieve:
-\[
-\text{single transition authority} = I
-\]
+* RouteExecutor struct
+* test executor
+* any mirrored structs
 
 ---
 
-# PHASE 1 — FULL SYSTEM PURGE (MANDATORY)
+## Step 2 — Remove Assignment
 
-## Step 1 — Locate Everything  ✓ done
+DELETE:
+
+```rust
+self.awaiting_control_successor = match decision.lane.as_str() { ... }
+```
+
+---
+
+## Step 3 — Remove Guards
+
+SEARCH:
 
 ```bash
-rg "awaiting_control_successor|SuppressAwaitingControlSuccessor"
-````
+rg "awaiting_control_successor"
+```
+
+DELETE all conditions:
+
+```rust
+if self.awaiting_control_successor.is_some()
+```
+
+INCLUDING:
+
+```rust
+if self.pending_request_id.is_some() || self.awaiting_control_successor.is_some()
+```
+
+REPLACE WITH:
+
+```rust
+if self.pending_request_id.is_some()
+```
 
 ---
 
-## Step 2 — Delete from Policy  ✓ done
+## Step 4 — Remove Consumption Layer
 
-File: route policy
-
-### DELETE:
+DELETE:
 
 ```rust
-SuppressAwaitingControlSuccessor
+evaluate_successor_consumption(...)
 ```
 
-### DELETE:
-
-* any match arms using it
-* any condition checking `awaiting_control_successor`
-
-Constraint:
-[
-policy \not\ni successor_state
-]
-
----
-
-## Step 3 — Delete from Matrix  ✓ done
-
-File: policy-matrix
-
-### DELETE:
-
-```text
-DispatchSuppressAwaitingSuccessor
-```
-
-### DELETE:
-
-* corresponding TransitionRow
-* any scenario family referencing it
-
-Constraint:
-[
-M = runtime_only
-]
-
----
-
-## Step 4 — Delete from Executor  ✓ done
-
-File: route executor
-
-### DELETE FIELD:
+AND:
 
 ```rust
-awaiting_control_successor: Option<String>
+let successor_eval = ...
 ```
 
-### DELETE:
-
-* all reads
-* all writes
-* all propagation into RouteDispatchState
-
-### REPLACE:
+AND:
 
 ```rust
-RouteDispatchState {
-    awaiting_control_successor: None
+if successor_eval.clear_awaiting_control_successor {
+    ...
 }
 ```
 
-WITH:
+---
+
+## Step 5 — Remove Function
+
+DELETE ENTIRE FUNCTION:
 
 ```rust
-RouteDispatchState {
-    awaiting_control_successor: None // REMOVE FIELD ENTIRELY if possible
-}
+evaluate_successor_consumption
 ```
 
-Constraint:
-[
-E \not\ni control_state
-]
+FROM:
+
+* canon-route/src/policy.rs
 
 ---
 
-# PHASE 2 — REMOVE STRUCTURAL LEAKS
+## Step 6 — Remove Types
 
-## Step 5 — Clean Structs  ✓ done
-
-File: policy.rs
-
-### REMOVE FIELD:
+DELETE:
 
 ```rust
-pub awaiting_control_successor: Option<&str>
+SuccessorConsumptionEvaluation
+SuccessorConsumptionRule
 ```
-
-From:
-
-* RouteDispatchState
-* RouteEmitState
-* any other struct
 
 ---
 
-## Step 6 — Remove Successor Consumption Layer  ✓ done
+## Step 7 — Remove Payload Leakage
+
+DELETE:
+
+```rust
+"awaiting_control_successor": self.awaiting_control_successor
+```
+
+FROM:
+
+* debug payloads
+* invariant payloads
+
+---
+
+# Phase 2 — Matrix Alignment
+
+## Step 8 — Remove Matrix Dependency
+
+SEARCH:
 
 ```bash
-rg "SuccessorConsumption|evaluate_successor_consumption"
+rg "awaiting_control_successor"
 ```
 
-### DELETE:
+DELETE:
 
-* SuccessorConsumptionRule (if now unused)
-* evaluate_successor_consumption (if redundant)
+* struct fields
+* test rows
+* transition rows
 
-Constraint:
-[
-transition \text{ handled only by invariants}
-]
+ENSURE:
+
+```
+matrix == runtime
+```
 
 ---
 
-# PHASE 3 — REPAIR POLICY CONSISTENCY
+# Phase 3 — Invariant Authority Lock
 
-## Step 7 — Ensure No Hidden Dependencies  ✓ done
+## Step 9 — Verify Single Authority
 
-```bash
-rg "successor|awaiting"
-```
-
-### VERIFY:
-
-* no policy rule depends on successor state
-* no dispatch suppression depends on successor
-
----
-
-## Step 8 — Re-run Tests  ✓ done
-
-```bash
-cargo test -p canon-policy-matrix
-```
-
-### EXPECT:
-
-[
-R_m = R_p
-]
-
----
-
-# PHASE 4 — VERIFY ARCHITECTURAL PURITY
-
-## Step 9 — Enforce Invariant Authority  ✓ done
-
-File: invariants
-
-Ensure ONLY:
+ONLY THIS remains:
 
 ```rust
 required_successor_kind(...)
 ```
 
-controls transitions 
+No executor logic must reference:
+
+* successor
+* transition expectation
 
 ---
 
-## Step 10 — Validate Executor Purity
+# Phase 4 — Executor Purity
+
+## Step 10 — Validate Executor
+
+Executor MUST ONLY:
+
+* call policy
+* emit events
+* update context
+
+Executor MUST NOT:
+
+* track control state
+* predict next event
+* enforce transitions
+
+---
+
+# Phase 5 — Validation
+
+## Step 11 — Run Tests
 
 ```bash
-rg "required_successor|successor" canon-runtime
+cargo test --workspace
 ```
 
-### EXPECT:
+EXPECT:
 
-* ZERO matches in executors
-
----
-
-# PHASE 5 — FINAL VALIDATION
-
-## Step 11 — System Properties
-
-Check:
-
-### 1.
-
-[
-E \cap D = \varnothing
-]
-
-### 2.
-
-[
-I = \text{only transition authority}
-]
-
-### 3.
-
-[
-M = runtime
-]
-
-### 4.
-
-[
-\text{no hidden state}
-]
+* no matrix mismatch
+* no invariant violations
+* no routing suppression errors
 
 ---
 
-# DEFINITION OF DONE
+## Step 12 — Static Checks
+
+```bash
+rg "awaiting_control_successor"
+rg "successor_consumption"
+```
+
+EXPECT:
+
+* ZERO results in runtime code
+
+---
+
+# Definition of Done
 
 ## Structural
 
-* no `awaiting_control_successor`
-* no successor tracking in executors
-* no successor logic in policy
+* no awaiting_control_successor anywhere in runtime
+* no successor consumption logic
+* no executor transition state
 
 ## Logical
 
-* decisions ONLY from policy
-* transitions ONLY from invariants
+* D = P
+* T = I
+* E ∩ (D ∪ T) = ∅
 
 ## Behavioral
 
-* all tests pass
-* no rule mismatch
+* all transitions enforced by invariants
 * no duplicate authority
+* no implicit gating
 
 ---
 
-# FINAL SYSTEM
+# Final System
 
 ## Execution Loop
 
-```text
+```
 Event → Policy → Decision → Executor → Event
 ```
 
 ## Authority
 
-```text
-Policy → decisions
-Invariants → transitions
-Executor → execution ONLY
+```
+Policy     = decisions
+Invariants = transitions
+Executor   = execution only
 ```
 
 ---
 
-# RESULT
+## Result
 
 [
-\text{duplication} = 0
-]
-[
-\text{branching} \downarrow
-]
-[
-\text{determinism} \uparrow
-]
-
----
-
-## FINAL
-
-[
-\max(intelligence, efficiency, correctness, alignment) = GOOD
+max(intelligence, efficiency, correctness, alignment) = GOOD
 ]
 
 ```
