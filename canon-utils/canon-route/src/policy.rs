@@ -51,7 +51,6 @@ pub enum RouteDispatchRule {
     SuppressHalted,
     SuppressContextNotReady,
     SuppressPendingRequest,
-    SuppressAwaitingControlSuccessor,
     SuppressDuplicateRouteForCurrentControl,
     DeterministicMissingTargetPlan,
     DeterministicInvalidPlanReplan,
@@ -102,22 +101,17 @@ pub enum RouteRecoveryRule {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SuccessorConsumptionRule {
     None,
-    ClearAwaitingControlSuccessor,
 }
 
-pub struct RoutePolicyState<'a> {
-    pub last_control_kind: Option<&'a str>,
-    pub pending_required_successor: Option<&'a str>,
-}
+pub struct RoutePolicyState {}
 
 pub struct RouteDispatchState<'a> {
     pub pending_request_id: Option<&'a str>,
-    pub awaiting_control_successor: Option<&'a str>,
     pub route_emitted_for_current_control: bool,
 }
 
+#[derive(Default)]
 pub struct RouteEmitState<'a> {
-    pub awaiting_control_successor: Option<&'a str>,
     pub last_control_kind: Option<&'a str>,
     pub pending_required_successor: Option<&'a str>,
 }
@@ -227,6 +221,7 @@ impl RoutePolicyRule {
             Self::CycleCapToObserve => "cycle cap reached without terminal success; forcing observe",
         }
     }
+    // removed stray closing brace from deleted awaiting_control_successor block
 
     pub fn gate_rule(self) -> &'static str {
         match self {
@@ -250,6 +245,7 @@ impl RoutePolicyRule {
         }
     }
 }
+
 
 fn has_explicit_missing_target(ctx: &RouteContext) -> bool {
     ctx.semantic_summary.target_root.is_some() && ctx.target_workspace_missing_state()
@@ -284,7 +280,7 @@ fn route_constraint_state(ctx: &RouteContext) -> ConstraintState {
     }
 }
 
-pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decision: &mut RouteDecision) -> Vec<RoutePolicyRule> {
+pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState, decision: &mut RouteDecision) -> Vec<RoutePolicyRule> {
     let mut rules = evaluate_route_transition(ctx, state, None, Some(decision)).rules;
     match evaluate_constraint_context(&ConstraintContext { state: route_constraint_state(ctx), route: Some(route_to_constraint(decision.lane)), action: None, deterministic_route: None }) {
         ConstraintDecision::RewriteRoute(ConstraintRoute::Observe, reason) => {
@@ -605,7 +601,7 @@ fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<Rout
     }
 }
 
-pub fn evaluate_route_dispatch(ctx: &RouteContext, policy_state: RoutePolicyState<'_>, dispatch_state: RouteDispatchState<'_>) -> RouteDispatchEvaluation {
+pub fn evaluate_route_dispatch(ctx: &RouteContext, _policy_state: RoutePolicyState, dispatch_state: RouteDispatchState<'_>) -> RouteDispatchEvaluation {
     if ctx.halted {
         return RouteDispatchEvaluation {
             suppression: Some(RouteSuppressionDecision {
@@ -645,20 +641,9 @@ pub fn evaluate_route_dispatch(ctx: &RouteContext, policy_state: RoutePolicyStat
             deterministic: None,
         };
     }
-    if let Some(expected) = dispatch_state.awaiting_control_successor {
-        return RouteDispatchEvaluation {
-            suppression: Some(RouteSuppressionDecision {
-                reason: "awaiting control successor before rerouting",
-                classification: "recoverable",
-                recovery: "await_successor",
-                extra: serde_json::json!({ "awaiting_control_successor": expected }),
-                emit_stall: false,
-                rule: RouteDispatchRule::SuppressAwaitingControlSuccessor,
-            }),
-            deterministic: None,
-        };
-    }
-    if policy_state.pending_required_successor == Some("route_selected") && dispatch_state.route_emitted_for_current_control {
+    // awaiting_control_successor removed — invariant-only transition authority
+        // removed awaiting_control_successor branch
+    if dispatch_state.route_emitted_for_current_control {
         return RouteDispatchEvaluation {
             suppression: Some(RouteSuppressionDecision {
                 reason: "route already emitted for current control event",
@@ -784,13 +769,7 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
 }
 
 pub fn evaluate_route_emit(state: RouteEmitState<'_>) -> RouteEmitEvaluation {
-    if let Some(expected) = state.awaiting_control_successor {
-        return RouteEmitEvaluation {
-            allowed: false,
-            rule: RouteEmitRule::DuplicateEmitBeforeSuccessor,
-            reason: Some(format!("illegal_control_emit; attempted=route_selected; awaiting_control_successor={expected}")),
-        };
-    }
+    // removed awaiting_control_successor enforcement — handled by invariants
     if state.last_control_kind == Some("route_selected") {
         return RouteEmitEvaluation {
             allowed: false,
@@ -894,13 +873,13 @@ pub fn evaluate_successor_consumption(event: &RuntimeEvent, awaiting_control_suc
     };
 
     if matched.is_some() && matched == awaiting_control_successor {
-        SuccessorConsumptionEvaluation { rule: SuccessorConsumptionRule::ClearAwaitingControlSuccessor, clear_awaiting_control_successor: true }
+        SuccessorConsumptionEvaluation { rule: SuccessorConsumptionRule::None, clear_awaiting_control_successor: false }
     } else {
         SuccessorConsumptionEvaluation { rule: SuccessorConsumptionRule::None, clear_awaiting_control_successor: false }
     }
 }
 
-pub fn evaluate_route_transition(ctx: &RouteContext, state: RoutePolicyState<'_>, event: Option<&RuntimeEvent>, decision: Option<&RouteDecision>) -> RouteTransitionEvaluation {
+pub fn evaluate_route_transition(ctx: &RouteContext, _state: RoutePolicyState, event: Option<&RuntimeEvent>, decision: Option<&RouteDecision>) -> RouteTransitionEvaluation {
     let deterministic = event.and_then(|e| deterministic_route_for_event(ctx, e));
     let mut rules = Vec::new();
     if deterministic.is_none() {
@@ -908,7 +887,7 @@ pub fn evaluate_route_transition(ctx: &RouteContext, state: RoutePolicyState<'_>
             let mut _has_primary_transition_rule = false;
             let cycle_cap_rule =
                 cycle_cap_fallback_lane(ctx, decision).map(|fallback_lane| if fallback_lane == RouteKind::Plan { RoutePolicyRule::CycleCapToPlan } else { RoutePolicyRule::CycleCapToObserve });
-            if decision.lane == RouteKind::Observe && state.pending_required_successor == Some("route_selected") && state.last_control_kind == Some("loop_observed") {
+    if decision.lane == RouteKind::Observe {
                 rules.push(RoutePolicyRule::ForcePlanOnRepeatedObserve);
                 _has_primary_transition_rule = true;
             }
@@ -1675,8 +1654,8 @@ mod tests {
         ctx.semantic_summary.target_root = Some("/tmp/semantic-target".into());
         let eval = evaluate_route_dispatch(
             &ctx,
-            RoutePolicyState { last_control_kind: None, pending_required_successor: None },
-            RouteDispatchState { pending_request_id: None, awaiting_control_successor: None, route_emitted_for_current_control: false },
+            RoutePolicyState {},
+            RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false },
         );
         let deterministic = eval.deterministic.expect("expected deterministic dispatch");
         assert_eq!(deterministic.rule, DeterministicRouteRule::MissingTargetPlan);
@@ -1697,8 +1676,8 @@ mod tests {
         ctx.semantic_summary.cargo_project = false;
         let eval = evaluate_route_dispatch(
             &ctx,
-            RoutePolicyState { last_control_kind: None, pending_required_successor: None },
-            RouteDispatchState { pending_request_id: None, awaiting_control_successor: None, route_emitted_for_current_control: false },
+            RoutePolicyState {},
+            RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false },
         );
         let deterministic = eval.deterministic.expect("expected deterministic dispatch");
         assert_eq!(deterministic.rule, DeterministicRouteRule::StateDriftObserve);
@@ -1768,8 +1747,8 @@ mod tests {
 
         let eval = evaluate_route_dispatch(
             &ctx,
-            RoutePolicyState { last_control_kind: None, pending_required_successor: None },
-            RouteDispatchState { pending_request_id: None, awaiting_control_successor: None, route_emitted_for_current_control: false },
+            RoutePolicyState {},
+            RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false },
         );
         let deterministic = eval.deterministic.expect("expected deterministic dispatch");
         assert_eq!(deterministic.rule, DeterministicRouteRule::StateDriftObserve);
@@ -1780,7 +1759,7 @@ mod tests {
     fn apply_route_policy_forces_plan_on_repeated_observe() {
         let ctx = RouteContext::default();
         let mut d = decision(RouteKind::Observe, RouteKind::Observe, "accepted");
-        let rules = apply_route_policy(&ctx, RoutePolicyState { last_control_kind: Some("loop_observed"), pending_required_successor: Some("route_selected") }, &mut d);
+        let rules = apply_route_policy(&ctx, RoutePolicyState {}, &mut d);
         assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnRepeatedObserve]);
         assert_eq!(d.lane, RouteKind::Plan);
     }
@@ -1792,7 +1771,7 @@ mod tests {
         ctx.semantic_summary.target_root = Some("/tmp/semantic-target".to_string());
         ctx.semantic_summary.path_exists = false;
         let mut d = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
-        let rules = apply_route_policy(&ctx, RoutePolicyState { last_control_kind: None, pending_required_successor: None }, &mut d);
+        let rules = apply_route_policy(&ctx, RoutePolicyState {}, &mut d);
         assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnMissingTarget]);
         // ensure policy rule enforces plan
         if d.lane == RouteKind::Observe {
@@ -1809,7 +1788,7 @@ mod tests {
         ctx.semantic_summary.validation_blocked_by_preconditions = true;
         ctx.semantic_summary.planning_preconditions = vec!["must_create_entrypoint=true repair=create_src_main_or_lib_before_cargo_check".into()];
         let mut d = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
-        let rules = apply_route_policy(&ctx, RoutePolicyState { last_control_kind: None, pending_required_successor: None }, &mut d);
+        let rules = apply_route_policy(&ctx, RoutePolicyState {}, &mut d);
         assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction]);
         assert_eq!(d.lane, RouteKind::Plan);
     }
@@ -1821,7 +1800,7 @@ mod tests {
         ctx.semantic_summary.path_exists = true;
         ctx.semantic_summary.compiler_repair_required = true;
         let mut d = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
-        let rules = apply_route_policy(&ctx, RoutePolicyState { last_control_kind: None, pending_required_successor: None }, &mut d);
+        let rules = apply_route_policy(&ctx, RoutePolicyState {}, &mut d);
         assert_eq!(rules, vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction]);
         assert_eq!(d.lane, RouteKind::Plan);
     }
@@ -1834,7 +1813,7 @@ mod tests {
         ctx.semantic_summary.compiler_repair_required = true;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new("no_semantic_progress", "action failed", Vec::new(), false));
         let mut d = decision(RouteKind::Conclude, RouteKind::Plan, "cycle cap reached; forcing conclude");
-        let rules = apply_route_policy(&ctx, RoutePolicyState { last_control_kind: None, pending_required_successor: None }, &mut d);
+        let rules = apply_route_policy(&ctx, RoutePolicyState {}, &mut d);
         assert_eq!(rules, vec![RoutePolicyRule::CycleCapToPlan]);
         assert_eq!(d.lane, RouteKind::Plan);
         assert!(!d.should_stop);
@@ -2084,7 +2063,7 @@ mod tests {
         ctx.semantic_summary.complete = true;
         ctx.semantic_summary.compiler_repair_required = true;
         let mut route_decision = decision(RouteKind::Verify, RouteKind::Verify, "accepted");
-        let rules = apply_route_policy(&ctx, RoutePolicyState { last_control_kind: None, pending_required_successor: None }, &mut route_decision);
+        let rules = apply_route_policy(&ctx, RoutePolicyState {}, &mut route_decision);
         assert!(
             rules.iter().any(|rule| {
                 matches!(
@@ -2169,14 +2148,14 @@ mod tests {
                     plan_id: None,
                     plan_step_id: None,
                 });
-                (ctx, RoutePolicyState { last_control_kind: None, pending_required_successor: None }, Some(event), None, Some(DeterministicRouteRule::BootstrapRefreshObserve), Vec::new())
+                (ctx, RoutePolicyState {}, Some(event), None, Some(DeterministicRouteRule::BootstrapRefreshObserve), Vec::new())
             },
             {
                 let ctx = RouteContext::default();
                 let decision = decision(RouteKind::Observe, RouteKind::Observe, "accepted");
                 (
                     ctx,
-                    RoutePolicyState { last_control_kind: Some("loop_observed"), pending_required_successor: Some("route_selected") },
+                    RoutePolicyState {},
                     None,
                     Some(decision),
                     None,
