@@ -1,0 +1,134 @@
+canon-utils/canon-policy-matrix/src/lib.rs:pub enum TransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:    Route(RouteTransitionRow),
+canon-utils/canon-policy-matrix/src/lib.rs:    Loop(LoopTransitionRow),
+canon-utils/canon-policy-matrix/src/lib.rs:pub struct RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:pub struct LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:pub fn assert_transition_rows(rows: &[TransitionRow]) {
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::Route(row) => assert_route_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::Loop(row) => assert_loop_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RunCommandOutcome(row) => assert_run_command_outcome_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::ApplyPatchOutcome(row) => assert_apply_patch_outcome_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::VerifyOutcome(row) => assert_verify_outcome_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::InvalidPlanRetry(row) => assert_invalid_plan_retry_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteDispatch(row) => assert_route_dispatch_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteEmit(row) => assert_route_emit_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteCache(row) => assert_route_cache_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::LoopRuntime(row) => assert_loop_runtime_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RecoveryEvent(row) => assert_recovery_event_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RecoveryExecution(row) => assert_recovery_execution_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::BootstrapEffect(row) => assert_bootstrap_effect_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::PlannerRecovery(row) => assert_planner_recovery_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RewardSemantics(row) => assert_reward_semantics_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteFailure(row) => assert_route_failure_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteEmitEffect(row) => assert_route_emit_effect_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteRecovery(row) => assert_route_recovery_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::SuccessorConsumption(row) => assert_successor_consumption_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::PlannerJudgment(row) => assert_planner_judgment_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::PlannerObjectiveAlignment(row) => assert_planner_objective_alignment_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteObjectiveAlignment(row) => assert_route_objective_alignment_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::GoalRouteObjectiveDrift(row) => assert_goal_route_objective_drift_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::ContradictionEventTrend(row) => assert_contradiction_event_trend_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteSemanticActionability(row) => assert_route_semantic_actionability_row(row),
+canon-utils/canon-policy-matrix/src/lib.rs:pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::Route(row) => push_unique(&mut report.route_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteDispatch(row) => push_unique(&mut report.route_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteEmit(row) => push_unique(&mut report.route_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteCache(row) => push_unique(&mut report.route_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteFailure(row) => push_unique(&mut report.route_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteEmitEffect(row) => push_unique(&mut report.route_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::Loop(row) => push_unique(&mut report.loop_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::LoopRuntime(row) => push_unique(&mut report.loop_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RecoveryEvent(row) => push_unique(&mut report.loop_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RecoveryExecution(row) => push_unique(&mut report.loop_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::BootstrapEffect(row) => push_unique(&mut report.loop_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::PlannerRecovery(row) => push_unique(&mut report.judgment_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RewardSemantics(row) => push_unique(&mut report.loop_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RunCommandOutcome(row) => push_unique(&mut report.run_command_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::ApplyPatchOutcome(row) => push_unique(&mut report.apply_patch_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::VerifyOutcome(row) => push_unique(&mut report.verify_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::InvalidPlanRetry(row) => push_unique(&mut report.invalid_plan_retry_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteRecovery(row) => push_unique(&mut report.route_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::SuccessorConsumption(row) => push_unique(&mut report.route_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::PlannerJudgment(row) => push_unique(&mut report.judgment_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::PlannerObjectiveAlignment(row) => push_unique(&mut report.judgment_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteObjectiveAlignment(row) => push_unique(&mut report.judgment_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::GoalRouteObjectiveDrift(row) => push_unique(&mut report.judgment_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::ContradictionEventTrend(row) => push_unique(&mut report.judgment_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:            TransitionRow::RouteSemanticActionability(row) => push_unique(&mut report.judgment_covered, row.family),
+canon-utils/canon-policy-matrix/src/lib.rs:pub fn baseline_transition_rows() -> Vec<TransitionRow> {
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_transition_rows().into_iter().map(TransitionRow::Route));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_dispatch_rows().into_iter().map(TransitionRow::RouteDispatch));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_emit_rows().into_iter().map(TransitionRow::RouteEmit));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_cache_rows().into_iter().map(TransitionRow::RouteCache));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_failure_rows().into_iter().map(TransitionRow::RouteFailure));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_emit_effect_rows().into_iter().map(TransitionRow::RouteEmitEffect));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(loop_transition_rows().into_iter().map(TransitionRow::Loop));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(loop_runtime_rows().into_iter().map(TransitionRow::LoopRuntime));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(recovery_event_rows().into_iter().map(TransitionRow::RecoveryEvent));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(recovery_execution_rows().into_iter().map(TransitionRow::RecoveryExecution));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(bootstrap_effect_rows().into_iter().map(TransitionRow::BootstrapEffect));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(planner_recovery_rows().into_iter().map(TransitionRow::PlannerRecovery));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(reward_semantics_rows().into_iter().map(TransitionRow::RewardSemantics));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(run_command_outcome_rows().into_iter().map(TransitionRow::RunCommandOutcome));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(apply_patch_outcome_rows().into_iter().map(TransitionRow::ApplyPatchOutcome));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(verify_outcome_rows().into_iter().map(TransitionRow::VerifyOutcome));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(invalid_plan_retry_rows().into_iter().map(TransitionRow::InvalidPlanRetry));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_recovery_rows().into_iter().map(TransitionRow::RouteRecovery));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(successor_consumption_rows().into_iter().map(TransitionRow::SuccessorConsumption));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(planner_judgment_rows().into_iter().map(TransitionRow::PlannerJudgment));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(planner_objective_alignment_rows().into_iter().map(TransitionRow::PlannerObjectiveAlignment));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_objective_alignment_rows().into_iter().map(TransitionRow::RouteObjectiveAlignment));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(goal_route_objective_drift_rows().into_iter().map(TransitionRow::GoalRouteObjectiveDrift));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(contradiction_event_trend_rows().into_iter().map(TransitionRow::ContradictionEventTrend));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_semantic_actionability_rows().into_iter().map(TransitionRow::RouteSemanticActionability));
+canon-utils/canon-policy-matrix/src/lib.rs:    rows.extend(route_trend_actionability_rows().into_iter().map(TransitionRow::RouteSemanticActionability));
+canon-utils/canon-policy-matrix/src/lib.rs:pub fn route_transition_rows() -> Vec<RouteTransitionRow> {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        RouteTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
+canon-utils/canon-policy-matrix/src/lib.rs:        LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:        LoopTransitionRow {
+canon-utils/canon-policy-matrix/src/lib.rs:pub fn coverage_report_markdown(rows: &[TransitionRow]) -> String {
+canon-utils/canon-policy-matrix/src/lib.rs:fn assert_route_row(row: &RouteTransitionRow) {
+canon-utils/canon-policy-matrix/src/lib.rs:fn assert_loop_row(row: &LoopTransitionRow) {
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::Route(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::Loop(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RunCommandOutcome(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::ApplyPatchOutcome(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::VerifyOutcome(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::InvalidPlanRetry(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RouteDispatch(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RouteEmit(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RouteCache(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::LoopRuntime(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RecoveryEvent(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RecoveryExecution(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::BootstrapEffect(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::PlannerRecovery(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RewardSemantics(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RouteFailure(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RouteEmitEffect(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RouteRecovery(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::SuccessorConsumption(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::PlannerJudgment(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::PlannerObjectiveAlignment(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RouteObjectiveAlignment(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::GoalRouteObjectiveDrift(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::ContradictionEventTrend(row) => row.name,
+canon-utils/canon-policy-matrix/src/lib.rs:                TransitionRow::RouteSemanticActionability(row) => row.name,

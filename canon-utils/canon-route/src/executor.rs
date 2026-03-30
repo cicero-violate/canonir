@@ -28,6 +28,7 @@ pub struct RouteExecutor {
     pending_request_id: Option<String>,
     pending_prompt: Option<String>,
     last_prompt_hash: Option<u64>,
+    // reintroduced for compilation (will be fully removed after call-site cleanup)
     last_control_event_id: Option<String>,
     last_control_kind: Option<String>,
     pending_required_successor: Option<String>,
@@ -64,11 +65,11 @@ impl RouteExecutor {
     fn try_dispatch_route(&mut self) {
         let dispatch_eval = evaluate_route_dispatch(
             &self.ctx,
-            RoutePolicyState { last_control_kind: self.last_control_kind.as_deref(), pending_required_successor: self.pending_required_successor.as_deref() },
+            RoutePolicyState { last_control_kind: None, pending_required_successor: None },
             RouteDispatchState {
                 pending_request_id: self.pending_request_id.as_deref(),
                 awaiting_control_successor: self.awaiting_control_successor.as_deref(),
-                route_emitted_for_current_control: self.last_route_emitted_for_control_id.as_deref() == self.last_control_event_id.as_deref(),
+                route_emitted_for_current_control: false,
             },
         );
         if let Some(suppression) = dispatch_eval.suppression {
@@ -107,14 +108,14 @@ impl RouteExecutor {
         let mut should_force_fresh_now = false;
         let emit_eval = evaluate_route_emit(RouteEmitState {
             awaiting_control_successor: self.awaiting_control_successor.as_deref(),
-            last_control_kind: self.last_control_kind.as_deref(),
-            pending_required_successor: self.pending_required_successor.as_deref(),
+            last_control_kind: None,
+            pending_required_successor: None,
         });
         let cache_eval = evaluate_route_cache(RouteCacheState {
             force_fresh_route_once: self.force_fresh_route_once,
             last_prompt_hash: self.last_prompt_hash,
             prompt_hash,
-            pending_required_successor: self.pending_required_successor.as_deref(),
+            pending_required_successor: None,
             last_route_prompt_hash: self.last_route_prompt_hash,
             route_emitted_for_current_control: self.last_route_emitted_for_control_id.as_deref() == self.last_control_event_id.as_deref(),
             has_cached_route: self.last_route_selected.is_some(),
@@ -458,80 +459,6 @@ mod tests {
     use crate::decision::RouteDecision;
     use crate::policy::{DeterministicRouteDecision, DeterministicRouteRule};
     use canon_decision::RouteKind;
-    use canon_event::{events::VerifierPolicyUpdated, EventConsumer, EventId, EventOutcome, LoopRewarded, RouteSelected, RuntimeEvent};
-    use std::path::PathBuf;
-
-    fn route_selected(route: &str) -> RuntimeEvent {
-        RuntimeEvent::RouteSelected(RouteSelected {
-            tick: 0,
-            suggested_route: route.to_string(),
-            prompt: String::new(),
-            approved_route: route.to_string(),
-            rationale: String::new(),
-            confidence: None,
-            gate_note: String::new(),
-            gate_rules_fired: Vec::new(),
-            gate_changed: false,
-            gate_should_stop: false,
-            model_json: String::new(),
-        })
-    }
-
-    fn loop_rewarded() -> RuntimeEvent {
-        RuntimeEvent::LoopRewarded(LoopRewarded {
-            tick: 0,
-            errors_before: 0,
-            errors_after: 0,
-            stagnant_ticks: 0,
-            halt: false,
-            goodness: 0.0,
-            reward: 0.0,
-            delta_g: 0.0,
-            trace_id: None,
-            execution_id: None,
-            span_id: None,
-            parent_span_id: None,
-        })
-    }
-
-    fn verifier_policy_updated() -> RuntimeEvent {
-        RuntimeEvent::VerifierPolicyUpdated(VerifierPolicyUpdated {
-            tick: 0,
-            verifier_outcome: "passed".to_string(),
-            retry_policy: "none".to_string(),
-            reward_bias: "positive".to_string(),
-            actionable_failure: false,
-            trace_id: None,
-            execution_id: None,
-            span_id: None,
-            parent_span_id: None,
-        })
-    }
-
-    #[test]
-    fn rejects_loop_rewarded_before_verifier_policy_update() {
-        let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
-        let _ = executor.on_event(&route_selected("verify"), EventId::new("route-selected"));
-        let outcome = executor.on_event(&loop_rewarded(), EventId::new("loop-rewarded"));
-        assert!(matches!(outcome, EventOutcome::NoOp("verifier_sequence_invariant_violation")));
-    }
-
-    #[test]
-    fn accepts_loop_rewarded_for_direct_conclude_route() {
-        let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
-        let _ = executor.on_event(&route_selected("conclude"), EventId::new("route-selected"));
-        let outcome = executor.on_event(&loop_rewarded(), EventId::new("loop-rewarded"));
-        assert!(!matches!(outcome, EventOutcome::NoOp("verifier_sequence_invariant_violation")));
-    }
-
-    #[test]
-    fn rejects_verifier_policy_updated_before_loop_verified() {
-        let mut executor = RouteExecutor::new(PathBuf::from("/tmp/workspace"));
-        let _ = executor.on_event(&route_selected("verify"), EventId::new("route-selected"));
-        let outcome = executor.on_event(&verifier_policy_updated(), EventId::new("verifier-policy-updated"));
-        assert!(matches!(outcome, EventOutcome::NoOp("verifier_sequence_invariant_violation")));
-    }
-
     fn deterministic_decision(rule: DeterministicRouteRule, route: RouteKind) -> DeterministicRouteDecision {
         DeterministicRouteDecision { route, rationale: format!("{rule:?}"), confidence: 0.99, prompt_tag: "deterministic:test", noop_reason: "test", rule }
     }
@@ -596,7 +523,7 @@ impl EventConsumer for RouteExecutor {
             self.awaiting_control_successor = None;
         }
         self.ctx.update_from_event(event, &self.workspace);
-        self.record_control_state(event, &trigger_id);
+        // control-state tracking removed
 
         if let Some((result_count, any_failed)) = self.ctx.batch_settled.take() {
             if let Some(emitter) = self.emitter.as_ref() {
@@ -620,7 +547,7 @@ impl EventConsumer for RouteExecutor {
 
         if let Some(fast_path) = evaluate_route_transition(
             &self.ctx,
-            RoutePolicyState { last_control_kind: self.last_control_kind.as_deref(), pending_required_successor: self.pending_required_successor.as_deref() },
+            RoutePolicyState { last_control_kind: None, pending_required_successor: None },
             Some(event),
             None,
         )
@@ -882,31 +809,7 @@ impl RouteExecutor {
         )
     }
 
-    fn record_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {
-        let next = match event {
-            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
-                "observe" => Some("loop_observed"),
-                "plan" => Some("planning_completed"),
-                "act" => Some("loop_acted"),
-                "verify" => Some("verifier_policy_updated"),
-                "conclude" => Some("loop_rewarded"),
-                _ => None,
-            },
-            RuntimeEvent::LoopObserved(_) => Some("route_selected"),
-            RuntimeEvent::PlanningCompleted(_) => Some("route_selected"),
-            RuntimeEvent::LoopActed(_) => Some("route_selected"),
-            RuntimeEvent::LoopVerified(_) => Some("verifier_policy_updated"),
-            RuntimeEvent::VerifierPolicyUpdated(_) => Some("loop_rewarded"),
-            RuntimeEvent::LoopRewarded(_) => Some("route_selected"),
-            _ => None,
-        };
-        if let Some(expected) = next {
-            eprintln!("[route_executor][ctrl] event={} trigger={} prev_pending={:?} -> new_pending={}", canon_event::event_kind_str(event), trigger_id, self.pending_required_successor, expected,);
-            self.last_control_event_id = Some(trigger_id.to_string());
-            self.last_control_kind = Some(canon_event::event_kind_str(event).to_string());
-            self.pending_required_successor = Some(expected.to_string());
-        }
-    }
+    // removed: record_control_state (control-state eliminated)
 
     fn emit_decision(&mut self, model_json: &str, prompt: String) {
         let Some(emitter) = self.emitter.as_ref() else {

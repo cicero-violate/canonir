@@ -299,7 +299,7 @@ fn exec_run_command(workspace: &Path, cmd: &str, cwd: &str) -> Result<(bool, Str
     }
     ensure_safe_command(cmd)?;
     let output = Command::new("/bin/bash")
-        .arg("-lc")
+        .arg("-c")
         .arg(cmd)
         .current_dir(&cwd_path)
         .output()
@@ -574,15 +574,19 @@ async fn main() -> Result<()> {
                             "[canon-mini-agent] step={} apply_patch failed: {err_str}",
                             step + 1
                         );
-                        // Auto-read the file near the failed anchor so the LLM
-                        // can retry with correct context (mirrors harness_repair).
+                        // Auto-read the affected file so the LLM can retry with
+                        // correct anchors. Two cases:
+                        //   1. Anchor-miss: path is in the error message.
+                        //   2. Malformed hunk / other: extract path from the patch text.
                         let mut msg = format!("apply_patch failed: {err_str}");
-                        if let Some(anchor_path) = extract_anchor_fail_path(&err_str) {
+                        let read_path = extract_anchor_fail_path(&err_str)
+                            .or_else(|| patch_first_file(patch).map(|s| s.to_string()));
+                        if let Some(file_path) = read_path {
                             if let Ok(content) =
-                                auto_read_for_patch_anchor(&workspace, &anchor_path, &err_str)
+                                auto_read_for_patch_anchor(&workspace, &file_path, &err_str)
                             {
                                 eprintln!(
-                                    "[canon-mini-agent] step={} auto_read anchor_path={anchor_path}",
+                                    "[canon-mini-agent] step={} auto_read path={file_path}",
                                     step + 1
                                 );
                                 msg = format!("apply_patch failed: {err_str}\n\n{content}");
