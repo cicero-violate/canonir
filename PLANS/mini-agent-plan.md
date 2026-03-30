@@ -6,6 +6,8 @@ archlinux in canon/state on  main                                               
 
 Check out log.txt. 
 
+DO NOT RUN THE cargo run --bin canon-runtime-supervisor, it is already LIVE.
+
 ---
 
 ## Objective
