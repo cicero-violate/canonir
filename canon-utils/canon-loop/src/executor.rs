@@ -784,6 +784,27 @@ impl LoopStageExecutor {
 
         None
     }
+
+    fn execute_stage_event(&mut self, trigger_id: &EventId, event: &RuntimeEvent) -> EventOutcome {
+        let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
+            return EventOutcome::NoOp("loop_stage_not_stage_event");
+        };
+        let res = stage.execute(&mut self.ctx, trigger_id.clone());
+        if self.ctx.emitter.is_none() {
+            return EventOutcome::NoOp("loop_stage_no_emitter");
+        }
+        match res {
+            Ok(result) => self.emit_stage_result(trigger_id, result),
+            Err(err) => self.emit_error(
+                trigger_id,
+                "loop_stage_execution",
+                err.to_string(),
+                "error",
+                serde_json::json!({ "event": format!("{:?}", event) }),
+            ),
+        }
+        EventOutcome::NoOp("loop_stage_async")
+    }
 }
 
 fn classify_constraint_action(planned: &canon_event::LoopPlanned) -> Option<ConstraintAction> {
@@ -951,18 +972,7 @@ impl EventConsumer for LoopStageExecutor {
             return outcome;
         }
 
-        let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
-            return EventOutcome::NoOp("loop_stage_not_stage_event");
-        };
-        let res = stage.execute(&mut self.ctx, trigger_id.clone());
-        if self.ctx.emitter.is_none() {
-            return EventOutcome::NoOp("loop_stage_no_emitter");
-        }
-        match res {
-            Ok(result) => self.emit_stage_result(&trigger_id, result),
-            Err(err) => self.emit_error(&trigger_id, "loop_stage_execution", err.to_string(), "error", serde_json::json!({ "event": format!("{:?}", event) })),
-        }
-        EventOutcome::NoOp("loop_stage_async")
+        self.execute_stage_event(&trigger_id, event)
     }
 }
 
