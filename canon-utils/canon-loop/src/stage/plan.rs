@@ -27,12 +27,30 @@ use crate::{
     context::{LoopContext, PendingPlan},
     env_model::{select_bootstrap_command, BootstrapCommandChoice},
     planning_preconditions,
-    policy::{planner_hint_lines, retry_policy_for_planning_context, RetryPolicy},
+    policy::{
+        planner_hint_lines, retry_policy_for_planning_context, semantic_planner_hint_lines,
+        RetryPolicy,
+    },
     result::LoopStageResult,
 };
 
 const LLM_TIMEOUT_TICKS: u64 = 60;
 const PLACEHOLDER_GOAL: &str = "goal-pending";
+
+fn retry_policy_text(policy: RetryPolicy, contextualized: bool) -> &'static str {
+    match (policy, contextualized) {
+        (RetryPolicy::DiscoveryOnly, _) =>
+            "Retry policy: discovery-only. Emit ONLY list_dir/read_file on the next batch.",
+        (RetryPolicy::SinglePatchOnly, _) =>
+            "Retry policy: single-patch-only. Emit exactly one apply_patch action and nothing else on the next batch.",
+        (RetryPolicy::CorrectiveRetry, true) =>
+            "Retry policy: corrective retry. Fix the specific invalid-plan issue and retry directly; discovery is not required unless you are missing file context.",
+        (RetryPolicy::CorrectiveRetry, false) =>
+            "Retry policy: corrective retry. Change the repair strategy before retrying.",
+        (RetryPolicy::None, _) =>
+            "Retry policy: none.",
+    }
+}
 
 pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let tick = rs.tick;
@@ -1595,15 +1613,7 @@ fn build_context_delta(
                 &llm_semantic_context.recent_execution_results,
                 &llm_semantic_context.objective_trend_state,
             );
-            let policy_text = match policy {
-                RetryPolicy::DiscoveryOnly =>
-                    "Retry policy: discovery-only. Emit ONLY list_dir/read_file on the next batch.",
-                RetryPolicy::SinglePatchOnly =>
-                    "Retry policy: single-patch-only. Emit exactly one apply_patch action and nothing else on the next batch.",
-                RetryPolicy::CorrectiveRetry =>
-                    "Retry policy: corrective retry. Fix the specific invalid-plan issue and retry directly; discovery is not required unless you are missing file context.",
-                RetryPolicy::None => "Retry policy: none.",
-            };
+            let policy_text = retry_policy_text(policy, true);
             format!("{}\n{policy_text}", llm_semantic_context.render_planner_delta_block())
         }
         None => {
@@ -1615,8 +1625,9 @@ fn build_context_delta(
             );
             if policy == RetryPolicy::CorrectiveRetry {
                 format!(
-                    "{}\nRetry policy: corrective retry. Change the repair strategy before retrying.",
+                    "{}\n{}",
                     llm_semantic_context.render_planner_delta_block()
+                    ,retry_policy_text(policy, false)
                 )
             } else {
                 llm_semantic_context.render_planner_delta_block()
@@ -1762,23 +1773,10 @@ fn build_planner_hint(
             .map(|(_, text)| truncate_hint_text(text, 240))
             .as_deref(),
     );
-    if semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure") {
-        hint_lines.push(
-            "Programmatic tip: typed failure_class=no_actionable_failure; do not emit repair actions. Refresh observation instead."
-                .to_string(),
-        );
-    }
-    match semantic_summary.failure_scope.as_deref() {
-        Some("localized") => hint_lines.push(
-            "Programmatic tip: typed failure_scope=localized; prefer semantic/file repair on the targeted source paths. Avoid workspace-wide bootstrap or config changes unless fresh observation proves drift."
-                .to_string(),
-        ),
-        Some("workspace") | Some("tooling") => hint_lines.push(
-            "Programmatic tip: typed failure_scope=workspace/tooling; prefer observe, bootstrap, config, or tool-level repair. Avoid localized semantic/file edits as the first batch."
-                .to_string(),
-        ),
-        _ => {}
-    }
+    hint_lines.extend(semantic_planner_hint_lines(
+        semantic_summary.primary_failure_class().as_deref(),
+        semantic_summary.failure_scope.as_deref(),
+    ));
     if hint_lines.is_empty() {
         "none".to_string()
     } else {

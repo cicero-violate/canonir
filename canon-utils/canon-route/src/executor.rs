@@ -145,60 +145,14 @@ impl RouteExecutor {
             can_emit_route_selected: emit_eval.allowed,
         });
         if !self.force_fresh_route_once && self.last_prompt_hash == Some(prompt_hash) {
+            if matches!(cache_eval.rule, RouteCacheRule::ReplayCachedRoute) {
+                if self.replay_cached_route() {
+                    return;
+                }
+            }
             if let Some(emitter) = self.emitter.as_ref() {
                 match cache_eval.rule {
-                    RouteCacheRule::ReplayCachedRoute => {
-                        if let Some(route) = self.last_route_selected.clone() {
-                            let emit_eval = evaluate_route_emit(RouteEmitState {
-                                awaiting_control_successor: self.awaiting_control_successor.as_deref(),
-                                last_control_kind: self.last_control_kind.as_deref(),
-                                pending_required_successor: self.pending_required_successor.as_deref(),
-                            });
-                            if !emit_eval.allowed {
-                                let reason = emit_eval
-                                    .reason
-                                    .unwrap_or_else(|| "illegal control emit".to_string());
-                                let kind = if matches!(
-                                    emit_eval.rule,
-                                    RouteEmitRule::DuplicateEmitBeforeSuccessor
-                                        | RouteEmitRule::IllegalControlReentry
-                                ) {
-                                    "duplicate_route_emit_before_successor"
-                                } else {
-                                    "illegal_control_reentry"
-                                };
-                                let tid = self
-                                    .current_trigger
-                                    .clone()
-                                    .expect("cached route emit without current_trigger");
-                                emitter.emit_child(
-                                    RuntimeEvent::Debug(canon_event::DebugEvent {
-                                        source: "route_executor".to_string(),
-                                        kind: kind.to_string(),
-                                        payload: self.suppression_payload(
-                                            &reason,
-                                            "recoverable",
-                                            "attempt_expected_successor_recovery",
-                                            serde_json::json!({
-                                                "attempted_kind": "route_selected",
-                                                "attempted_route": route.approved_route,
-                                                "replay_source": "cached_route",
-                                            }),
-                                        ),
-                                    }),
-                                    vec![tid.clone()],
-                                    file!(),
-                                    line!(),
-                                );
-                                self.emit_recovery_for_expected_successor(emitter, tid);
-                                return;
-                            }
-                            let tid = self.current_trigger.clone().expect("cached route emit without current_trigger");
-                            emitter.emit_with_parents(RuntimeEvent::RouteSelected(route), vec![tid], file!(), line!());
-                            self.last_route_emitted_for_control_id = self.last_control_event_id.clone();
-                            return;
-                        }
-                    }
+                    RouteCacheRule::ReplayCachedRoute => {}
                     RouteCacheRule::InvalidateCachedObserveRoute => {
                         emitter.emit_child(
                             RuntimeEvent::Debug(canon_event::DebugEvent {
@@ -302,30 +256,7 @@ impl RouteExecutor {
         self.pending_request_id = None;
         self.pending_prompt = None;
 
-        let fallback = DeterministicRouteDecision {
-            route: RouteKind::Plan,
-            rationale: format!(
-                "router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"
-            ),
-            confidence: 0.90,
-            prompt_tag: "deterministic:router_llm_disabled_plan",
-            noop_reason: "route_executor_router_llm_disabled_plan",
-            rule: if self.ctx.last_invalid_plan_reason.is_some() {
-                crate::policy::DeterministicRouteRule::InvalidPlanReplan
-            } else if self.ctx.semantic_summary.validation_blocked_by_preconditions {
-                crate::policy::DeterministicRouteRule::BlockedValidationPlan
-            } else if self
-                .ctx
-                .semantic_summary
-                .planning_preconditions
-                .iter()
-                .any(|line| line.contains("must_bootstrap_workspace=true"))
-            {
-                crate::policy::DeterministicRouteRule::MissingTargetPlan
-            } else {
-                crate::policy::DeterministicRouteRule::NoActionableFailureObserve
-            },
-        };
+        let fallback = self.router_disabled_fallback(prompt_hash);
         let json = serde_json::json!({
             "route": fallback.route.as_str(),
             "rationale": fallback.rationale,
@@ -333,6 +264,97 @@ impl RouteExecutor {
         })
         .to_string();
         self.emit_deterministic_decision(&fallback, &json);
+    }
+
+    fn router_disabled_fallback_rule(&self) -> crate::policy::DeterministicRouteRule {
+        if self.ctx.last_invalid_plan_reason.is_some() {
+            crate::policy::DeterministicRouteRule::InvalidPlanReplan
+        } else if self.ctx.semantic_summary.validation_blocked_by_preconditions {
+            crate::policy::DeterministicRouteRule::BlockedValidationPlan
+        } else if self
+            .ctx
+            .semantic_summary
+            .planning_preconditions
+            .iter()
+            .any(|line| line.contains("must_bootstrap_workspace=true"))
+        {
+            crate::policy::DeterministicRouteRule::MissingTargetPlan
+        } else {
+            crate::policy::DeterministicRouteRule::NoActionableFailureObserve
+        }
+    }
+
+    fn router_disabled_fallback(&self, prompt_hash: u64) -> DeterministicRouteDecision {
+        DeterministicRouteDecision {
+            route: RouteKind::Plan,
+            rationale: format!(
+                "router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"
+            ),
+            confidence: 0.90,
+            prompt_tag: "deterministic:router_llm_disabled_plan",
+            noop_reason: "route_executor_router_llm_disabled_plan",
+            rule: self.router_disabled_fallback_rule(),
+        }
+    }
+
+    fn replay_cached_route(&mut self) -> bool {
+        let Some(route) = self.last_route_selected.clone() else {
+            return false;
+        };
+        let emit_eval = evaluate_route_emit(RouteEmitState {
+            awaiting_control_successor: self.awaiting_control_successor.as_deref(),
+            last_control_kind: self.last_control_kind.as_deref(),
+            pending_required_successor: self.pending_required_successor.as_deref(),
+        });
+        if !emit_eval.allowed {
+            let reason = emit_eval
+                .reason
+                .unwrap_or_else(|| "illegal control emit".to_string());
+            let kind = if matches!(
+                emit_eval.rule,
+                RouteEmitRule::DuplicateEmitBeforeSuccessor | RouteEmitRule::IllegalControlReentry
+            ) {
+                "duplicate_route_emit_before_successor"
+            } else {
+                "illegal_control_reentry"
+            };
+            let tid = self
+                .current_trigger
+                .clone()
+                .expect("cached route emit without current_trigger");
+            if let Some(emitter) = self.emitter.as_ref() {
+                emitter.emit_child(
+                    RuntimeEvent::Debug(canon_event::DebugEvent {
+                        source: "route_executor".to_string(),
+                        kind: kind.to_string(),
+                        payload: self.suppression_payload(
+                            &reason,
+                            "recoverable",
+                            "attempt_expected_successor_recovery",
+                            serde_json::json!({
+                                "attempted_kind": "route_selected",
+                                "attempted_route": route.approved_route,
+                                "replay_source": "cached_route",
+                            }),
+                        ),
+                    }),
+                    vec![tid.clone()],
+                    file!(),
+                    line!(),
+                );
+                self.emit_recovery_for_expected_successor(emitter, tid);
+            }
+            return true;
+        }
+        let tid = self
+            .current_trigger
+            .clone()
+            .expect("cached route emit without current_trigger");
+        if let Some(emitter) = self.emitter.as_ref() {
+            emitter.emit_with_parents(RuntimeEvent::RouteSelected(route), vec![tid], file!(), line!());
+        }
+        self.last_route_emitted_for_control_id = self.last_control_event_id.clone();
+        true
     }
 
     fn emit_persisted_invariant_store_events(&self) {

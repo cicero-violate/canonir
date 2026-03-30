@@ -550,6 +550,31 @@ pub fn planner_hint_lines(
     out
 }
 
+pub fn semantic_planner_hint_lines(
+    failure_class: Option<&str>,
+    failure_scope: Option<&str>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if failure_class == Some("no_actionable_failure") {
+        out.push(
+            "Programmatic tip: typed failure_class=no_actionable_failure; do not emit repair actions. Refresh observation instead."
+                .to_string(),
+        );
+    }
+    match failure_scope {
+        Some("localized") => out.push(
+            "Programmatic tip: typed failure_scope=localized; prefer semantic/file repair on the targeted source paths. Avoid workspace-wide bootstrap or config changes unless fresh observation proves drift."
+                .to_string(),
+        ),
+        Some("workspace") | Some("tooling") => out.push(
+            "Programmatic tip: typed failure_scope=workspace/tooling; prefer observe, bootstrap, config, or tool-level repair. Avoid localized semantic/file edits as the first batch."
+                .to_string(),
+        ),
+        _ => {}
+    }
+    out
+}
+
 fn is_bootstrap_command_output(stdout: &str, stderr: &str) -> bool {
     let text = if !stdout.is_empty() { stdout } else { stderr };
     text.contains("Creating binary (application) package")
