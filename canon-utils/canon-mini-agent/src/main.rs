@@ -1,8 +1,10 @@
 use anyhow::{anyhow, bail, Context, Result};
 use canon_llm::{
-    config::CapabilityConfig,
+    config::{CapabilityConfig, LlmEndpoint},
     endpoint_worker::{llm_worker_new_tabs, llm_worker_send_request},
+    tab_management::TabManagerHandle,
     ws_server,
+    ws_server::WsBridge,
 };
 use canon_tools_patch::apply_patch;
 use serde_json::Value;
@@ -130,6 +132,54 @@ For each task marked `- [x]` in the plan:
 - Be critical and thorough — verify evidence, not just the claim.
 - Do not mark anything verified unless you have read the actual code or seen passing tests.
 - Only modify PLANS/mini-agent-plan.md — never edit source files.
+- Emit exactly one action per turn.
+- Output format: exactly one JSON array in a ```json code block. No prose outside it.
+"#;
+
+const SYSTEM_INSTRUCTIONS_PLANNER: &str = r#"You are the canon planner agent.
+
+Your job is to review PLANS/mini-agent-plan.md and break down any pending tasks (marked `- [ ]`) into concrete, actionable sub-steps that the executor agent can follow.
+
+You work inside the canon workspace at /workspace/ai_sandbox/canon. Use bash or git discovery commands to review the current status of the project. Things have change
+
+Each turn you receive either:
+  (a) the initial plan; or
+  (b) the result of your last action.
+
+You respond with exactly one action per turn, wrapped in a `json` code block:
+
+```json
+[ { "action": "..." } ]
+```
+
+━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. list_dir — explore directory contents
+   {"action":"list_dir","path":"canon-utils"}
+
+2. read_file — read a source file; output is line-numbered ("42: code here")
+   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs"}
+   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
+
+3. apply_patch — update PLANS/mini-agent-plan.md with expanded steps
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n context\n+added step\n context\n*** End Patch"}
+
+4. run_command — inspect the codebase
+   {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon"}
+
+5. done — declare the plan update complete
+   {"action":"done","reason":"expanded N pending tasks into actionable steps"}
+
+━━━ PLANNING PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+For each task marked `- [ ]` in the plan:
+1. Read relevant source files to understand what is needed.
+2. Expand the task into 3-5 concrete steps with specific file paths and changes.
+3. Update PLANS/mini-agent-plan.md with the expanded steps using apply_patch.
+
+━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- Only modify PLANS/mini-agent-plan.md — never edit source files directly.
 - Emit exactly one action per turn.
 - Output format: exactly one JSON array in a ```json code block. No prose outside it.
 "#;
@@ -405,162 +455,68 @@ fn truncate(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────────
+// ── Agent loop ─────────────────────────────────────────────────────────────────
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Parse --verifier / --executor (default: executor) and optional --port N
-    let args: Vec<String> = std::env::args().collect();
-    let is_verifier = args.iter().any(|a| a == "--verifier");
-    let agent_role = if is_verifier { "verifier" } else { "mini_agent" };
-    let system_instructions = if is_verifier { SYSTEM_INSTRUCTIONS_VERIFIER } else { SYSTEM_INSTRUCTIONS_EXECUTOR };
-    let ws_port: u16 = args.windows(2)
-        .find(|w| w[0] == "--port")
-        .and_then(|w| w[1].parse().ok())
-        .unwrap_or(WS_PORT_DEFAULT);
-
-    let workspace = PathBuf::from(WORKSPACE);
-
-    let plan_path = workspace.join(PLAN_FILE);
-    let objective = std::fs::read_to_string(&plan_path)
-        .with_context(|| format!("failed to read plan file: {}", plan_path.display()))?;
-
-    if objective.trim().is_empty() {
-        bail!("plan file is empty — write an objective into {PLAN_FILE} before running");
-    }
-
-    eprintln!("[canon-mini-agent] role={agent_role} objective loaded ({} bytes)", objective.len());
-
-    // Load capability config to get endpoint details.
-    let config = CapabilityConfig::snapshot_store_load()
-        .context("failed to load capability_config.toml")?;
-
-    let endpoint = config
-        .llm_endpoints
-        .iter()
-        .find(|e| e.role.as_deref() == Some(agent_role))
-        .ok_or_else(|| anyhow!("no endpoint with role '{agent_role}' in capability_config.toml"))?
-        .clone();
-
-    eprintln!(
-        "[canon-mini-agent] endpoint id={} url={} stateful={} max_tabs={}",
-        endpoint.id, endpoint.url, endpoint.stateful, endpoint.max_tabs
-    );
-
-    // Start the WebSocket bridge — Chrome extension connects here.
-    let ws_addr: std::net::SocketAddr = format!("127.0.0.1:{ws_port}").parse()?;
-    let bridge = ws_server::spawn(ws_addr, config.response_timeout_secs, Arc::new(OnceLock::new()));
-
-    eprintln!("[canon-mini-agent] waiting for Chrome extension on ws://127.0.0.1:{ws_port}");
-    bridge.wait_for_connection().await;
-    eprintln!("[canon-mini-agent] Chrome extension connected");
-
-    let tabs = llm_worker_new_tabs();
-
-    let initial_prompt = if is_verifier {
-        format!(
-            "WORKSPACE: {WORKSPACE}\n\
-             All relative paths resolve against WORKSPACE.\n\
-             \n\
-             Plan to verify (from {PLAN_FILE}):\n\
-             {objective}\n\
-             \n\
-             Begin by reading the plan and identifying all tasks marked `- [x]`. \
-             Verify each one. Emit exactly one action to begin.",
-        )
-    } else {
-        format!(
-            "WORKSPACE: {WORKSPACE}\n\
-             All relative paths resolve against WORKSPACE.\n\
-             \n\
-             Objective (from {PLAN_FILE}):\n\
-             {objective}\n\
-             \n\
-             Emit exactly one action to begin.",
-        )
-    };
-
+/// Run one agent role until it calls `done` or exhausts MAX_STEPS.
+/// Returns the done reason on success, or an error on hard failure.
+/// `check_on_done`: if true, run cargo build + test before accepting done.
+async fn run_agent(
+    role: &str,
+    system_instructions: &str,
+    initial_prompt: String,
+    endpoint: &LlmEndpoint,
+    bridge: &WsBridge,
+    workspace: &Path,
+    config: &CapabilityConfig,
+    tabs: &TabManagerHandle,
+    check_on_done: bool,
+) -> Result<String> {
     let mut step = 0usize;
     let mut last_result: Option<String> = None;
 
     loop {
         if step >= MAX_STEPS {
-            break;
+            bail!("[{role}] exhausted {MAX_STEPS} steps without completing");
         }
 
         let (role_schema, prompt) = if step == 0 {
             (system_instructions.to_string(), initial_prompt.clone())
         } else {
             let result = last_result.as_deref().unwrap_or("");
-            (
-                String::new(),
-                format!(
-                    "Action result:\n{}\n\nEmit exactly one action.",
-                    truncate(result, MAX_SNIPPET)
-                ),
-            )
+            (String::new(), format!("Action result:\n{}\n\nEmit exactly one action.", truncate(result, MAX_SNIPPET)))
         };
 
-        eprintln!(
-            "[canon-mini-agent] step={} prompt_bytes={}",
-            step + 1,
-            prompt.len()
-        );
+        eprintln!("[{role}] step={} prompt_bytes={}", step + 1, prompt.len());
 
         let raw = match llm_worker_send_request(
-            &bridge,
-            &endpoint.id,
-            &endpoint.url,
-            endpoint.stateful,
-            &prompt,
-            &role_schema,
-            None,
-            None,
-            false,
-            true,
-            agent_role,
-            &tabs,
-            endpoint.max_tabs,
-            config.tab_cooldown_ms,
-        )
-        .await
-        {
+            bridge, &endpoint.id, &endpoint.url, endpoint.stateful,
+            &prompt, &role_schema, None, None, false, true,
+            role, tabs, endpoint.max_tabs, config.tab_cooldown_ms,
+        ).await {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[canon-mini-agent] step={} llm_error: {e}", step + 1);
-                last_result = Some(format!(
-                    "LLM error: {e}\nReturn exactly one action in a ```json code block."
-                ));
+                eprintln!("[{role}] step={} llm_error: {e}", step + 1);
+                last_result = Some(format!("LLM error: {e}\nReturn exactly one action in a ```json code block."));
                 step += 1;
                 continue;
             }
         };
 
-        eprintln!(
-            "[canon-mini-agent] step={} response_bytes={}",
-            step + 1,
-            raw.len()
-        );
+        eprintln!("[{role}] step={} response_bytes={}", step + 1, raw.len());
 
         let actions = match parse_actions(&raw) {
             Ok(a) => a,
             Err(e) => {
-                eprintln!("[canon-mini-agent] step={} parse_error: {e}", step + 1);
-                last_result = Some(format!(
-                    "Parse error: {e}\n\
-                     Return exactly one action in a ```json code block. No prose outside it."
-                ));
+                eprintln!("[{role}] step={} parse_error: {e}", step + 1);
+                last_result = Some(format!("Parse error: {e}\nReturn exactly one action in a ```json code block. No prose outside it."));
                 step += 1;
                 continue;
             }
         };
 
         if actions.len() != 1 {
-            let msg = format!(
-                "Got {} actions — emit exactly one action per turn.",
-                actions.len()
-            );
-            eprintln!("[canon-mini-agent] step={} {msg}", step + 1);
+            let msg = format!("Got {} actions — emit exactly one action per turn.", actions.len());
+            eprintln!("[{role}] step={} {msg}", step + 1);
             last_result = Some(msg);
             step += 1;
             continue;
@@ -568,127 +524,83 @@ async fn main() -> Result<()> {
 
         let action = &actions[0];
         let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown");
-        eprintln!("[canon-mini-agent] step={} action={kind}", step + 1);
+        eprintln!("[{role}] step={} action={kind}", step + 1);
 
         let step_result: Result<(bool, String)> = (|| match kind {
             "done" => {
-                let reason = action
-                    .get("reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("objective complete");
-                // Step 1: cargo build --workspace
-                eprintln!("[canon-mini-agent] step={} done requested — running cargo build --workspace", step + 1);
-                let (build_ok, build_out) =
-                    exec_run_command(&workspace, "cargo build --workspace", WORKSPACE)
-                        .unwrap_or_else(|e| (false, e.to_string()));
+                let reason = action.get("reason").and_then(|v| v.as_str()).unwrap_or("complete");
+                if !check_on_done {
+                    return Ok((true, reason.to_string()));
+                }
+                eprintln!("[{role}] step={} done — running cargo build --workspace", step + 1);
+                let (build_ok, build_out) = exec_run_command(workspace, "cargo build --workspace", WORKSPACE)
+                    .unwrap_or_else(|e| (false, e.to_string()));
                 if !build_ok {
-                    eprintln!("[canon-mini-agent] step={} cargo build failed — rejecting done", step + 1);
-                    Ok((false, format!(
-                        "done rejected: cargo build --workspace failed. Fix the build errors before declaring done.\n\n{}",
+                    eprintln!("[{role}] step={} cargo build failed — rejecting done", step + 1);
+                    return Ok((false, format!(
+                        "done rejected: cargo build --workspace failed.\n\n{}",
                         truncate(&build_out, MAX_SNIPPET)
-                    )))
+                    )));
+                }
+                eprintln!("[{role}] step={} cargo build ok — running cargo test --workspace", step + 1);
+                let (test_ok, test_out) = exec_run_command(workspace, "cargo test --workspace", WORKSPACE)
+                    .unwrap_or_else(|e| (false, e.to_string()));
+                if test_ok {
+                    eprintln!("[{role}] step={} cargo test ok — accepting done", step + 1);
+                    Ok((true, reason.to_string()))
                 } else {
-                    eprintln!("[canon-mini-agent] step={} cargo build ok — running cargo test --workspace", step + 1);
-                    // Step 2: cargo test --workspace
-                    let (test_ok, test_out) =
-                        exec_run_command(&workspace, "cargo test --workspace", WORKSPACE)
-                            .unwrap_or_else(|e| (false, e.to_string()));
-                    if test_ok {
-                        eprintln!("[canon-mini-agent] step={} cargo test ok — accepting done", step + 1);
-                        Ok((true, reason.to_string()))
-                    } else {
-                        eprintln!("[canon-mini-agent] step={} cargo test failed — rejecting done", step + 1);
-                        Ok((false, format!(
-                            "done rejected: cargo test --workspace failed. Fix the failures before declaring done.\n\n{}",
-                            truncate(&test_out, MAX_SNIPPET)
-                        )))
-                    }
+                    eprintln!("[{role}] step={} cargo test failed — rejecting done", step + 1);
+                    Ok((false, format!(
+                        "done rejected: cargo test --workspace failed.\n\n{}",
+                        truncate(&test_out, MAX_SNIPPET)
+                    )))
                 }
             }
             "list_dir" => {
-                let path = action
-                    .get("path")
-                    .and_then(|v| v.as_str())
+                let path = action.get("path").and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("list_dir missing 'path'"))?;
-                let out = exec_list_dir(&workspace, path)?;
+                let out = exec_list_dir(workspace, path)?;
                 Ok((false, format!("list_dir {path}:\n{out}")))
             }
             "read_file" => {
-                let path = action
-                    .get("path")
-                    .and_then(|v| v.as_str())
+                let path = action.get("path").and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("read_file missing 'path'"))?;
-                let line =
-                    action.get("line").and_then(|v| v.as_u64()).map(|n| n as usize);
-                let out = exec_read_file(&workspace, path, line)?;
-                eprintln!(
-                    "[canon-mini-agent] step={} read_file path={path} bytes={}",
-                    step + 1,
-                    out.len()
-                );
+                let line = action.get("line").and_then(|v| v.as_u64()).map(|n| n as usize);
+                let out = exec_read_file(workspace, path, line)?;
+                eprintln!("[{role}] step={} read_file path={path} bytes={}", step + 1, out.len());
                 Ok((false, format!("read_file {path}:\n{out}")))
             }
             "apply_patch" => {
-                let patch = action
-                    .get("patch")
-                    .and_then(|v| v.as_str())
+                let patch = action.get("patch").and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("apply_patch missing 'patch'"))?;
-                match apply_patch(patch, &workspace) {
+                match apply_patch(patch, workspace) {
                     Ok(_) => {
-                        eprintln!("[canon-mini-agent] step={} apply_patch ok", step + 1);
-                        // Infer the affected crate so we check only it, not the whole
-                        // workspace (which may have pre-existing errors in other crates).
+                        eprintln!("[{role}] step={} apply_patch ok", step + 1);
                         let check_result = patch_first_file(patch)
-                            .and_then(|f| infer_crate_for_patch(&workspace, f))
+                            .and_then(|f| infer_crate_for_patch(workspace, f))
                             .map(|krate| {
-                                eprintln!(
-                                    "[canon-mini-agent] step={} cargo check -p {krate}",
-                                    step + 1
-                                );
-                                exec_run_command(
-                                    &workspace,
-                                    &format!("cargo check -p {krate}"),
-                                    WORKSPACE,
-                                )
-                                .unwrap_or_else(|e| (false, e.to_string()))
+                                eprintln!("[{role}] step={} cargo check -p {krate}", step + 1);
+                                exec_run_command(workspace, &format!("cargo check -p {krate}"), WORKSPACE)
+                                    .unwrap_or_else(|e| (false, e.to_string()))
                             });
                         match check_result {
-                            Some((check_ok, check_out)) => {
-                                let label = if check_ok {
-                                    "cargo check ok"
-                                } else {
-                                    "cargo check failed"
-                                };
-                                eprintln!("[canon-mini-agent] step={} {label}", step + 1);
-                                Ok((false, format!(
-                                    "apply_patch ok\n\n{label}:\n{}",
-                                    truncate(&check_out, MAX_SNIPPET)
-                                )))
+                            Some((ok, out)) => {
+                                let label = if ok { "cargo check ok" } else { "cargo check failed" };
+                                eprintln!("[{role}] step={} {label}", step + 1);
+                                Ok((false, format!("apply_patch ok\n\n{label}:\n{}", truncate(&out, MAX_SNIPPET))))
                             }
                             None => Ok((false, "apply_patch ok".to_string())),
                         }
                     }
                     Err(e) => {
                         let err_str = e.to_string();
-                        eprintln!(
-                            "[canon-mini-agent] step={} apply_patch failed: {err_str}",
-                            step + 1
-                        );
-                        // Auto-read the affected file so the LLM can retry with
-                        // correct anchors. Two cases:
-                        //   1. Anchor-miss: path is in the error message.
-                        //   2. Malformed hunk / other: extract path from the patch text.
+                        eprintln!("[{role}] step={} apply_patch failed: {err_str}", step + 1);
                         let mut msg = format!("apply_patch failed: {err_str}");
                         let read_path = extract_anchor_fail_path(&err_str)
                             .or_else(|| patch_first_file(patch).map(|s| s.to_string()));
-                        if let Some(file_path) = read_path {
-                            if let Ok(content) =
-                                auto_read_for_patch_anchor(&workspace, &file_path, &err_str)
-                            {
-                                eprintln!(
-                                    "[canon-mini-agent] step={} auto_read path={file_path}",
-                                    step + 1
-                                );
+                        if let Some(fp) = read_path {
+                            if let Ok(content) = auto_read_for_patch_anchor(workspace, &fp, &err_str) {
+                                eprintln!("[{role}] step={} auto_read path={fp}", step + 1);
                                 msg = format!("apply_patch failed: {err_str}\n\n{content}");
                             }
                         }
@@ -697,48 +609,150 @@ async fn main() -> Result<()> {
                 }
             }
             "run_command" => {
-                let cmd = action
-                    .get("cmd")
-                    .and_then(|v| v.as_str())
+                let cmd = action.get("cmd").and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("run_command missing 'cmd'"))?;
-                let cwd =
-                    action.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORKSPACE);
-                eprintln!("[canon-mini-agent] step={} run_command cmd={cmd}", step + 1);
-                let (success, out) = exec_run_command(&workspace, cmd, cwd)?;
-                let label =
-                    if success { "run_command ok" } else { "run_command failed" };
-                eprintln!(
-                    "[canon-mini-agent] step={} {label} output_bytes={}",
-                    step + 1,
-                    out.len()
-                );
+                let cwd = action.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORKSPACE);
+                eprintln!("[{role}] step={} run_command cmd={cmd}", step + 1);
+                let (success, out) = exec_run_command(workspace, cmd, cwd)?;
+                let label = if success { "run_command ok" } else { "run_command failed" };
+                eprintln!("[{role}] step={} {label} output_bytes={}", step + 1, out.len());
                 Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
             }
-            other => Ok((
-                false,
-                format!(
-                    "unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, or done"
-                ),
-            )),
+            other => Ok((false, format!(
+                "unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, or done"
+            ))),
         })();
 
         match step_result {
             Ok((true, reason)) => {
-                eprintln!("[canon-mini-agent] complete: {reason}");
-                println!("done: {reason}");
-                return Ok(());
+                eprintln!("[{role}] done: {reason}");
+                return Ok(reason);
             }
-            Ok((false, out)) => {
-                last_result = Some(out);
-            }
+            Ok((false, out)) => { last_result = Some(out); }
             Err(e) => {
-                eprintln!("[canon-mini-agent] step={} error: {e}", step + 1);
+                eprintln!("[{role}] step={} error: {e}", step + 1);
                 last_result = Some(format!("Error executing action: {e}"));
             }
         }
-
         step += 1;
     }
 
-    bail!("mini-agent exhausted {MAX_STEPS} steps without completing the objective")
+}
+
+
+fn find_endpoint<'a>(config: &'a CapabilityConfig, role: &str) -> Result<&'a LlmEndpoint> {
+    config.llm_endpoints.iter()
+        .find(|e| e.role.as_deref() == Some(role))
+        .ok_or_else(|| anyhow!("no endpoint with role '{role}' in capability_config.toml"))
+}
+
+// ── Main ───────────────────────────────────────────────────────────────────────
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let orchestrate = args.iter().any(|a| a == "--orchestrate");
+    let is_verifier  = !orchestrate && args.iter().any(|a| a == "--verifier");
+    let is_planner   = !orchestrate && args.iter().any(|a| a == "--planner");
+    let ws_port: u16 = args.windows(2)
+        .find(|w| w[0] == "--port")
+        .and_then(|w| w[1].parse().ok())
+        .unwrap_or(WS_PORT_DEFAULT);
+
+    let workspace = PathBuf::from(WORKSPACE);
+    let plan_path = workspace.join(PLAN_FILE);
+
+    let config = CapabilityConfig::snapshot_store_load()
+        .context("failed to load capability_config.toml")?;
+
+    let ws_addr: std::net::SocketAddr = format!("127.0.0.1:{ws_port}").parse()?;
+    let bridge = ws_server::spawn(ws_addr, config.response_timeout_secs, Arc::new(OnceLock::new()));
+    eprintln!("[canon-mini-agent] waiting for Chrome extension on ws://127.0.0.1:{ws_port}");
+    bridge.wait_for_connection().await;
+    eprintln!("[canon-mini-agent] Chrome extension connected");
+
+    let tabs = llm_worker_new_tabs();
+
+    if orchestrate {
+        const MAX_CYCLES: usize = 10;
+        for cycle in 0..MAX_CYCLES {
+            eprintln!("[orchestrate] ── cycle {} ──────────────────────────────", cycle + 1);
+
+            // ── Executor ──
+            let plan = std::fs::read_to_string(&plan_path)
+                .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+            let ep_exec = find_endpoint(&config, "mini_agent")?.clone();
+            eprintln!("[orchestrate] starting executor");
+            let exec_prompt = format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin."
+            );
+            let _exec_result = run_agent("executor", SYSTEM_INSTRUCTIONS_EXECUTOR, exec_prompt, &ep_exec, &bridge, &workspace, &config, &tabs, false).await?;
+
+            // ── Verifier ──
+            let plan = std::fs::read_to_string(&plan_path)
+                .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+            let ep_ver = find_endpoint(&config, "verifier")?.clone();
+            eprintln!("[orchestrate] starting verifier");
+            let ver_prompt = format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan to verify (from {PLAN_FILE}):\n{plan}\n\nBegin by reading the plan and identifying all tasks marked `- [x]`. Verify each one. Emit exactly one action to begin."
+            );
+            let verify_result = run_agent("verifier", SYSTEM_INSTRUCTIONS_VERIFIER, ver_prompt, &ep_ver, &bridge, &workspace, &config, &tabs, false).await?;
+
+            let plan_after = std::fs::read_to_string(&plan_path)
+                .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+            // ── Convergence check (verifier-driven) ──
+            // NEVER trust plan state alone — verifier is source of truth
+            let verifier_failed = verify_result.contains("0 tasks verified")
+                || verify_result.contains("not verified")
+                || verify_result.contains("incorrect")
+                || verify_result.contains("remain");
+
+            if !verifier_failed {
+                eprintln!("[orchestrate] verifier confirms completion — done after {} cycle(s)", cycle + 1);
+                println!("orchestrate: converged after {} cycle(s)", cycle + 1);
+                return Ok(());
+            }
+
+            eprintln!("[orchestrate] verifier detected incomplete work — continuing");
+
+            // ── Planner ──
+            let ep_plan = find_endpoint(&config, "mini_planner")?.clone();
+            let plan_prompt = format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCurrent plan (from {PLAN_FILE}):\n{plan_after}\n\nExpand all pending tasks (`- [ ]`) into concrete, actionable steps. Emit exactly one action to begin."
+            );
+            let _plan_result = run_agent("planner", SYSTEM_INSTRUCTIONS_PLANNER, plan_prompt, &ep_plan, &bridge, &workspace, &config, &tabs, false).await?;
+        }
+        bail!("orchestrate: did not converge after {MAX_CYCLES} cycles");
+    } else {
+        // Single-role mode
+        let (role, instructions) = if is_verifier {
+            ("verifier", SYSTEM_INSTRUCTIONS_VERIFIER)
+        } else if is_planner {
+            ("mini_planner", SYSTEM_INSTRUCTIONS_PLANNER)
+        } else {
+            ("mini_agent", SYSTEM_INSTRUCTIONS_EXECUTOR)
+        };
+
+        let plan = std::fs::read_to_string(&plan_path)
+            .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+        if plan.trim().is_empty() {
+            bail!("plan file is empty — write an objective into {PLAN_FILE} before running");
+        }
+        eprintln!("[canon-mini-agent] role={role} plan loaded ({} bytes)", plan.len());
+
+        let endpoint = find_endpoint(&config, role)?.clone();
+        eprintln!("[canon-mini-agent] endpoint id={} url={}", endpoint.id, endpoint.url);
+
+        let initial_prompt = if is_verifier {
+            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan to verify (from {PLAN_FILE}):\n{plan}\n\nBegin by reading the plan and identifying all tasks marked `- [x]`. Verify each one. Emit exactly one action to begin.")
+        } else if is_planner {
+            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCurrent plan (from {PLAN_FILE}):\n{plan}\n\nExpand all pending tasks (`- [ ]`) into concrete, actionable steps. Emit exactly one action to begin.")
+        } else {
+            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.")
+        };
+
+        let reason = run_agent(role, instructions, initial_prompt, &endpoint, &bridge, &workspace, &config, &tabs, true).await?;
+        println!("done: {reason}");
+        Ok(())
+    }
 }
