@@ -1,4 +1,4 @@
-It gets stuck
+It gets stuck, fix it
 
 archlinux in canon on  main                                                                                                                                                                                                 2026-03-30 12:50:20
 ❯ cargo run --bin canon-runtime-supervisor
