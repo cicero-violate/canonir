@@ -50,10 +50,10 @@ Executor duplicates invariant logic:
 - `pending_required_successor`
 
 ## Actions
-- [ ] DELETE from executor:
+- [x] DELETE from executor: ✓ done
   - control state tracking
   - successor expectation tracking
-- [ ] REMOVE:
+- [x] REMOVE: ✓ done
   - `record_control_state`
   - `consume_control_successor`
 
@@ -73,12 +73,12 @@ Executors MUST NOT:
 Executors still interpret outcomes
 
 ## Actions
-- [ ] Scan executors:
+- [x] Scan executors: ✓ done
   - remove:
     - conditional routing logic
     - fallback decisions
     - implicit recovery paths
-- [ ] Replace ALL branches with:
+- [x] Replace ALL branches with: ✓ done
 ```rust
 let decision = evaluate_*();
 apply(decision);
@@ -100,11 +100,11 @@ Loop executor calls:
 
 ## Actions
 
-* [ ] REMOVE invariant calls from:
+* [x] REMOVE invariant calls from: ✓ done
 
   * loop executor
   * route executor
-* [ ] Move invariant evaluation to:
+* [x] Move invariant evaluation to: ✓ done
 
   * writer / append boundary ONLY
 
@@ -125,8 +125,8 @@ Two sources:
 
 ## Actions
 
-* [ ] Declare invariant layer as SINGLE authority
-* [ ] REMOVE all transition duplication from executors
+* [x] Declare invariant layer as SINGLE authority ✓ done
+* [x] REMOVE all transition duplication from executors ✓ done
 
 ## Result
 
@@ -140,13 +140,13 @@ transition_truth = invariants ONLY
 
 ## Actions
 
-* [ ] For each matrix row:
+* [x] For each matrix row: ✓ done
 
   * map → exact function:
 
     * evaluate_route_*
     * evaluate_loop_*
-* [ ] Build assertion:
+* [x] Build assertion: ✓ done
 
 ```text
 if matrix_row not reachable → delete
@@ -171,7 +171,7 @@ Reduce `on_event()` to dispatcher
 
 ## Actions
 
-* [ ] Structure:
+* [x] Structure: ✓ done
 
 ```rust
 match event {
@@ -180,7 +180,7 @@ match event {
 }
 ```
 
-* [ ] Each handler:
+* [x] Each handler: ✓ done
 
   * calls policy
   * emits result
@@ -205,12 +205,12 @@ Event → Policy → Decision → Executor → Event
 
 ## Actions
 
-* [ ] Verify:
+* [x] Verify: ✓ done
 
   * every control event has successor
   * no duplicate route_selected
   * no missing transitions
-* [ ] Add runtime assertion:
+* [x] Add runtime assertion: ✓ done
 
 ```text
 invalid_transition → hard fail
@@ -226,12 +226,12 @@ Executor stores implicit system state
 
 ## Actions
 
-* [ ] Audit executor fields:
+* [x] Audit executor fields: ✓ done
 
-  * pending_request_id
-  * awaiting_control_successor
-  * last_control_kind
-* [ ] Remove anything not required for:
+* [x] pending_request_id ✓ done
+* [x] awaiting_control_successor ✓ done
+* [x] last_control_kind ✓ done
+* [x] Remove anything not required for: ✓ done
 
   * emission
   * dispatch
@@ -317,4 +317,3 @@ max(intelligence, efficiency, correctness, alignment) = GOOD
 ```
 
 ```
-

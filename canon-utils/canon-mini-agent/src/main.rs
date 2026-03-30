@@ -55,6 +55,17 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
 5. done — declare the objective complete
    {"action":"done","reason":"brief description of what was accomplished"}
 
+━━━ PROGRESS TRACKING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After completing each task or sub-task from the plan, immediately update PLANS/mini-agent-plan.md
+to mark it as done. Use apply_patch to replace the task line with a checked version:
+
+  - [ ] task description   →   - [x] task description  ✓ done
+  - task description       →   - [x] task description  ✓ done
+
+Read the plan file first if you need to see its current state before patching.
+Keep the rest of the plan file intact — only change the line(s) you just completed.
+
 ━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 - Emit exactly one action per turn.
@@ -102,6 +113,146 @@ fn parse_json_array(text: &str) -> Result<Vec<Value>> {
         }
     }
     bail!("not a JSON array: {:?}", &text.chars().take(120).collect::<String>())
+}
+
+// ── Patch crate inference ──────────────────────────────────────────────────────
+
+/// Extract the first file path touched by the patch (*** Update File: / *** Add File:).
+fn patch_first_file(patch: &str) -> Option<&str> {
+    for line in patch.lines() {
+        if let Some(rest) = line.strip_prefix("*** Update File:").or_else(|| line.strip_prefix("*** Add File:")) {
+            let path = rest.trim();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Walk up from `file_path` (workspace-relative) to find the nearest Cargo.toml.
+/// Returns the package name from that manifest, or None if not found.
+fn infer_crate_for_patch(workspace: &Path, file_path: &str) -> Option<String> {
+    let mut dir = workspace.join(file_path);
+    dir.pop(); // start from parent of the file
+    loop {
+        let manifest = dir.join("Cargo.toml");
+        if manifest.exists() {
+            let text = std::fs::read_to_string(&manifest).ok()?;
+            for line in text.lines() {
+                if let Some(rest) = line.strip_prefix("name") {
+                    let name = rest.trim().trim_start_matches('=').trim().trim_matches('"');
+                    if !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        if dir == workspace {
+            break;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+// ── Patch-anchor auto-read (mirrors harness_repair logic) ─────────────────────
+
+const AUTO_READ_CONTEXT_BEFORE: usize = 20;
+const AUTO_READ_CONTEXT_AFTER: usize = 40;
+
+/// Extract the file path from an apply_patch anchor-miss error.
+/// Matches: "Failed to find expected lines in PATH:\n..."
+fn extract_anchor_fail_path(err_msg: &str) -> Option<String> {
+    let prefix = "Failed to find expected lines in ";
+    for line in err_msg.lines() {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            let path = rest.trim_end_matches(':').trim();
+            if !path.is_empty() {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Parse the indented anchor lines out of the patch error message.
+fn extract_expected_anchor_lines(err_msg: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut capture = false;
+    for line in err_msg.lines() {
+        if line.starts_with("Failed to find expected lines in ") {
+            capture = true;
+            continue;
+        }
+        if !capture {
+            continue;
+        }
+        if line.trim().is_empty() {
+            if !lines.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if line.starts_with("    ") || line.starts_with('\t') {
+            lines.push(line.trim().to_string());
+            continue;
+        }
+        if !lines.is_empty() {
+            break;
+        }
+    }
+    lines
+}
+
+/// Find the file region closest to the failed anchor and return a numbered excerpt.
+fn extract_anchor_context_excerpt(full: &str, err_msg: &str) -> Option<(usize, usize, String)> {
+    let anchor_lines = extract_expected_anchor_lines(err_msg);
+    if anchor_lines.is_empty() {
+        return None;
+    }
+    let file_lines: Vec<&str> = full.lines().collect();
+    let mut best_idx: Option<usize> = None;
+    for anchor in anchor_lines.iter().rev() {
+        let needle = anchor.trim();
+        if needle.len() < 8 {
+            continue;
+        }
+        if let Some(idx) = file_lines.iter().position(|l| l.contains(needle)) {
+            best_idx = Some(idx);
+            break;
+        }
+    }
+    let idx = best_idx?;
+    let start_idx = idx.saturating_sub(AUTO_READ_CONTEXT_BEFORE);
+    let end_idx = (idx + AUTO_READ_CONTEXT_AFTER + 1).min(file_lines.len());
+    let start_line = start_idx + 1;
+    let excerpt = file_lines[start_idx..end_idx]
+        .iter()
+        .enumerate()
+        .map(|(i, l)| format!("{}: {}", start_line + i, l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some((start_line, end_idx, excerpt))
+}
+
+/// Auto-read the region near the failed anchor, falling back to the full file.
+fn auto_read_for_patch_anchor(workspace: &Path, relative: &str, err_msg: &str) -> Result<String> {
+    let path = safe_join(workspace, relative)?;
+    let full = std::fs::read_to_string(&path)
+        .with_context(|| format!("auto-read failed: {}", path.display()))?;
+    if let Some((start, end, excerpt)) = extract_anchor_context_excerpt(&full, err_msg) {
+        return Ok(format!(
+            "Current content near likely match of failed anchor in {relative} (lines {start}-{end}):\n{excerpt}"
+        ));
+    }
+    // Fallback: whole file (capped).
+    let text =
+        String::from_utf8_lossy(&std::fs::read(&path)?[..full.len().min(MAX_READ_BYTES)])
+            .into_owned();
+    Ok(format!("Current content of {relative}:\n{text}"))
 }
 
 // ── Action executors ───────────────────────────────────────────────────────────
@@ -338,7 +489,21 @@ async fn main() -> Result<()> {
                     .get("reason")
                     .and_then(|v| v.as_str())
                     .unwrap_or("objective complete");
-                Ok((true, reason.to_string()))
+                // Verify the workspace before accepting done.
+                eprintln!("[canon-mini-agent] step={} done requested — running cargo test --workspace", step + 1);
+                let (test_ok, test_out) =
+                    exec_run_command(&workspace, "cargo test --workspace", WORKSPACE)
+                        .unwrap_or_else(|e| (false, e.to_string()));
+                if test_ok {
+                    eprintln!("[canon-mini-agent] step={} cargo test ok — accepting done", step + 1);
+                    Ok((true, reason.to_string()))
+                } else {
+                    eprintln!("[canon-mini-agent] step={} cargo test failed — rejecting done", step + 1);
+                    Ok((false, format!(
+                        "done rejected: cargo test --workspace failed. Fix the failures before declaring done.\n\n{}",
+                        truncate(&test_out, MAX_SNIPPET)
+                    )))
+                }
             }
             "list_dir" => {
                 let path = action
@@ -368,10 +533,64 @@ async fn main() -> Result<()> {
                     .get("patch")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("apply_patch missing 'patch'"))?;
-                apply_patch(patch, &workspace)
-                    .map_err(|e| anyhow!("apply_patch failed: {e}"))?;
-                eprintln!("[canon-mini-agent] step={} apply_patch ok", step + 1);
-                Ok((false, "apply_patch ok".to_string()))
+                match apply_patch(patch, &workspace) {
+                    Ok(_) => {
+                        eprintln!("[canon-mini-agent] step={} apply_patch ok", step + 1);
+                        // Infer the affected crate so we check only it, not the whole
+                        // workspace (which may have pre-existing errors in other crates).
+                        let check_result = patch_first_file(patch)
+                            .and_then(|f| infer_crate_for_patch(&workspace, f))
+                            .map(|krate| {
+                                eprintln!(
+                                    "[canon-mini-agent] step={} cargo check -p {krate}",
+                                    step + 1
+                                );
+                                exec_run_command(
+                                    &workspace,
+                                    &format!("cargo check -p {krate}"),
+                                    WORKSPACE,
+                                )
+                                .unwrap_or_else(|e| (false, e.to_string()))
+                            });
+                        match check_result {
+                            Some((check_ok, check_out)) => {
+                                let label = if check_ok {
+                                    "cargo check ok"
+                                } else {
+                                    "cargo check failed"
+                                };
+                                eprintln!("[canon-mini-agent] step={} {label}", step + 1);
+                                Ok((false, format!(
+                                    "apply_patch ok\n\n{label}:\n{}",
+                                    truncate(&check_out, MAX_SNIPPET)
+                                )))
+                            }
+                            None => Ok((false, "apply_patch ok".to_string())),
+                        }
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        eprintln!(
+                            "[canon-mini-agent] step={} apply_patch failed: {err_str}",
+                            step + 1
+                        );
+                        // Auto-read the file near the failed anchor so the LLM
+                        // can retry with correct context (mirrors harness_repair).
+                        let mut msg = format!("apply_patch failed: {err_str}");
+                        if let Some(anchor_path) = extract_anchor_fail_path(&err_str) {
+                            if let Ok(content) =
+                                auto_read_for_patch_anchor(&workspace, &anchor_path, &err_str)
+                            {
+                                eprintln!(
+                                    "[canon-mini-agent] step={} auto_read anchor_path={anchor_path}",
+                                    step + 1
+                                );
+                                msg = format!("apply_patch failed: {err_str}\n\n{content}");
+                            }
+                        }
+                        Ok((false, msg))
+                    }
+                }
             }
             "run_command" => {
                 let cmd = action

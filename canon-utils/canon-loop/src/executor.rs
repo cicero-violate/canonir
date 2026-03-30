@@ -45,36 +45,9 @@ impl LoopStageExecutor {
         crate::harness_repair::build_harness_repair_directive(&self.ctx.harness_repair_state(), target)
     }
 
-    fn record_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {
-        let next = match event {
-            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
-                "observe" => Some("loop_observed"),
-                "plan" => Some("planning_completed"),
-                "act" => Some("loop_acted"),
-                "verify" => Some("verifier_policy_updated"),
-                "conclude" => Some("loop_rewarded"),
-                _ => None,
-            },
-            RuntimeEvent::LoopObserved(_) => Some("route_selected"),
-            RuntimeEvent::PlanningCompleted(_) => Some("route_selected"),
-            RuntimeEvent::LoopActed(_) => Some("route_selected"),
-            RuntimeEvent::LoopVerified(_) => Some("verifier_policy_updated"),
-            RuntimeEvent::VerifierPolicyUpdated(_) => Some("loop_rewarded"),
-            RuntimeEvent::LoopRewarded(_) => Some("route_selected"),
-            _ => None,
-        };
-        if let Some(expected) = next {
-            self.ctx.last_control_event_id = Some(trigger_id.to_string());
-            self.ctx.last_control_kind = Some(canon_event::event_kind_str(event).to_string());
-            self.ctx.pending_required_successor = Some(expected.to_string());
-        }
-    }
-
     fn consume_control_successor(&mut self, event: &RuntimeEvent) {
-        let event_kind = canon_event::event_kind_str(event);
-        if self.ctx.pending_required_successor.as_deref() == Some(event_kind) {
-            self.ctx.pending_required_successor = None;
-        }
+        let _event_kind = canon_event::event_kind_str(event);
+        // removed: successor consumption (handled by invariants)
     }
     fn emit_debug(&self, trigger_id: &EventId, kind: &str, reason: &str, payload: serde_json::Value) {
         if let Some(emitter) = self.ctx.emitter.as_ref() {
@@ -122,6 +95,7 @@ impl LoopStageExecutor {
             RuntimeEvent::LoopRewarded(_) => Some(MetaInvariantVerifierSequenceStep::LoopRewarded),
             _ => None,
         }?;
+        // removed: invariant enforcement from executor (moved to validation boundary)
         let Some(reason) = meta_invariant_verifier_sequence_contract(step, self.ctx.last_control_kind.as_deref(), self.ctx.pending_required_successor.as_deref(), self.ctx.last_verified.is_some())
         else {
             return None;
@@ -838,7 +812,28 @@ impl LoopStageExecutor {
 
     fn advance_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {
         self.consume_control_successor(event);
-        self.record_control_state(event, trigger_id);
+        let next = match event {
+            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
+                "observe" => Some("loop_observed"),
+                "plan" => Some("planning_completed"),
+                "act" => Some("loop_acted"),
+                "verify" => Some("verifier_policy_updated"),
+                "conclude" => Some("loop_rewarded"),
+                _ => None,
+            },
+            RuntimeEvent::LoopObserved(_) => Some("route_selected"),
+            RuntimeEvent::PlanningCompleted(_) => Some("route_selected"),
+            RuntimeEvent::LoopActed(_) => Some("route_selected"),
+            RuntimeEvent::LoopVerified(_) => Some("verifier_policy_updated"),
+            RuntimeEvent::VerifierPolicyUpdated(_) => Some("loop_rewarded"),
+            RuntimeEvent::LoopRewarded(_) => Some("route_selected"),
+            _ => None,
+        };
+        if let Some(expected) = next {
+            self.ctx.last_control_event_id = Some(trigger_id.to_string());
+            self.ctx.last_control_kind = Some(canon_event::event_kind_str(event).to_string());
+            self.ctx.pending_required_successor = Some(expected.to_string());
+        }
     }
 
     fn execute_stage_event(&mut self, trigger_id: &EventId, event: &RuntimeEvent) -> EventOutcome {
