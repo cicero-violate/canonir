@@ -1,5 +1,5 @@
-````markdown
-# PLAN: Final Convergence → Remove Residual State → Enforce Single Authority
+```markdown id="final-imperative-plan"
+# PLAN: Hard Delete Residual State → Enforce Single Authority → Achieve Closure
 
 ---
 
@@ -14,293 +14,320 @@
 ---
 
 ## Equations
-1. Decision:
-   D = P_r ∪ P_l  
-
-2. Target Purity:
-   E ∩ D = ∅  
-   I ∩ D = ∅  
-
-3. Transition:
-   ∀ t ∈ T: next(t) = I.required_successor(t)
-
-4. Goal:
-   minimize(branching) ∧ eliminate(duplication)
-
----
-
-## Current Truth
-
-### Phase Status
-- Phase 6: PARTIAL (control fields still exist)
-- Phase 7: PARTIAL (executor still shapes inputs)
-- Phase 8: COMPLETE (invariant leakage mostly removed)
-- Phase 9: NOT COMPLETE (duplicate transition authority remains)
-- Phase 10+: NOT VERIFIED
+\[
+D = P_r \cup P_l
+\]
+\[
+E \cap D = \varnothing
+\]
+\[
+I \cap D = \varnothing
+\]
+\[
+\forall t \in T:\; next(t) = I.required\_successor(t)
+\]
 
 ---
 
-## Active Violations
+# OBJECTIVE (NON-NEGOTIABLE)
 
-1. Executor still stores control state:
-   - `pending_required_successor`
-   - `last_control_kind`
-   - `last_control_event_id`
+DELETE the concept:
+```
 
-2. Executor still influences policy input
+awaiting_control_successor
 
-3. Transition authority split:
-   - executor (state)
-   - invariant layer (truth)
-
-4. Hidden state still exists in executor
-
----
-
-# Phase 6 — Remove Residual Control State (CRITICAL)
-
-## Imperative Actions
-- DELETE from RouteExecutor:
-```rust
-pending_required_successor
-last_control_kind
-last_control_event_id
 ````
 
-* REMOVE any logic that:
+FROM:
+- policy
+- matrix
+- executor
 
-  * tracks control lifecycle
-  * caches expected successors
-
-## Enforcement
-
-Executors must not represent control graph
+Achieve:
+\[
+\text{single transition authority} = I
+\]
 
 ---
 
-# Phase 7 — Eliminate Executor Influence on Policy
+# PHASE 1 — FULL SYSTEM PURGE (MANDATORY)
 
-## Imperative Actions
-
-* SEARCH:
+## Step 1 — Locate Everything
 
 ```bash
-rg "RoutePolicyState|RouteDispatchState"
-```
+rg "awaiting_control_successor|SuppressAwaitingControlSuccessor"
+````
 
-* REMOVE:
+---
 
-  * manual overrides (e.g., forcing `None`)
-  * derived control inputs
+## Step 2 — Delete from Policy
 
-* PASS ONLY:
+File: route policy
+
+### DELETE:
 
 ```rust
-policy(real_state_from_context)
+SuppressAwaitingControlSuccessor
 ```
 
-## Enforcement
+### DELETE:
 
+* any match arms using it
+* any condition checking `awaiting_control_successor`
+
+Constraint:
 [
-policy = f(context),; not; f(executor_override)
+policy \not\ni successor_state
 ]
 
 ---
 
-# Phase 8 — Lock Invariant Isolation (VERIFY)
+## Step 3 — Delete from Matrix
 
-## Imperative Actions
+File: policy-matrix
 
-* SEARCH:
+### DELETE:
 
-```bash
-rg "meta_invariant_|evaluate_constraint_context"
+```text
+DispatchSuppressAwaitingSuccessor
 ```
 
-* VERIFY:
+### DELETE:
 
-  * zero matches in executors
+* corresponding TransitionRow
+* any scenario family referencing it
 
-* CONFIRM invariants only exist in:
-
-  * append / validation layer
+Constraint:
+[
+M = runtime_only
+]
 
 ---
 
-# Phase 9 — Collapse Transition Authority
+## Step 4 — Delete from Executor
 
-## Imperative Actions
+File: route executor
 
-* SEARCH:
+### DELETE FIELD:
 
-```bash
-rg "pending_required_successor|awaiting_control_successor"
+```rust
+awaiting_control_successor: Option<String>
 ```
 
-* DELETE all transition tracking in executors
+### DELETE:
 
-* ENSURE ONLY:
+* all reads
+* all writes
+* all propagation into RouteDispatchState
+
+### REPLACE:
+
+```rust
+RouteDispatchState {
+    awaiting_control_successor: None
+}
+```
+
+WITH:
+
+```rust
+RouteDispatchState {
+    awaiting_control_successor: None // REMOVE FIELD ENTIRELY if possible
+}
+```
+
+Constraint:
+[
+E \not\ni control_state
+]
+
+---
+
+# PHASE 2 — REMOVE STRUCTURAL LEAKS
+
+## Step 5 — Clean Structs
+
+File: policy.rs
+
+### REMOVE FIELD:
+
+```rust
+pub awaiting_control_successor: Option<&str>
+```
+
+From:
+
+* RouteDispatchState
+* RouteEmitState
+* any other struct
+
+---
+
+## Step 6 — Remove Successor Consumption Layer
+
+```bash
+rg "SuccessorConsumption|evaluate_successor_consumption"
+```
+
+### DELETE:
+
+* SuccessorConsumptionRule (if now unused)
+* evaluate_successor_consumption (if redundant)
+
+Constraint:
+[
+transition \text{ handled only by invariants}
+]
+
+---
+
+# PHASE 3 — REPAIR POLICY CONSISTENCY
+
+## Step 7 — Ensure No Hidden Dependencies
+
+```bash
+rg "successor|awaiting"
+```
+
+### VERIFY:
+
+* no policy rule depends on successor state
+* no dispatch suppression depends on successor
+
+---
+
+## Step 8 — Re-run Tests
+
+```bash
+cargo test -p canon-policy-matrix
+```
+
+### EXPECT:
+
+[
+R_m = R_p
+]
+
+---
+
+# PHASE 4 — VERIFY ARCHITECTURAL PURITY
+
+## Step 9 — Enforce Invariant Authority
+
+File: invariants
+
+Ensure ONLY:
 
 ```rust
 required_successor_kind(...)
 ```
 
-exists in invariant layer
+controls transitions 
 
-## Enforcement
+---
+
+## Step 10 — Validate Executor Purity
+
+```bash
+rg "required_successor|successor" canon-runtime
+```
+
+### EXPECT:
+
+* ZERO matches in executors
+
+---
+
+# PHASE 5 — FINAL VALIDATION
+
+## Step 11 — System Properties
+
+Check:
+
+### 1.
 
 [
-transition_authority = I ;; only
+E \cap D = \varnothing
+]
+
+### 2.
+
+[
+I = \text{only transition authority}
+]
+
+### 3.
+
+[
+M = runtime
+]
+
+### 4.
+
+[
+\text{no hidden state}
 ]
 
 ---
 
-# Phase 10 — Remove Hidden State
-
-## Imperative Actions
-
-* SEARCH:
-
-```bash
-rg "Option<" executor.rs
-```
-
-* FOR EACH field:
-
-  * if not required for emission → DELETE
-
-## Target
-
-Executor state ≈ minimal:
-
-* emitter
-* context
-* request tracking only
-
----
-
-# Phase 11 — Collapse Executor Structure
-
-## Imperative Actions
-
-Rewrite:
-
-```rust
-match event {
-    A => handle_A(),
-    B => handle_B(),
-}
-```
-
-Each handler:
-
-* calls policy
-* emits result
-* no nested branching
-
-## Constraint
-
-No decision trees inside executor
-
----
-
-# Phase 12 — Matrix ↔ Runtime Proof
-
-## Imperative Actions
-
-* EXTRACT runtime rules:
-
-```bash
-rg "RoutePolicyRule|LoopRecoveryRule"
-```
-
-* EXTRACT matrix rules:
-
-```bash
-rg "TransitionRow"
-```
-
-* DIFF:
-
-```bash
-diff runtime_rules.txt matrix_rules.txt
-```
-
-## Enforcement
-
-* missing → add
-* unused → delete
-
----
-
-# Phase 13 — Deterministic Closure
-
-## Imperative Actions
-
-* ADD assertion:
-
-```rust
-assert!(next == required_successor(prev));
-```
-
-* VERIFY:
-
-  * no duplicate route_selected
-  * no missing transitions
-
-## Enforcement
-
-fail-fast on invalid state
-
----
-
-# Definition of Done
+# DEFINITION OF DONE
 
 ## Structural
 
-* on_event ≤ 30 lines
-* no control-state fields
-* no invariant calls in executors
+* no `awaiting_control_successor`
+* no successor tracking in executors
+* no successor logic in policy
 
 ## Logical
 
-* D = P_r ∪ P_l
-* E ∩ D = ∅
-* I ∩ D = ∅
+* decisions ONLY from policy
+* transitions ONLY from invariants
 
 ## Behavioral
 
-* transitions enforced ONLY by invariants
-* zero duplicate logic
-* zero implicit routing
-
-## Consistency
-
-* matrix == runtime == emitted behavior
+* all tests pass
+* no rule mismatch
+* no duplicate authority
 
 ---
 
-# Final System
+# FINAL SYSTEM
 
-## System
+## Execution Loop
 
-```
+```text
 Event → Policy → Decision → Executor → Event
 ```
 
-## Constraint
+## Authority
 
-```
-Executor = Pure Apply Layer
-Invariant = Pure Validation Layer
-Policy = Single Decision Authority
+```text
+Policy → decisions
+Invariants → transitions
+Executor → execution ONLY
 ```
 
-## Result
+---
 
-```
-max(intelligence, efficiency, correctness, alignment) = GOOD
-```
+# RESULT
+
+[
+\text{duplication} = 0
+]
+[
+\text{branching} \downarrow
+]
+[
+\text{determinism} \uparrow
+]
+
+---
+
+## FINAL
+
+[
+\max(intelligence, efficiency, correctness, alignment) = GOOD
+]
 
 ```
 ```
