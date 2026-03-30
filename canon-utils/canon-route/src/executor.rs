@@ -166,6 +166,16 @@ impl RouteExecutor {
             "confidence": fallback.confidence,
         })
         .to_string();
+        // Prevent illegal transition: route_selected -> route_selected
+        if let Some(last) = &self.last_route_selected {
+            if last.approved_route == fallback.route.as_str() {
+                // force observe to break loop
+                let mut forced = fallback.clone();
+                forced.route = RouteKind::Observe;
+                self.emit_deterministic_decision(&forced, &json);
+                return;
+            }
+        }
         self.emit_deterministic_decision(&fallback, &json);
     }
 
@@ -686,6 +696,12 @@ impl RouteExecutor {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
+        // Prevent illegal transition: route_selected -> route_selected (duplicate)
+        if let Some(last) = &self.last_route_selected {
+            if last.approved_route == decision.lane.as_str() {
+                return;
+            }
+        }
         let route_event = RuntimeEvent::RouteSelected(RouteSelected {
             tick: self.ctx.scheduler_tick,
             approved_route: decision.lane.as_str().to_string(),
