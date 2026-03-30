@@ -1,4 +1,5 @@
-# PLAN: Eliminate Duplication → Enforce Single Authority → Close Loop
+````markdown
+# PLAN: Single Authority → Zero Duplication → Deterministic Closure (CORRECT STATE)
 
 ---
 
@@ -7,17 +8,16 @@
 - P_l = loop policy  
 - E = executors  
 - I = invariants  
-- T = transitions  
 - M = matrix  
+- T = transitions  
 
 ---
 
 ## Equations
 1. Decision:
    D = P_r ∪ P_l  
-   → all decisions originate in policy
 
-2. Purity:
+2. Purity (TARGET, NOT TRUE YET):
    E ∩ D = ∅  
    I ∩ D = ∅  
 
@@ -25,153 +25,173 @@
    ∀ t ∈ T: next(t) = I.required_successor(t)
 
 4. Consistency:
-   M ↔ (P_r, P_l)
+   M ↔ runtime  (NOT PROVEN)
 
 ---
 
-## Objective
-Remove:
-- duplicated transition logic
-- executor-side decision making
-- invariant leakage into execution
+## Current Truth (REAL STATE)
 
-Achieve:
-- single source of truth
-- deterministic closure
-- zero ambiguity in control flow
+### Phase Status
+- Phase 6: **PARTIAL**
+- Phase 7: **PARTIAL**
+- Phase 8: **NOT COMPLETE**
+- Phase 9: **UNVERIFIED**
+- Phase 10+: **NOT STARTED**
 
----
+### Active Violations
+1. Executor still holds control state:
+   - `pending_required_successor`
+   - `last_control_kind`
 
-# Phase 6 — Remove Executor Transition Authority
+2. Executor still interprets transitions
 
-## Problem
-Executor duplicates invariant logic:
-- `record_control_state`
-- `pending_required_successor`
+3. Invariants still invoked inside executors
 
-## Actions
-- [x] DELETE from executor: ✓ done
-  - control state tracking
-  - successor expectation tracking
-- [x] REMOVE: ✓ done
-  - `record_control_state`
-  - `consume_control_successor`
-
-## Replace with
-- invariant-driven validation ONLY
-
-## Constraint
-Executors MUST NOT:
-- know next state
-- track control graph
+4. Duplicate transition authority:
+   - executor + invariant layer
 
 ---
 
-# Phase 7 — Enforce Policy-Only Decisions
+# Phase 6 — Remove Executor Control State (MANDATORY)
 
-## Problem
-Executors still interpret outcomes
-
-## Actions
-- [x] Scan executors: ✓ done
-  - remove:
-    - conditional routing logic
-    - fallback decisions
-    - implicit recovery paths
-- [x] Replace ALL branches with: ✓ done
+## Imperative Actions
+- DELETE fields from RouteExecutor:
 ```rust
-let decision = evaluate_*();
-apply(decision);
+pending_required_successor
+last_control_kind
+last_control_event_id
 ````
 
-## Rule
+* DELETE any logic that:
 
-Executors = APPLY ONLY
+  * computes next expected event
+  * stores successor expectations
+
+## Enforcement Rule
+
+Executors MUST NOT:
+
+* know what comes next
+* track control flow
 
 ---
 
-# Phase 8 — Remove Invariant Leakage
+# Phase 7 — Remove Transition Interpretation
 
-## Problem
+## Imperative Actions
 
-Loop executor calls:
+* SEARCH:
 
-* `meta_invariant_*`
+```bash
+rg "match.*RouteSelected|LoopObserved|LoopActed"
+```
 
-## Actions
+* REMOVE:
 
-* [x] REMOVE invariant calls from: ✓ done
+  * any branching that interprets lifecycle stages
+
+* REPLACE WITH:
+
+```rust
+let eval = evaluate_*();
+apply(eval);
+```
+
+## Enforcement Rule
+
+Executors = **stateless interpreters of decisions**
+
+---
+
+# Phase 8 — Remove ALL Invariant Calls from Executors
+
+## Imperative Actions
+
+* SEARCH:
+
+```bash
+rg "meta_invariant_|evaluate_constraint_context"
+```
+
+* DELETE all matches inside:
 
   * loop executor
   * route executor
-* [x] Move invariant evaluation to: ✓ done
 
-  * writer / append boundary ONLY
+* KEEP invariants ONLY in:
 
-## Constraint
+  * writer / append boundary
 
-I = pure validation layer
+## Enforcement Rule
+
+[
+I = \text{validation only}
+]
 
 ---
 
-# Phase 9 — Collapse Transition Authority
+# Phase 9 — Collapse to Single Transition Authority
 
-## Problem
+## Imperative Actions
 
-Two sources:
+* SEARCH:
 
-* executor state tracking
-* invariant system
+```bash
+rg "required_successor|pending_required_successor"
+```
 
-## Actions
+* ENSURE:
 
-* [x] Declare invariant layer as SINGLE authority ✓ done
-* [x] REMOVE all transition duplication from executors ✓ done
+  * ONLY invariant layer defines transitions
+
+* DELETE:
+
+  * any duplicate transition enforcement
 
 ## Result
 
-```
-transition_truth = invariants ONLY
-```
+[
+transition = I ; \text{ONLY}
+]
 
 ---
 
-# Phase 10 — Prove Matrix ↔ Runtime Mapping
+# Phase 10 — Prove Matrix ↔ Runtime
 
-## Actions
+## Imperative Actions
 
-* [x] For each matrix row: ✓ done
+* FOR EACH:
 
-  * map → exact function:
-
-    * evaluate_route_*
-    * evaluate_loop_*
-* [x] Build assertion: ✓ done
-
-```text
-if matrix_row not reachable → delete
-if runtime rule not in matrix → add
+```rust
+RoutePolicyRule
+LoopRecoveryRule
 ```
 
-## Goal
+* VERIFY:
 
-Bijective mapping:
+  * exists in matrix
+  * exists in runtime execution
 
+* ADD CHECK SCRIPT:
+
+```bash
+rg "RoutePolicyRule|LoopRecoveryRule" > runtime_rules.txt
+rg "TransitionRow" > matrix_rules.txt
+diff runtime_rules.txt matrix_rules.txt
 ```
-M ↔ runtime
-```
+
+## Enforcement
+
+* missing → add
+* unused → delete
 
 ---
 
-# Phase 11 — Executor Collapse
+# Phase 11 — Collapse Executors to Dispatchers
 
-## Target
+## Imperative Actions
 
-Reduce `on_event()` to dispatcher
-
-## Actions
-
-* [x] Structure: ✓ done
+* REWRITE `on_event()`:
 
 ```rust
 match event {
@@ -180,93 +200,68 @@ match event {
 }
 ```
 
-* [x] Each handler: ✓ done
+* EACH handler MUST:
 
-  * calls policy
-  * emits result
-  * updates state ONLY
+  * call policy
+  * emit event
+  * update minimal state
 
 ## Constraint
 
-NO branching inside handlers beyond:
-
-* match
-* direct apply
+NO nested decision trees
 
 ---
 
-# Phase 12 — Close Deterministic Loop
+# Phase 12 — Remove Hidden State
 
-## Required System
+## Imperative Actions
 
-```
-Event → Policy → Decision → Executor → Event
-```
+* AUDIT fields:
 
-## Actions
-
-* [x] Verify: ✓ done
-
-  * every control event has successor
-  * no duplicate route_selected
-  * no missing transitions
-* [x] Add runtime assertion: ✓ done
-
-```text
-invalid_transition → hard fail
+```bash
+rg "Option<.*>" executor.rs
 ```
 
----
-
-# Phase 13 — Remove Hidden State Coupling
-
-## Problem
-
-Executor stores implicit system state
-
-## Actions
-
-* [x] Audit executor fields: ✓ done
-
-* [x] pending_request_id ✓ done
-* [x] awaiting_control_successor ✓ done
-* [x] last_control_kind ✓ done
-* [x] Remove anything not required for: ✓ done
+* REMOVE any field not required for:
 
   * emission
   * dispatch
 
 ## Rule
 
-State = event log, not executor memory
+[
+\text{state} = \text{event log ONLY}
+]
 
 ---
 
-# Phase 14 — Final Structural Split
+# Phase 13 — Deterministic Closure
 
-## Split by function ONLY
+## Imperative Actions
 
-### Route Executor
+* ADD runtime assertion:
 
-* dispatch
-* emit
-* cache
+```rust
+assert!(next_event == required_successor(prev_event));
+```
 
-### Loop Executor
+* VERIFY:
 
-* event handling
-* stage execution
+  * no duplicate route_selected
+  * no missing successors
 
-## Do NOT split by size
+## Constraint
+
+FAIL FAST on invalid transition
 
 ---
 
-# Definition of Done
+# Definition of Done (STRICT)
 
 ## Structural
 
-* on_event ≤ 20–30 lines
-* no duplicated transition logic
+* on_event ≤ 30 lines
+* no control-state fields
 * no invariant calls in executors
 
 ## Logical
@@ -277,31 +272,30 @@ State = event log, not executor memory
 
 ## Behavioral
 
-* all transitions enforced by invariants
-* zero illegal control paths
-* zero silent suppression
+* transitions enforced ONLY by invariants
+* zero duplicate transition logic
+* zero implicit routing
 
 ## Consistency
 
-* M == runtime == emitted behavior
+* matrix == runtime == emitted behavior
 
 ---
 
-# Final State
+# Final System (TARGET)
 
 ## System
 
 ```
-Decision = P_r ∪ P_l
-Execution = E
-Validation = I
+Event → Policy → Decision → Executor → Event
 ```
 
 ## Constraint
 
 ```
-E ∩ Decision = ∅
-I ∩ Decision = ∅
+Executor = Pure Apply Layer
+Invariant = Pure Validation Layer
+Policy = Single Decision Authority
 ```
 
 ## Objective
@@ -316,4 +310,5 @@ min(branching) ∧ max(determinism)
 max(intelligence, efficiency, correctness, alignment) = GOOD
 ```
 
+```
 ```
