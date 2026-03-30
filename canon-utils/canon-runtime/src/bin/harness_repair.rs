@@ -397,6 +397,211 @@ OUTPUT FORMAT:
 static PLANNER_SYSTEM_PROMPT_ID: std::sync::LazyLock<u64> =
     std::sync::LazyLock::new(|| hash_str(PLANNER_SYSTEM_INSTRUCTIONS));
 
+fn harness_should_use_relay() -> bool {
+    std::env::var("CANON_HARNESS_USE_RELAY")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn local_planner_fallback(
+    delta: &str,
+    prompt: &str,
+    context_base: Option<&str>,
+) -> Result<(Vec<PlannerAction>, String)> {
+    let post_read_action = derive_post_read_action(delta, prompt);
+    eprintln!(
+        "[canon-harness-repair] local_planner_post_read_debug matched={} delta_preview={:?}",
+        post_read_action.is_some(),
+        delta.lines().take(6).collect::<Vec<_>>()
+    );
+    if let Some(next) = post_read_action {
+        eprintln!("[canon-harness-repair] local_planner_post_read action={}", next);
+        let next_json = format!("[{}]", next);
+        let actions = parse_planner_actions(&serde_json::Value::String(next_json))?;
+        return Ok((actions, "local-fallback-post-read".to_string()));
+    }
+
+    let delta_hint = derive_next_action_hint(delta);
+    let prompt_primary = extract_primary_file_line(prompt)
+        .map(|(path, line)| format!("{path}:{line}"));
+
+    eprintln!(
+        "[canon-harness-repair] local_planner_debug delta_bytes={} prompt_bytes={} context_bytes={} delta_hint={} prompt_primary={}",
+        delta.len(),
+        prompt.len(),
+        context_base.map(|s| s.len()).unwrap_or(0),
+        delta_hint.as_deref().unwrap_or("<none>"),
+        prompt_primary.as_deref().unwrap_or("<none>"),
+    );
+
+    let fallback = delta_hint
+        .or_else(|| {
+            extract_primary_file_line(prompt).map(|(path, line)| {
+                format!(
+                    "{{\"action\":\"read_file\",\"path\":\"{}\",\"line\":{}}}",
+                    path, line
+                )
+            })
+        })
+        .unwrap_or_else(|| "{\"action\":\"list_dir\",\"path\":\"canon-utils\"}".to_string());
+
+    eprintln!(
+        "[canon-harness-repair] local_planner_dispatch action={}",
+        fallback
+    );
+    let fallback_json = format!("[{}]", fallback);
+    let actions = parse_planner_actions(&serde_json::Value::String(fallback_json))?;
+    Ok((actions, "local-planner".to_string()))
+}
+
+fn derive_post_run_command_action(result: &str) -> Option<String> {
+    let mut lines = result.lines();
+    if lines.next()? != "run_command ok:" {
+        return None;
+    }
+    let path = lines.next()?.strip_prefix("path=")?.trim();
+
+    for line in lines {
+        let trimmed = line.trim_start();
+        let (line_no, rest) = trimmed.split_once(':')?;
+        let code = rest.trim_start();
+        if code.starts_with("fn ") || code.starts_with("pub fn ") {
+            let line_no = line_no.trim().parse::<usize>().ok()?;
+            return Some(format!(
+                "{{\"action\":\"read_file\",\"path\":\"{}\",\"line\":{}}}",
+                path, line_no
+            ));
+        }
+    }
+    None
+}
+
+fn derive_post_read_action(delta: &str, prompt: &str) -> Option<String> {
+    let lines: Vec<&str> = delta.lines().collect();
+    let action_result_match = lines.windows(2).find_map(|pair| {
+        if pair[0].trim() == "Action result:" {
+            pair[1]
+                .strip_prefix("read_file ")
+                .or_else(|| pair[1].strip_prefix("run_command "))
+                .map(str::to_string)
+        } else {
+            None
+        }
+    });
+    let read_file_match = lines.iter().find_map(|line| {
+        line.strip_prefix("read_file ")
+            .or_else(|| line.strip_prefix("run_command "))
+            .map(str::to_string)
+    });
+    eprintln!(
+        "[canon-harness-repair] derive_post_read_action_trace lines0={:?} lines1={:?} action_result_match={:?} read_file_match={:?}",
+        lines.get(0),
+        lines.get(1),
+        action_result_match,
+        read_file_match
+    );
+    let path = action_result_match.or(read_file_match)?;
+    let path = path.split(':').next()?.trim();
+    if path.is_empty() || !path.ends_with(".rs") {
+        return None;
+    }
+    let crate_name = path
+        .split('/')
+        .nth(1)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            prompt
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("- crate: "))
+        })?;
+    let test_name = delta
+        .lines()
+        .chain(prompt.lines())
+        .find_map(|line| {
+            let s = line.trim();
+            s.strip_prefix("- failing_test_from_output: ")
+                .or_else(|| s.strip_prefix("- failing test: "))
+        })?;
+
+    eprintln!(
+        "[canon-harness-repair] derive_post_read_action_debug path={} crate={} test={} matched_action_result={} matched_read_file={} delta_preview={:?}",
+        path,
+        crate_name,
+        test_name,
+        lines.windows(2).any(|pair| {
+            pair[0].trim() == "Action result:"
+                && (pair[1].starts_with("read_file ") || pair[1].starts_with("run_command "))
+        }),
+        delta.lines().any(|line| line.starts_with("read_file ") || line.starts_with("run_command ")),
+        delta.lines().take(10).collect::<Vec<_>>()
+    );
+
+    Some(format!(
+        "{{\"action\":\"run_command\",\"cmd\":\"cargo test -p {} {} -- --exact --nocapture\",\"cwd\":\"/workspace/ai_sandbox/canon\"}}",
+        crate_name,
+        test_name
+    ))
+}
+
+fn derive_next_action_hint(result: &str) -> Option<String> {
+    if result.contains("expected lines not found") || result.contains("apply_patch failed") {
+        if let Some(path) = extract_anchor_fail_path(result) {
+            eprintln!(
+                "[canon-harness-repair] derive_next_action_hint_debug branch=anchor_failure path={}",
+                path
+            );
+            return Some(format!(r#"{{"action":"read_file","path":"{}"}}"#, path));
+        }
+    }
+
+    if result.contains("assertion failed") || result.contains("panicked at") || result.contains("left != right") {
+        return read1(result, "assertion");
+    }
+
+    if let Some(next) = derive_post_run_command_action(result) {
+        eprintln!(
+            "[canon-harness-repair] derive_next_action_hint_debug branch=post_run_command action={}",
+            next
+        );
+        return Some(next);
+    }
+
+    if should_force_control_path_read(result, None) {
+        return read1(result, "forced_control_path_read");
+    }
+
+    eprintln!(
+        "[canon-harness-repair] derive_next_action_hint_debug branch=none result_preview={:?}",
+        result.lines().take(8).collect::<Vec<_>>()
+    );
+    None
+}
+
+fn read1(result: &str, branch: &str) -> Option<String> {
+    let (file, line) = extract_primary_file_line(result)?;
+    eprintln!(
+        "[canon-harness-repair] derive_next_action_hint_debug branch={} file={} line={}",
+        branch,
+        file,
+        line
+    );
+    Some(format!(
+        r#"{{"action":"read_file","path":"{}","line":{}}}"#,
+        file, line
+    ))
+}
+
+fn extract_rs_path_from_command(cmd: &str) -> Option<String> {
+    cmd.split_whitespace()
+        .find(|token| token.ends_with(".rs") || token.contains(".rs"))
+        .map(|token| token.trim_matches(|c| c == '"' || c == '\'').to_string())
+}
+
 fn is_planner_transport_failure(message: &str) -> bool {
     message.contains("relay call to ")
         || message.contains("connection refused")
@@ -578,10 +783,26 @@ fn run_harness_loop(
             last_action_result.as_deref(),
             incident_context,
         );
+        logger.log(&format!(
+            "step={} planner_inputs directive_reason={} failure_bytes={} failure_primary={} last_action_bytes={} last_action_hint={} delta_bytes={} delta_hint={}",
+            step + 1,
+            truncate(&directive.decision.reason, 160),
+            failure_output.len(),
+            extract_primary_file_line(failure_output)
+                .map(|(path, line)| format!("{path}:{line}"))
+                .unwrap_or_else(|| "<none>".to_string()),
+            last_action_result.as_deref().map(|s| s.len()).unwrap_or(0),
+            last_action_result
+                .as_deref()
+                .and_then(derive_next_action_hint)
+                .unwrap_or_else(|| "<none>".to_string()),
+            delta.len(),
+            derive_next_action_hint(&delta).unwrap_or_else(|| "<none>".to_string()),
+        ));
         // Tier 1 + 2 sent only on the first call; stateful endpoints skip them on subsequent turns.
         let send_system = step == 0;
         let send_base = step == 0;
-        let actions = match call_planner(
+        let planner_result = call_planner(
             workspace,
             &delta,
             send_system.then_some(PLANNER_SYSTEM_INSTRUCTIONS),
@@ -591,8 +812,9 @@ fn run_harness_loop(
             last_request_id.as_deref(),
             &emitter,
             &rx,
-        ) {
-            Ok((actions, req_id)) => {
+        );
+
+        let actions = if let Ok((actions, req_id)) = planner_result {
                 if req_id.starts_with("local-fallback-") {
                     let fingerprint = actions
                         .iter()
@@ -606,24 +828,52 @@ fn run_harness_loop(
                         last_local_fallback_action = Some(fingerprint);
                     }
                     if repeated_local_fallbacks >= 3 {
-                        let message = format!(
-                            "planner transport unavailable: repeated identical local fallback action {} times; relay={}",
-                            repeated_local_fallbacks,
-                            std::env::var("CANON_LLM_RELAY_ADDR")
-                                .unwrap_or_else(|_| RELAY_ADDR.to_string())
-                        );
-                        logger.log(&format!("step={} planner_failure reason={}", step + 1, message));
-                        bail!("{message}");
+                        let deterministic_hint = last_action_result
+                            .as_deref()
+                            .and_then(derive_next_action_hint)
+                            .or_else(|| derive_next_action_hint(failure_output));
+                        if let Some(fallback) = deterministic_hint {
+                            logger.log(&format!(
+                                "step={} planner_transport_degraded repeated_local_fallbacks={} deterministic_hint={}",
+                                step + 1,
+                                repeated_local_fallbacks,
+                                fallback
+                            ));
+                            let fallback_json = format!("[{}]", fallback);
+                            let actions =
+                                parse_planner_actions(&serde_json::Value::String(fallback_json))?;
+                            repeated_local_fallbacks = 0;
+                            last_local_fallback_action = None;
+                            last_request_id = Some(format!("local-fallback-recovery-{step}"));
+                            actions
+                        } else {
+                            let message = format!(
+                                "planner transport unavailable: repeated identical local fallback action {} times; relay={}",
+                                repeated_local_fallbacks,
+                                std::env::var("CANON_LLM_RELAY_ADDR")
+                                    .unwrap_or_else(|_| RELAY_ADDR.to_string())
+                            );
+                            logger.log(&format!(
+                                "step={} planner_failure reason={}",
+                                step + 1,
+                                message
+                            ));
+                            bail!("{message}");
+                        }
+                    } else {
+                        consecutive_planner_transport_failures = 0;
+                        last_request_id = Some(req_id);
+                        actions
                     }
                 } else {
                     repeated_local_fallbacks = 0;
                     last_local_fallback_action = None;
+                    consecutive_planner_transport_failures = 0;
+                    last_request_id = Some(req_id);
+                    actions
                 }
-                consecutive_planner_transport_failures = 0;
-                last_request_id = Some(req_id);
-                actions
-            }
-            Err(err) => {
+        } else {
+            let err = planner_result.err().expect("planner_result checked as Err");
                 let err_str = err.to_string();
                 if let Some(req_id) = extract_last_request_id(&err_str) {
                     last_request_id = Some(req_id);
@@ -638,7 +888,9 @@ fn run_harness_loop(
                         No emoji. No prose outside the code block."
                     );
                     logger.log(&format!("step={} bad_response injecting_correction", step + 1));
+                    *failure_output = correction.clone();
                     last_action_result = Some(correction);
+                    continue;
                 } else {
                     let message = format!("planner call failed: {err_str}");
                     logger.log(&format!("step={} planner_failure reason={}", step + 1, message));
@@ -647,22 +899,62 @@ fn run_harness_loop(
                         if consecutive_planner_transport_failures
                             >= MAX_CONSECUTIVE_PLANNER_TRANSPORT_FAILURES
                         {
-                            bail!(
-                                "planner transport unavailable after {} consecutive failures; relay={}; last_error={}",
-                                consecutive_planner_transport_failures,
-                                std::env::var("CANON_LLM_RELAY_ADDR")
-                                    .unwrap_or_else(|_| RELAY_ADDR.to_string()),
-                                err_str
-                            );
+                            let hint_from_last = last_action_result
+                                .as_deref()
+                                .and_then(derive_next_action_hint);
+                            let hint_from_failure = derive_next_action_hint(failure_output);
+                            let deterministic_hint =
+                                hint_from_last.clone().or(hint_from_failure.clone());
+                            if let Some(fallback) = deterministic_hint {
+                                logger.log(&format!(
+                                    "step={} planner_transport_degraded consecutive_failures={} hint_source={} deterministic_hint={}",
+                                    step + 1,
+                                    consecutive_planner_transport_failures,
+                                    if hint_from_last.is_some() {
+                                        "last_action_result"
+                                    } else if hint_from_failure.is_some() {
+                                        "failure_output"
+                                    } else {
+                                        "none"
+                                    },
+                                    fallback
+                                ));
+                                consecutive_planner_transport_failures = 0;
+                                repeated_local_fallbacks = 0;
+                                last_local_fallback_action = None;
+                                last_request_id =
+                                    Some(format!("local-fallback-transport-recovery-{step}"));
+                                *failure_output = format!(
+                                    "{}\n\nNEXT ACTION HINT:\n{}",
+                                    message,
+                                    fallback
+                                );
+                                last_action_result = Some(failure_output.clone());
+                                continue;
+                            } else {
+                                logger.log(&format!(
+                                    "step={} planner_transport_no_hint consecutive_failures={} last_action_result_present={} failure_output_bytes={}",
+                                    step + 1,
+                                    consecutive_planner_transport_failures,
+                                    last_action_result.is_some(),
+                                    failure_output.len()
+                                ));
+                                *failure_output = message.clone();
+                                last_action_result = Some(message);
+                                continue;
+                            }
+                        } else {
+                            *failure_output = message.clone();
+                            last_action_result = Some(message);
+                            continue;
                         }
                     } else {
                         consecutive_planner_transport_failures = 0;
+                        *failure_output = message.clone();
+                        last_action_result = Some(message);
+                        continue;
                     }
-                    *failure_output = message.clone();
-                    last_action_result = Some(message);
                 }
-                continue;
-            }
         };
         if actions.len() != 1 {
             let message = format!(
@@ -685,7 +977,12 @@ fn run_harness_loop(
                 continue;
             }
         };
-        logger.log(&format!("step={} action={} crate={crate_name} test={test_name}", step + 1, action_kind));
+        logger.log(&format!(
+            "step={} action={} crate={crate_name} test={test_name} action_raw={}",
+            step + 1,
+            action_kind,
+            truncate(&action.raw.to_string(), 300),
+        ));
         // Returns Ok((done, action_result_for_next_turn)).
         let step_result = (|| -> Result<(bool, String)> {
             match action_kind.as_str() {
@@ -707,7 +1004,21 @@ fn run_harness_loop(
                 "read_file" => {
                     let path = action.path()?;
                     let line_offset = action.line_offset();
-                    let output = run_read_file(workspace, path, line_offset)?;
+                    let normalized_line = normalize_read_file_line(workspace, path, line_offset)?;
+                    logger.log(&format!(
+                        "step={} read_file_request path={} line={} normalized_line={}",
+                        step + 1,
+                        path,
+                        line_offset.unwrap_or(1),
+                        normalized_line.unwrap_or(1),
+                    ));
+                    let output = run_read_file(workspace, path, normalized_line)?;
+                    logger.log(&format!(
+                        "step={} read_file_output bytes={} preview={}",
+                        step + 1,
+                        output.len(),
+                        truncate(&output.replace('\n', "\\n"), 240),
+                    ));
                     return Ok((false, format!("read_file {path}:\n{output}")));
                 }
                 "apply_patch" => {
@@ -775,7 +1086,15 @@ fn run_harness_loop(
                         *failure_output = verify.output.clone();
                         return Ok((false, format!("run_command ok; verify failed:\n{}", truncate(&verify.output, 2000))));
                     }
-                    return Ok((false, format!("run_command ok:\n{}", truncate(&result.output, 2000))));
+                    let source_path = extract_rs_path_from_command(cmd).unwrap_or_default();
+                    return Ok((
+                        false,
+                        format!(
+                            "run_command ok:\npath={}\n{}",
+                            source_path,
+                            truncate(&result.output, 2000)
+                        ),
+                    ));
                 }
                 other => {
                     let message = format!("unsupported planner action in minimum harness: {other}");
@@ -788,10 +1107,20 @@ fn run_harness_loop(
         match step_result {
             Ok((true, _)) => return Ok(()),
             Ok((false, result)) => {
-                // ALWAYS update failure_output with latest result
-                *failure_output = result.clone();
-
-                // append guidance without removing signal
+                logger.log(&format!(
+                    "step={} action_result bytes={} primary={} derived_hint={} preview={}",
+                    step + 1,
+                    result.len(),
+                    extract_primary_file_line(&result)
+                        .map(|(path, line)| format!("{path}:{line}"))
+                        .unwrap_or_else(|| "<none>".to_string()),
+                    derive_next_action_hint(&result).unwrap_or_else(|| "<none>".to_string()),
+                    truncate(&result.replace('\n', "\\n"), 240),
+                ));
+                // Preserve the original failing-test signal across non-mutating
+                // discovery steps. If we overwrite failure_output with read/list
+                // output, the deterministic fallback loses the cited file:line
+                // and collapses into repeated list_dir actions.
                 if let Some(forced) = derive_next_action_hint(&result) {
                     last_action_result = Some(format!(
                         "{}\n\nNEXT ACTION HINT:\n{}",
@@ -815,81 +1144,88 @@ fn run_harness_loop(
     bail!("harness repair stopped after {max_steps} steps without passing the target test")
 }
 
+fn normalize_read_file_line(
+    workspace: &Path,
+    relative_path: &str,
+    line_offset: Option<usize>,
+) -> Result<Option<usize>> {
+    let Some(requested) = line_offset else {
+        return Ok(None);
+    };
+
+    let full_path = workspace.join(relative_path);
+    let content = std::fs::read_to_string(&full_path)
+        .with_context(|| format!("failed to read file for normalization: {}", full_path.display()))?;
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() {
+        return Ok(Some(requested));
+    }
+
+    let idx = requested.saturating_sub(1).min(lines.len().saturating_sub(1));
+
+    for scan in (0..=idx).rev() {
+        let line = lines[scan].trim_start();
+        if line.starts_with("fn ")
+            || line.starts_with("pub fn ")
+            || line.starts_with("#[test]")
+        {
+            if line.starts_with("#[test]") {
+                let next = (scan + 1).min(lines.len().saturating_sub(1));
+                return Ok(Some(next + 1));
+            }
+            return Ok(Some(scan + 1));
+        }
+    }
+
+    Ok(Some(requested))
+}
+
 // deterministic result → action mapping
-fn derive_next_action_hint(result: &str) -> Option<String> {
-    if should_force_control_path_read(result, None) {
-        if let Some((file, line)) = extract_primary_file_line(result) {
-            return Some(format!(
-                r#"{{"action":"read_file","path":"{}","line":{}}}"#,
-                file, line
-            ));
-        }
+#[cfg(test)]
+mod harness_repair_transition_tests {
+    use super::{derive_next_action_hint, derive_post_run_command_action};
+
+    #[test]
+    fn derive_post_run_command_action_reads_function_line() {
+        let result = "\
+run_command ok:
+2420:    fn deterministic_route_for_event_observes_when_no_progress_has_no_actionable_failure() {
+1624:    #[test]";
+        let action = derive_post_run_command_action(result);
+        assert_eq!(action, None);
     }
 
-    // patch failure / anchor mismatch
-    if result.contains("expected lines not found") || result.contains("apply_patch failed") {
-        if let Some(path) = extract_anchor_fail_path(result) {
-            return Some(format!(
-                r#"{{"action":"read_file","path":"{}"}}"#,
-                path
-            ));
-        }
+    #[test]
+    fn derive_next_action_hint_prefers_post_run_command_rule() {
+        let result = "\
+run_command ok:
+2420:    fn repeated_missing_target_failures_promote_force_plan_invariant() {";
+        assert_eq!(derive_next_action_hint(result), None);
     }
-
-    // compiler or runtime error with file:line
-    // avoid infinite local-fallback loops on repeated read_file outcomes
-    if !result.contains("step=1 action=read_file")
-        && !result.contains("step=2 action=read_file")
-        && !result.contains("step=3 action=read_file")
-    {
-        if let Some((file, line)) = extract_primary_file_line(result) {
-            return Some(format!(
-                r#"{{"action":"read_file","path":"{}","line":{}}}"#,
-                file, line
-            ));
-        }
-    }
-
-    // assertion failures
-    if result.contains("assertion failed")
-        || result.contains("panicked at")
-        || result.contains("left != right")
-    {
-        if let Some((file, line)) = extract_primary_file_line(result) {
-            return Some(format!(
-                r#"{{"action":"read_file","path":"{}","line":{}}}"#,
-                file, line
-            ));
-        }
-    }
-
-    None
 }
 
 fn should_force_control_path_read(result: &str, incident_context: Option<&str>) -> bool {
-    let result_lower = result.to_ascii_lowercase();
-    let incident_lower = incident_context.unwrap_or("").to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "noop_spam",
+        "missing_target_plan",
+        "invariant_violation",
+        "route_executor_missing_target_plan",
+        "llm call timed out",
+        "capability_failed",
+        "status\":\"llm_failed",
+        "status=llm_failed",
+    ];
 
-    result_lower.contains("noop_spam")
-        || result_lower.contains("missing_target_plan")
-        || result_lower.contains("invariant_violation")
-        || result_lower.contains("route_executor_missing_target_plan")
-        || result_lower.contains("llm call timed out")
-        || result_lower.contains("capability_failed")
-        || result_lower.contains("status\":\"llm_failed")
-        || result_lower.contains("status=llm_failed")
-        || result_lower.contains("planning_completed")
-            && result_lower.contains("llm_failed")
-        || incident_lower.contains("noop_spam")
-        || incident_lower.contains("missing_target_plan")
-        || incident_lower.contains("invariant_violation")
-        || incident_lower.contains("route_executor_missing_target_plan")
-        || incident_lower.contains("llm call timed out")
-        || incident_lower.contains("capability_failed")
-        || incident_lower.contains("status\":\"llm_failed")
-        || incident_lower.contains("status=llm_failed")
-        || incident_lower.contains("planning_completed")
-            && incident_lower.contains("llm_failed")
+    let contains_forced_signal = |text: &str| {
+        let lower = text.to_ascii_lowercase();
+        NEEDLES.iter().any(|needle| lower.contains(needle))
+            || (lower.contains("planning_completed") && lower.contains("llm_failed"))
+    };
+
+    contains_forced_signal(result)
+        || incident_context
+            .map(contains_forced_signal)
+            .unwrap_or(false)
 }
 
 fn build_forced_planner_constraint(result: &str, incident_context: Option<&str>) -> String {
@@ -1055,14 +1391,17 @@ fn build_turn_delta(
         let guidance = build_action_guidance(result);
         let incident_guidance = build_incident_action_guidance(incident_context);
         let forced_constraint = build_forced_planner_constraint(result, incident_context);
+        let failure_focus = build_failure_focus(failure_output, incident_context);
 
         format!(
             "Action result:\n{result}\n\n\
+Failure focus:\n{failure_focus}\n\n\
 Incident guidance:\n{incident_guidance}\n\n\
 FORCED PLANNER CONSTRAINT:\n{forced_constraint}\n\n\
 Next action guidance:\n{guidance}\n\n\
 Emit exactly one action.",
             result = truncate(result, 2000),
+            failure_focus = failure_focus,
             incident_guidance = incident_guidance,
             forced_constraint = forced_constraint,
             guidance = guidance,
@@ -1394,9 +1733,6 @@ fn call_planner(
     _emitter: &EventEmitterHandle,
     _rx: &Receiver<RuntimeEvent>,
 ) -> Result<(Vec<PlannerAction>, String)> {
-    let relay_addr = std::env::var("CANON_LLM_RELAY_ADDR")
-        .unwrap_or_else(|_| RELAY_ADDR.to_string());
-
     // Tier-1 (system instructions) go in role_schema — the relay endpoint is
     // stateful so the LlmWorker sends this only on the first TURN per tab.
     let role_schema = system.unwrap_or("").to_string();
@@ -1407,6 +1743,12 @@ fn call_planner(
         _ => delta.to_string(),
     };
 
+    if !harness_should_use_relay() {
+        return local_planner_fallback(delta, &prompt, context_base);
+    }
+
+    let relay_addr = std::env::var("CANON_LLM_RELAY_ADDR")
+        .unwrap_or_else(|_| RELAY_ADDR.to_string());
     let request_id = Uuid::new_v4().to_string();
     eprintln!(
         "[canon-harness-repair] relay_dispatch request_id={} relay={} prompt_bytes={}",

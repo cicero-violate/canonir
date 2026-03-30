@@ -606,13 +606,13 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_no_actionable_failure_observe_is_authoritative() {
+    fn deterministic_no_semantic_progress_plan_is_authoritative() {
         let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(
-            DeterministicRouteRule::NoActionableFailureObserve,
-            RouteKind::Observe,
+            DeterministicRouteRule::NoSemanticProgressPlan,
+            RouteKind::Plan,
         ));
-        assert_eq!(decision.lane, RouteKind::Observe);
-        assert_eq!(decision.suggested_route, RouteKind::Observe);
+        assert_eq!(decision.lane, RouteKind::Plan);
+        assert_eq!(decision.suggested_route, RouteKind::Plan);
         assert!(!decision.changed);
     }
 

@@ -1,5 +1,5 @@
 AUTO-TRIGGERED WORKSPACE REPAIR
 reason=error_occurred
-kind=llm_call
-source=llm_executor
-message=llm call timed out
+kind=invariant_violation
+source=rustc
+message=noop_spam; parent=ce05e9c0-bf61-416d-8955-111f20b024d8; kind=loop_acted; reasons=route_executor:route_executor_no_semantic_progress_plan; count=1

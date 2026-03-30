@@ -144,7 +144,6 @@ pub enum DeterministicRouteRule {
     DoneVerify,
     SemanticProgressVerify,
     NoSemanticProgressPlan,
-    NoActionableFailureObserve,
     ContinueAct,
     PlannedToAct,
     MissingObservedContextObserve,
@@ -683,32 +682,6 @@ fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
 }
 
 fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<RouteProposal> {
-    // Ensure no-progress without actionable failure deterministically observes (must precede other rules)
-    if let RuntimeEvent::LoopActed(_) = event {
-        if latest_no_semantic_progress(&ctx.recent_execution_results)
-            && !meta_invariant_has_actionable_failure(
-                ctx.semantic_summary.compiler_repair_required,
-                ctx.semantic_summary.validation_blocked_by_preconditions,
-                ctx.semantic_summary.planning_preconditions.len(),
-                ctx.semantic_summary.compiler_hints.len(),
-                ctx.semantic_summary.module_gaps.len(),
-            )
-        {
-            return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
-                route: RouteKind::Observe,
-                rationale: "no progress and no actionable failure".to_string(),
-                confidence: 0.95,
-                prompt_tag: "deterministic:no_actionable_failure_observe",
-                noop_reason: "route_executor_no_actionable_failure_observe",
-                rule: if workspace_state_drift_detected(&ctx.semantic_summary) {
-                    DeterministicRouteRule::StateDriftObserve
-                } else {
-                    DeterministicRouteRule::NoActionableFailureObserve
-                },
-            }));
-        }
-    }
-
     match event {
         RuntimeEvent::LoopActed(_)
             if ctx.planned_pending == 0
@@ -727,18 +700,7 @@ fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<Rout
                     rule: DeterministicRouteRule::MissingTargetPlan,
                 }));
             }
-            return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
-                route: RouteKind::Observe,
-                rationale: "no progress and no actionable failure".to_string(),
-                confidence: 0.95,
-                prompt_tag: "deterministic:no_actionable_failure_observe",
-                noop_reason: "route_executor_no_actionable_failure_observe",
-                rule: if workspace_state_drift_detected(&ctx.semantic_summary) {
-                    DeterministicRouteRule::StateDriftObserve
-                } else {
-                    DeterministicRouteRule::NoActionableFailureObserve
-                },
-            }));
+            return Some(RouteProposal::NoSemanticProgressPlan);
         }
         RuntimeEvent::LoopActed(_a) if ctx.bootstrap_refresh_required => {
             Some(RouteProposal::BootstrapRefreshObserve)
@@ -907,6 +869,19 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                 rule: DeterministicRouteRule::BootstrapRefreshObserve,
             });
         }
+        if ctx.planned_pending == 0
+            && ctx.pending_tool_result_ids.is_empty()
+            && workspace_state_drift_detected(&ctx.semantic_summary)
+        {
+            return Some(DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "semantic workspace facts disagree with the filesystem; refresh observation before planning or verification".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:state_drift_observe",
+                noop_reason: "route_executor_state_drift_observe",
+                rule: DeterministicRouteRule::StateDriftObserve,
+            });
+        }
         if latest_no_semantic_progress(&ctx.recent_execution_results) {
             // module gaps must force planning even before other branches
             if !ctx.semantic_summary.module_gaps.is_empty() {
@@ -916,7 +891,7 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                     confidence: 0.95,
                     prompt_tag: "deterministic:module_gaps_plan",
                     noop_reason: "route_executor_module_gaps_require_plan",
-                    rule: DeterministicRouteRule::NoActionableFailureObserve,
+                    rule: DeterministicRouteRule::NoSemanticProgressPlan,
                 });
             }
             if !meta_invariant_has_actionable_failure(
@@ -927,11 +902,11 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                 ctx.semantic_summary.module_gaps.len(),
             ) {
                 return Some(DeterministicRouteDecision {
-                    route: RouteKind::Plan,
-                    rationale: "no semantic progress; replan instead of refreshing observe".to_string(),
+                    route: RouteKind::Observe,
+                    rationale: "no semantic progress and no actionable failure; refresh observation instead of replanning".to_string(),
                     confidence: 0.95,
-                    prompt_tag: "deterministic:no_semantic_progress_plan",
-                    noop_reason: "route_executor_no_semantic_progress_plan",
+                    prompt_tag: "deterministic:no_actionable_failure_observe",
+                    noop_reason: "route_executor_no_actionable_failure_observe",
                     rule: DeterministicRouteRule::NoSemanticProgressPlan,
                 });
             } else {
@@ -1321,17 +1296,17 @@ fn apply_shared_route_constraint(
                 rationale: reason.to_string(),
                 confidence: 0.99,
                 prompt_tag: if reason.contains("no actionable failure") {
-                    "deterministic:no_actionable_failure_observe"
+                    "deterministic:no_semantic_progress_plan"
                 } else {
                     "deterministic:state_drift_observe"
                 },
                 noop_reason: if reason.contains("no actionable failure") {
-                    "route_executor_no_actionable_failure_observe"
+                    "route_executor_no_semantic_progress_plan"
                 } else {
                     "route_executor_state_drift_observe"
                 },
                 rule: if reason.contains("no actionable failure") {
-                    DeterministicRouteRule::NoActionableFailureObserve
+                    DeterministicRouteRule::NoSemanticProgressPlan
                 } else {
                     DeterministicRouteRule::StateDriftObserve
                 },
@@ -2485,7 +2460,7 @@ mod tests {
         };
         let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
         assert_eq!(decision.route, RouteKind::Observe);
-        assert_eq!(decision.rule, DeterministicRouteRule::NoActionableFailureObserve);
+        assert_eq!(decision.rule, DeterministicRouteRule::NoSemanticProgressPlan);
     }
 
     #[test]

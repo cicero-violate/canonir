@@ -41,6 +41,17 @@ pub fn init_bash_worker() {
                         }), vec![trigger_id.clone()], file!(), line!());
                     }
                     Err(err) => {
+                        emitter.emit_child(RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+                            "bash_execution_failed",
+                            "bash_executor",
+                            err.to_string(),
+                            "error",
+                            serde_json::json!({
+                                "request_id": request_id.clone(),
+                                "capability": "bash"
+                            }),
+                            Some(request_id.clone()),
+                        )), vec![trigger_id.clone()], file!(), line!());
                         emitter.emit_child(RuntimeEvent::CapabilityFailed(CapabilityFailed {
                             request_id,
                             capability: "bash",

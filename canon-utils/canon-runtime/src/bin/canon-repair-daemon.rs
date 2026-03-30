@@ -63,32 +63,15 @@ fn main() -> Result<()> {
                     && req.test_name == WORKSPACE_REPAIR_SENTINEL
                 {
                     eprintln!(
-                        "[canon-repair-daemon] running workspace incident repair (max_steps={})",
+                        "[canon-repair-daemon] workspace incident repair is temporarily disabled; refusing unstable synthetic workspace path (max_steps={})",
                         req.max_steps
                     );
-                    let workspace_clone = workspace.clone();
-                    let max_steps = req.max_steps;
-                    let failure_output = req.failure_output.clone();
-                    let result = tokio::task::spawn_blocking(move || {
-                        run_workspace_incident_repair(&workspace_clone, max_steps, &failure_output)
-                    }).await;
-
-                    return match result {
-                        Ok(Ok(())) => RepairJobResult {
-                            success: true,
-                            steps_taken: req.max_steps,
-                            error: None,
-                        },
-                        Ok(Err(e)) => RepairJobResult {
-                            success: false,
-                            steps_taken: req.max_steps,
-                            error: Some(e.to_string()),
-                        },
-                        Err(e) => RepairJobResult {
-                            success: false,
-                            steps_taken: 0,
-                            error: Some(format!("spawn_blocking panicked: {e}")),
-                        },
+                    return RepairJobResult {
+                        success: false,
+                        steps_taken: 0,
+                        error: Some(
+                            "workspace incident repair is temporarily disabled; use crate/test-scoped harness repair until workspace triage is stabilized".to_string(),
+                        ),
                     };
                 }
 
@@ -178,41 +161,6 @@ fn main() -> Result<()> {
         drop(handle);
         Ok::<(), anyhow::Error>(())
     })
-}
-
-fn run_workspace_incident_repair(
-    workspace: &PathBuf,
-    max_steps: usize,
-    failure_output: &str,
-) -> Result<()> {
-    let state_dir = workspace.join("state");
-    std::fs::create_dir_all(&state_dir)?;
-    let eventlog_path = state_dir.join("event_trigger_failure.txt");
-    std::fs::write(&eventlog_path, failure_output)
-        .context("failed to write workspace incident failure output")?;
-    let mut cmd = Command::new(workspace.join("target/debug/canon-eventlog-repair"));
-    cmd.arg("--workspace")
-        .arg(workspace)
-        .arg("--crate")
-        .arg("canon-runtime")
-        .arg("--test")
-        .arg("synthetic_event_trigger_incident")
-        .arg("--event-jsonl")
-        .arg(&eventlog_path)
-        .arg("--max-steps")
-        .arg(max_steps.to_string())
-        .arg("--event-tlog")
-        .arg(workspace.join("state/event_log/event.tlog.d"));
-
-    let status = cmd
-        .status()
-        .context("failed to run canon-eventlog-repair for workspace incident")?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        bail!("canon-eventlog-repair exited with status {}", status);
-    }
 }
 
 fn rebuild_harness_repair(workspace: &PathBuf) -> Result<()> {

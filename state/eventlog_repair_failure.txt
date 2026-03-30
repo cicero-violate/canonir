@@ -19,6 +19,7 @@ canon-utils/canon-loop/src/executor.rs
 canon-utils/canon-loop/src/stage/plan.rs
 canon-utils/canon-route/src/executor.rs
 canon-utils/canon-runtime-events/src/tlog/binary.rs
+canon-utils/canon-runtime/src/bin/event_runtime.rs
 canon-utils/canon-runtime/src/bus.rs
 canon-utils/canon-runtime/src/consumers/capability_executor.rs
 canon-utils/canon-runtime/src/consumers/diagnostics_consumer.rs
@@ -40,6 +41,7 @@ canon-utils/canon-loop/src/stage/plan.rs:1220
 canon-utils/canon-route/src/executor.rs:861
 canon-utils/canon-route/src/executor.rs:98
 canon-utils/canon-runtime-events/src/tlog/binary.rs:424
+canon-utils/canon-runtime/src/bin/event_runtime.rs:602
 canon-utils/canon-runtime/src/bus.rs:240
 canon-utils/canon-runtime/src/consumers/capability_executor.rs:82
 canon-utils/canon-runtime/src/consumers/diagnostics_consumer.rs:140
@@ -48,18 +50,18 @@ canon-utils/canon-runtime/src/consumers/goal_gen_consumer.rs:427
 canon-utils/canon-runtime/src/consumers/repair_control_consumer.rs:483
 
 Recent event excerpt:
+kind=unknown at=canon-utils/canon-loop/src/stage/plan.rs:1220
+kind=unknown actor=plan at=canon-utils/canon-loop/src/executor.rs:307
+kind=planning_completed actor=plan at=canon-utils/canon-loop/src/executor.rs:307
+kind=route_selected actor=supervisor at=canon-utils/canon-route/src/executor.rs:861
+kind=unknown at=canon-utils/canon-loop/src/executor.rs:307
+kind=unknown at=canon-utils/canon-loop/src/executor.rs:307
+kind=route_selected actor=supervisor at=canon-utils/canon-route/src/executor.rs:861
 kind=unknown at=canon-utils/canon-runtime/src/bus.rs:240
 kind=error_occurred actor=event-runtime at=canon-utils/canon-runtime/src/bus.rs:240
 kind=unknown at=canon-utils/canon-loop/src/stage/plan.rs:1148
 kind=unknown actor=event-runtime at=canon-utils/canon-loop/src/stage/plan.rs:1164
-kind=planning_completed actor=loop_stage_executor debug_kind=observe_suppressed_due_to_pending_successor at=canon-utils/canon-loop/src/executor.rs:98
-kind=error_occurred actor=llm_executor message=llm call timed out at=canon-utils/canon-exec/src/exec/llm.rs:409
-kind=capability_failed actor=event-runtime message=llm call timed out at=canon-utils/canon-exec/src/exec/llm.rs:410
-kind=capability_failed actor=event-runtime message=llm call timed out at=canon-utils/canon-exec/src/exec/llm.rs:410
-kind=unknown at=canon-utils/canon-loop/src/stage/plan.rs:1220
-kind=planning_completed actor=plan at=canon-utils/canon-loop/src/executor.rs:303
-kind=route_selected actor=supervisor at=canon-utils/canon-route/src/executor.rs:861
-kind=planning_completed actor=loop_stage_executor debug_kind=observe_suppressed_due_to_pending_successor at=canon-utils/canon-loop/src/executor.rs:98
+kind=error_occurred actor=event-runtime at=canon-utils/canon-runtime/src/consumers/diagnostics_consumer.rs:140
 
 Repair requirements:
 - Fix the control-path bug surfaced by the event log.
