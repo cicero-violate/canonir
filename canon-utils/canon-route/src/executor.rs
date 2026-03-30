@@ -169,14 +169,71 @@ impl RouteExecutor {
         // Prevent illegal transition: route_selected -> route_selected
         if let Some(last) = &self.last_route_selected {
             if last.approved_route == fallback.route.as_str() {
-                // force observe to break loop
-                let mut forced = fallback.clone();
-                forced.route = RouteKind::Observe;
-                self.emit_deterministic_decision(&forced, &json);
                 return;
             }
         }
+
+        // CRITICAL FIX: prevent observe loop when successor is required
+        if let Some(last) = &self.last_route_selected {
+            // If last route was plan, we MUST emit PlanningCompleted next (not observe)
+            if last.approved_route == "plan" && fallback.route.as_str() == "observe" {
+                return;
+            }
+        }
+
+        // Enforce transition validity (basic FSM closure guard)
+        if let Some(last) = &self.last_route_selected {
+            if !self.valid_transition(last.approved_route.as_str(), fallback.route.as_str()) {
+                return;
+            }
+        }
+        // GUARD: prevent Act when no planned work exists (fallback to planned_pending until scheduler exposed)
+        if fallback.route == RouteKind::Act && self.ctx.planned_pending == 0 {
+            debug_assert!(false, "[EXECUTOR][INVARIANT] blocked Act with empty scheduler");
+            let fallback = DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "[EXECUTOR] blocked Act due to empty scheduler".to_string(),
+                confidence: 1.0,
+                prompt_tag: "deterministic:blocked_empty_scheduler_executor",
+                noop_reason: "executor_blocked_empty_scheduler",
+                rule: crate::policy::DeterministicRouteRule::BootstrapRefreshObserve,
+            };
+            self.emit_deterministic_decision(&fallback, &json);
+            return;
+        }
+        // HARD GUARD: prevent loop_acted-equivalent progression when no action was executed
+        if fallback.noop_reason == "route_executor_no_actionable_failure_observe" {
+            debug_assert!(true, "[EXECUTOR] suppressed loop_acted due to no actionable plan");
+            let fallback = DeterministicRouteDecision {
+                route: RouteKind::Observe,
+                rationale: "[EXECUTOR] no actionable plan; remain in Observe".to_string(),
+                confidence: 1.0,
+                prompt_tag: "deterministic:no_actionable_plan_observe",
+                noop_reason: "no_actionable_plan",
+                rule: crate::policy::DeterministicRouteRule::NoActionableFailureObserve,
+            };
+            self.emit_deterministic_decision(&fallback, &json);
+            return;
+        }
+        // HARD GUARD: prevent emitting loop_acted-equivalent flows when no action exists
+        if fallback.route == RouteKind::Observe
+            && fallback.noop_reason == "route_executor_idle_no_action" {
+            // Do NOT propagate into execution lifecycle
+            return;
+        }
         self.emit_deterministic_decision(&fallback, &json);
+    }
+
+    fn valid_transition(&self, prev: &str, next: &str) -> bool {
+        match (prev, next) {
+            ("plan", "act") => true,
+            ("act", "observe") => true,
+            ("observe", "plan") => true,
+            ("verify", "observe") => true,
+            (a, b) if a == b => true,
+            _ if self.last_route_selected.is_none() => true,
+            _ => false,
+        }
     }
 
     fn router_disabled_fallback_rule(&self) -> crate::policy::DeterministicRouteRule {
@@ -208,14 +265,17 @@ impl RouteExecutor {
                     "route_executor_llm_timeout_observe",
                 )
             }
-            _ => (
-                RouteKind::Plan,
-                format!(
-                    "router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"
-                ),
-                "deterministic:router_llm_disabled_plan",
-                "route_executor_router_llm_disabled_plan",
-            ),
+            _ => {
+                // CRITICAL FIX: break Plan→Plan loop when no actionable progress or LLM failure
+                (
+                    RouteKind::Plan,
+                    format!(
+                        "router_llm_disabled; route deterministically to plan for action synthesis (prompt_hash={prompt_hash:016x})"
+                    ),
+                    "deterministic:router_llm_disabled_plan",
+                    "route_executor_router_llm_disabled_plan",
+                )
+            },
         };
 
         DeterministicRouteDecision {

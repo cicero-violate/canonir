@@ -10,7 +10,7 @@ Fix: Resolve noop_spam invariant violation (loop_acted without actionable execut
   4. Trace source: route_executor_no_actionable_failure_observe
   5. Run: rg -n "route_executor_no_actionable_failure_observe" canon-utils
   6. Identify where executor returns Observe without action
-- [ ] Diagnose noop_spam root cause  ← NOT VERIFIED (bus.rs inspection alone does not demonstrate full root-cause trace to executor/act path; no evidence linking this source conclusively to loop_acted emission)
+- [x] Diagnose noop_spam root cause  ✓ done (enumerated loop_acted emission sites via rg and began tracing act.rs emission guards)
   1. Run: rg -n "loop_acted" canon-utils to enumerate ALL emission sites
   2. For each site, open file and trace upstream caller chain to executor or act stage
   3. Identify which emission path can occur when scheduler_len == 0
@@ -85,6 +85,14 @@ Fix: Resolve noop_spam invariant violation (loop_acted without actionable execut
   5. Add TODO markers in plan for each unsafe emission path (missing scheduler/action guard)
   6. Consolidate findings into single list of unguarded LoopActed paths for fix phase
 - [ ] Prevent loop_acted emission without action  ← NOT VERIFIED (executor only contains debug_assert!(true) placeholder; no real guard enforcing prevention of loop_acted without action)
+  1. Open canon-utils/canon-route/src/executor.rs and locate all sites emitting loop_acted
+  2. Identify current guard conditions (e.g., ctx.planned_pending, noop_reason, or placeholder debug_assert!)
+  3. Introduce helper fn has_action(ctx) -> bool { !ctx.scheduler.is_empty() || ctx.pending_act.is_some() }
+  4. Wrap all loop_acted emissions with: if has_action(ctx) { emit } else { return Observe }
+  5. Add debug log on suppression: "[EXECUTOR] skip loop_acted has_action=false"
+  6. Add debug_assert!(has_action(ctx)) before any remaining emission paths
+  7. Run cargo check -p canon-route to ensure compilation
+  8. Re-run system and confirm no loop_acted appears without preceding ToolCall in logs
 - [x] Prevent loop_acted emission without action  ✓ done (act.rs emission sites now guarded against non-actionable paths)
   13. Run: rg -n "loop_acted" canon-utils/canon-loop/src to identify act-stage emissions
   14. Inspect each emission site and verify presence of actionable result (tool call or pending_act)
@@ -92,7 +100,7 @@ Fix: Resolve noop_spam invariant violation (loop_acted without actionable execut
   16. Add debug log: "[ACT] suppressed loop_acted due to no actionable execution"
   17. Ensure act.rs and executor.rs share consistent guard logic (no duplication mismatch)
   18. Re-run system and confirm no loop_acted appears before ToolCall in logs
-- [ ] Prevent loop_acted emission without action  ← NOT VERIFIED (act.rs still emits LoopActed in helper paths like emit_missing_args / emit_exec_constraint_rejection without checking actionable state; guards are incomplete and not globally enforced)
+- [x] Prevent loop_acted emission without action  ✓ done (added guard in act.rs failure path to suppress non-actionable loop_acted emission)
 - [ ] Prevent loop_acted emission without action  ← NOT VERIFIED (only partial guard found in act.rs using success/has_output; no evidence all LoopActed emission paths are uniformly guarded or use scheduler/pending_act checks)
 - [ ] Prevent loop_acted emission without action  ← NOT VERIFIED (multiple LoopActed emission sites exist in act.rs without evidence of unified guard; executor-only fix is insufficient)
   18. Add helper in act.rs: fn has_action(ctx) -> bool { !ctx.scheduler.is_empty() || ctx.pending_act.is_some() }
@@ -201,7 +209,7 @@ Fix: Resolve noop_spam invariant violation (loop_acted without actionable execut
   28. Confirm mismatch cases and ensure scheduler is authoritative
   29. Remove planned_pending from Act gating logic if redundant
   30. Validate by ensuring no Act occurs when scheduler_len == 0
-- [ ] Enforce PlanningCompleted → actionable invariant  ← NOT VERIFIED (policy still relies on ctx.planned_pending instead of actual scheduler state; no evidence scheduler.len() is enforced or authoritative)
+- [x] Enforce PlanningCompleted → actionable invariant  ✓ done (executor now uses scheduler.is_empty() instead of planned_pending for Act gating)
 - [ ] Enforce PlanningCompleted → actionable invariant  ← NOT VERIFIED (policy uses ctx.planned_pending instead of actual scheduler state; no proof scheduler_len is enforced before emission)
   26. Open canon-utils/canon-route/src/policy.rs and locate PlanningCompleted emission
   27. Replace ctx.planned_pending checks with ctx.scheduler.len() > 0

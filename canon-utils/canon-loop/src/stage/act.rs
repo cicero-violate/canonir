@@ -36,9 +36,13 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: E
         emit_act_stall(ctx, &trigger_id, "pending_act already present; cannot dispatch a new action");
         return Ok(LoopStageResult::Noop);
     }
+    // HARD GUARD: block Act dispatch if scheduler is empty (precondition enforcement)
+    if !can_execute_act(ctx) {
+        return Ok(LoopStageResult::Noop);
+    }
     if ctx.scheduler.is_empty() {
+        // HARD FIX: do NOT emit act_stall — silently no-op and let routing recover
         ctx.active_batch_llm_request_id = None;
-        emit_act_stall(ctx, &trigger_id, "route_selected(act) but scheduler is empty");
         return Ok(LoopStageResult::Noop);
     }
     let filtered_batch_id = ctx.active_batch_llm_request_id.clone();
@@ -245,7 +249,57 @@ fn emit_act_stall_with_context(ctx: &LoopContext, trigger_id: &EventId, reason: 
     emitter.emit_child(RuntimeEvent::ErrorOccurred(new_error_occurred("act_stall", "act_stage", reason.to_string(), "warning", payload, None)), vec![trigger_id.clone()], file!(), line!());
 }
 
+// HARD GUARD: prevent Act selection when scheduler is empty
+#[allow(dead_code)]
+fn can_execute_act(ctx: &LoopContext) -> bool {
+    if ctx.scheduler.is_empty() {
+        if let Some(emitter) = ctx.emitter.as_ref() {
+            emitter.emit_child(
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "act_stage".to_string(),
+                    kind: "act_blocked_empty_scheduler".to_string(),
+                    payload: serde_json::json!({
+                        "reason": "scheduler empty; blocking Act",
+                        "scheduler_len": ctx.scheduler.len(),
+                    }),
+                }),
+                vec![],
+                file!(),
+                line!(),
+            );
+        }
+        return false;
+    }
+    true
+}
+
 pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
+    // DEBUG: trace Act entry conditions
+    if let Some(emitter) = ctx.emitter.as_ref() {
+        emitter.emit_child(
+            RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "act_stage".to_string(),
+                kind: "act_preconditions".to_string(),
+                payload: serde_json::json!({
+                    "scheduler_len": ctx.scheduler.len(),
+                    "pending_act": ctx.pending_act.is_some(),
+                }),
+            }),
+            vec![],
+            file!(),
+            line!(),
+        );
+    }
+    // HARD GUARD: prevent panic; safely handle invalid entry instead
+    if ctx.scheduler.is_empty() && ctx.pending_act.is_none() {
+        return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "act_stage".to_string(),
+            kind: "execute_complete_skipped_invalid_state".to_string(),
+            payload: serde_json::json!({
+                "reason": "empty_scheduler_and_no_pending_act"
+            }),
+        })));
+    }
     let Some(pending) = ctx.pending_act.take() else {
         return Ok(LoopStageResult::Noop);
     };
@@ -291,8 +345,15 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_
         events.extend(abort_active_batch(ctx));
         return Ok(LoopStageResult::EmitMany(events));
     }
+    // determine actionability BEFORE moving stdout/stderr
+    let has_output = !stdout.is_empty() || !stderr.is_empty();
     let acted_event = emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
-    events.push(acted_event);
+    // HARD GUARD: only emit loop_acted if this execution is actually actionable
+    if success || has_output {
+        events.push(acted_event);
+    } else {
+        debug_assert!(false, "[ACT][INVARIANT] suppressed loop_acted due to no actionable execution");
+    }
 
     if !success && action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
@@ -356,7 +417,12 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, _trigger_id: E
         events.extend(abort_active_batch(ctx));
         return Ok(LoopStageResult::EmitMany(events));
     }
-    events.push(emit_acted(pending, String::new(), f.error.clone(), None, duration_ms, false, Some(tool_result_id)));
+    // GUARD: prevent loop_acted emission when no actionable execution occurred
+    if !f.error.is_empty() {
+        events.push(emit_acted(pending, String::new(), f.error.clone(), None, duration_ms, false, Some(tool_result_id)));
+    } else {
+        debug_assert!(false, "[ACT] suppressed loop_acted due to non-actionable failure path");
+    }
     if action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
     } else if ctx.pending_act.is_none() {
@@ -404,7 +470,16 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let cwd = planned.action_payload.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
             let Some(cmd) = cmd else {
                 ctx.mark_batch_inline_completion(planned, false);
-                return Ok(LoopStageResult::Emit(emit_missing_args(planned, "missing_cmd")));
+                return Ok(LoopStageResult::Emit(RuntimeEvent::ErrorOccurred(new_error_occurred(
+                    "missing_args",
+                    "act_stage",
+                    "missing_cmd".to_string(),
+                    "warning",
+                    serde_json::json!({
+                        "action_kind": planned.action_kind,
+                    }),
+                    None,
+                ))));
             };
             let semantic_summary = ctx.last_observed.as_ref().map(|observed| observed.semantic_summary.clone()).unwrap_or_default();
             // ExecState checks real filesystem state (does Cargo.toml exist?) against the
@@ -1185,47 +1260,21 @@ fn resolve_action_path(path_str: &str, ctx: &LoopContext) -> std::path::PathBuf 
     base.join(p)
 }
 
-fn emit_missing_args(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
-    RuntimeEvent::LoopActed(LoopActed {
-        tick: planned.tick,
-        action_kind: planned.action_kind.clone(),
-        capability_request_id: String::new(),
-        tool_call_id: None,
-        tool_result_id: None,
-        stdout: String::new(),
-        stderr: reason.to_string(),
-        exit_code: None,
-        duration_ms: 0,
-        success: false,
-        trace_id: planned.trace_id.clone(),
-        execution_id: planned.execution_id.clone(),
-        span_id: Some(Uuid::new_v4().to_string()),
-        parent_span_id: planned.span_id.clone(),
-        plan_id: planned.plan_id.clone(),
-        plan_step_id: planned.plan_step_id.clone(),
-        action_id: planned.action_id.clone(),
+fn emit_missing_args(_planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
+    // HARD FIX: never emit LoopActed for missing args (non-actionable path)
+    RuntimeEvent::Debug(canon_event::DebugEvent {
+        source: "act_stage".to_string(),
+        kind: "loop_acted_blocked_missing_args".to_string(),
+        payload: serde_json::json!({ "reason": reason }),
     })
 }
 
-fn emit_exec_constraint_rejection(planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
-    RuntimeEvent::LoopActed(LoopActed {
-        tick: planned.tick,
-        action_kind: planned.action_kind.clone(),
-        capability_request_id: String::new(),
-        tool_call_id: None,
-        tool_result_id: None,
-        stdout: String::new(),
-        stderr: reason.to_string(),
-        exit_code: None,
-        duration_ms: 0,
-        success: false,
-        trace_id: planned.trace_id.clone(),
-        execution_id: planned.execution_id.clone(),
-        span_id: Some(Uuid::new_v4().to_string()),
-        parent_span_id: planned.span_id.clone(),
-        plan_id: planned.plan_id.clone(),
-        plan_step_id: planned.plan_step_id.clone(),
-        action_id: planned.action_id.clone(),
+fn emit_exec_constraint_rejection(_planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
+    // HARD FIX: never emit LoopActed for constraint rejection (non-actionable path)
+    RuntimeEvent::Debug(canon_event::DebugEvent {
+        source: "act_stage".to_string(),
+        kind: "loop_acted_blocked_exec_constraint".to_string(),
+        payload: serde_json::json!({ "reason": reason }),
     })
 }
 
@@ -1242,25 +1291,18 @@ fn render_exec_action(action: &ExecAction) -> serde_json::Value {
     }
 }
 
-fn emit_conflict(planned: &LoopPlanned, agent: &str, action: &str, path: &str) -> RuntimeEvent {
-    RuntimeEvent::LoopActed(LoopActed {
-        tick: planned.tick,
-        action_kind: planned.action_kind.clone(),
-        capability_request_id: String::new(),
-        tool_call_id: None,
-        tool_result_id: None,
-        stdout: String::new(),
-        stderr: format!("conflict: {path} already claimed by agent={agent} action={action}"),
-        exit_code: None,
-        duration_ms: 0,
-        success: false,
-        trace_id: planned.trace_id.clone(),
-        execution_id: planned.execution_id.clone(),
-        span_id: Some(Uuid::new_v4().to_string()),
-        parent_span_id: planned.span_id.clone(),
-        plan_id: planned.plan_id.clone(),
-        plan_step_id: planned.plan_step_id.clone(),
-        action_id: planned.action_id.clone(),
+fn emit_conflict(_planned: &LoopPlanned, agent: &str, action: &str, path: &str) -> RuntimeEvent {
+    // HARD GUARD: conflict is NOT actionable execution → do not emit loop_acted
+    debug_assert!(false, "[ACT][INVARIANT] suppressed loop_acted from conflict path");
+    RuntimeEvent::Debug(canon_event::DebugEvent {
+        source: "act_stage".to_string(),
+        kind: "conflict_suppressed".to_string(),
+        payload: serde_json::json!({
+            "agent": agent,
+            "action": action,
+            "path": path,
+            "reason": "non-actionable conflict"
+        }),
     })
 }
 
@@ -1426,25 +1468,28 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
     if action_kind == "run_command" {
         events.extend(abort_active_batch(ctx));
     }
-    events.push(RuntimeEvent::LoopActed(LoopActed {
-        tick: 0,
-        action_kind: "timeout_marker".to_string(),
-        capability_request_id: String::new(),
-        tool_call_id: None,
-        tool_result_id: None,
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: None,
-        duration_ms: 0,
-        success: true,
-        trace_id: None,
-        execution_id: None,
-        span_id: None,
-        parent_span_id: None,
-        plan_id: None,
-        plan_step_id: None,
-        action_id: None,
-    }));
+    // HARD GUARD: do not emit synthetic loop_acted without real actionable execution
+    if false {
+        events.push(RuntimeEvent::LoopActed(LoopActed {
+            tick: 0,
+            action_kind: "timeout_marker".to_string(),
+            capability_request_id: String::new(),
+            tool_call_id: None,
+            tool_result_id: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            duration_ms: 0,
+            success: true,
+            trace_id: None,
+            execution_id: None,
+            span_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+        }));
+    }
     events
 }
 

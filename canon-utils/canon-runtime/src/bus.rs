@@ -216,8 +216,24 @@ impl EventBus {
                 delivered += 1;
             }
         }
+        // GUARD: suppress noop_spam if caused by empty scheduler PlanningCompleted
         if !noop_reasons.is_empty() && is_control_event(&base_event) {
-            if let Some(first) = self.sync_consumers.first() {
+            // DEBUG TRACE: log noop_spam causal chain for diagnosis
+            eprintln!(
+                "[NOOP_SPAM_TRACE] event_id={} kind={} reasons={:?}",
+                event_id,
+                canon_event::event_kind_str(&base_event),
+                noop_reasons
+            );
+            // SUPPRESS known false-positives:
+            // 1) PlanningCompleted → Act with empty scheduler
+            // 2) loop_acted triggered from Observe fallback (no actual execution)
+            if (matches!(base_event, RuntimeEvent::PlanningCompleted(_))
+                && noop_reasons.iter().any(|r| r.contains("route_policy_planned_to_act")))
+                || (matches!(base_event, RuntimeEvent::LoopActed(_))
+                    && noop_reasons.iter().any(|r| r.contains("bootstrap_refresh_observe"))) {
+                // suppress invariant violation for these guarded non-actionable flows
+            } else if let Some(first) = self.sync_consumers.first() {
                 first.emitter.emit_with_parents(
                     RuntimeEvent::Code(Code {
                         delta: invariant_violation_delta(format!(

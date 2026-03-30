@@ -38,6 +38,22 @@ impl LoopStageEvent {
 }
 
 fn dispatch_capability_done(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
+    // DEBUG: trace dispatch into completion pipeline
+    if let Some(emitter) = ctx.emitter.as_ref() {
+        emitter.emit_child(
+            RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "loop_stage_dispatch".to_string(),
+                kind: "dispatch_capability_done_entry".to_string(),
+                payload: serde_json::json!({
+                    "scheduler_len": ctx.scheduler.len(),
+                    "pending_act": ctx.pending_act.is_some(),
+                }),
+            }),
+            vec![],
+            file!(),
+            line!(),
+        );
+    }
     let decompose_result = decompose::execute_complete(c.clone(), ctx)?;
     if !matches!(decompose_result, LoopStageResult::Noop) {
         return Ok(decompose_result);

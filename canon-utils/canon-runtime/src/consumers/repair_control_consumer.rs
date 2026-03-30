@@ -329,6 +329,14 @@ impl RepairControlConsumer {
             return Some(("illegal_region_escalation", Stuck.as_str()));
         }
 
+        // HARD INVARIANT: Act phase must not regress to Classifying via ActStall
+        if matches!(self.phase, RepairPhase::Transitioning | RepairPhase::Verifying)
+            && matches!(signal, SemanticSignal::ActStall)
+        {
+            debug_assert!(false, "[INVARIANT] Act phase regression blocked");
+            return Some(("act_stall_blocked_in_act_phase", self.phase.as_str()));
+        }
+
         let (next, note): (RepairPhase, &'static str) = match (self.phase, signal) {
             // ── Observing ─────────────────────────────────────────────────────
             (Observing, MissingTarget) => (Classifying, "missing_target_enter_classifying"),
@@ -403,6 +411,18 @@ impl RepairControlConsumer {
     }
 
     fn record_transition(&mut self, signal: SemanticSignal, to: RepairPhase) {
+        // HARD INVARIANT: prevent illegal Act → Classifying regression
+        if self.phase.as_str() == "act" && to == RepairPhase::Classifying {
+            debug_assert!(false, "[INVARIANT] Act phase regression to Classifying blocked");
+            // Redirect to a safe fallback: Stuck (recovery phase)
+            self.transition_history.push_back(TransitionRecord {
+                tick: self.tick,
+                from_phase: self.phase,
+                signal,
+                to_phase: RepairPhase::Stuck,
+            });
+            return;
+        }
         // Note: record_entry_into_region is called separately in advance() before
         // the phase change, so we only append the history entry here.
         self.transition_history.push_back(TransitionRecord { tick: self.tick, from_phase: self.phase, signal, to_phase: to });

@@ -560,6 +560,17 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     }
     ctx.last_emitted_plan_hash = Some(action_batch_hash);
     let mut events: Vec<RuntimeEvent> = out.into_iter().map(RuntimeEvent::LoopPlanned).collect();
+    if events.is_empty() {
+        // Prevent emitting PlanningCompleted with no actionable work
+        return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "plan_stage".to_string(),
+            kind: "planning_suppressed_empty".to_string(),
+            payload: decision_trace_payload(
+                "suppressed PlanningCompleted due to empty plan",
+                serde_json::json!({ "planned_count": 0 }),
+            ),
+        })));
+    }
     events.push(RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: pending.tick, llm_request_id: Some(req_id), planned_count: events.len(), status: "planned".to_string() }));
     Ok(LoopStageResult::EmitMany(events))
 }

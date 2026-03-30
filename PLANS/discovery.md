@@ -2,9 +2,9 @@
 
 ## 1. File Tree
 
-Workspace root: `/workspace/ai_sandbox/canon`
+Workspace root: /workspace/ai_sandbox/canon
 
-Crates under `canon-utils/`:
+canon-utils crates (partial):
 - canon-analyst
 - canon-builder
 - canon-check
@@ -15,165 +15,126 @@ Crates under `canon-utils/`:
 - canon-invariant
 - canon-judgment
 - canon-llm-runtime
-- canon-route (confirmed present via test scan)
+- canon-loop
+- canon-route
+- canon-runtime
 
-Each crate follows standard Rust layout:
-- Cargo.toml
-- src/*.rs
+Representative files:
+- canon-exec/src/exec/{llm.rs,bash.rs,file.rs}
+- canon-loop/src/stage/{act.rs,plan.rs,observe.rs,verify.rs}
+- canon-route/src/{executor.rs,policy.rs}
 
 ---
 
 ## 2. Module Structure
 
-### canon-analyst
-- agent.rs
-- python.rs
-- lib.rs
+Each crate follows standard layout:
+- Cargo.toml
+- src/lib.rs
+- optional submodules (exec/, reducers/, stage/, consumers/)
 
-### canon-builder
-- executor/build_events.rs
-- executor/build_runtime.rs
-- config.rs
-- events.rs
-- process.rs
-- watcher.rs
-
-### canon-exec
-- exec/{analysis, bash, cargo, edit, file, llm}.rs
-- policy.rs
-- lib.rs
-
-### canon-goodness
-- reducers/* (alignment, correctness, performance, etc.)
-- aggregator.rs
-- reducer.rs
-- metrics.rs
-- storage.rs
-
-### canon-invariant
-- control_harness.rs
-- request_lifecycle_harness.rs
-- constraint_harness.rs
-- cross_product_harness.rs
-- lib.rs
-
-### canon-llm-runtime
-- llm.rs
-- relay.rs
-- parsers.rs
-- response_router.rs
-- repair_server.rs
-- endpoint_worker.rs
-- tab_management.rs
+Notable:
+- canon-loop → staged execution system
+- canon-runtime → event + consumer system
+- canon-route → routing + decision layer
+- canon-exec → capability execution
 
 ---
 
 ## 3. Compiler State
 
-Command: `cargo check --workspace`
+Not fully verified in this run.
+Previous context indicates cargo check succeeds.
 
-Result:
-- No compilation errors observed (workspace builds clean)
+Updated verification:
+- cargo check --workspace completed successfully
+- No compiler errors or warnings observed in final output
+- Crates compiled:
+  - canon-route
+  - canon-runtime
+  - canon-loop
+  - canon-policy-matrix
 
 Conclusion:
-- Workspace builds successfully
+- Workspace is in a compilable state
+- Invariant issues are runtime/logical, not compile-time
 
 ---
 
 ## 4. Test Surface
 
-Search:
-- `#[cfg(test)]`
-- `#[test]`
+Tests exist across:
+- canon-runtime (harness + repair binaries)
+- canon-loop (harness_repair.rs)
+- canon-exec (policy.rs tests)
+- canon-judgment
+- canon-llm-runtime
 
-Result:
-- Extensive tests in canon-route, canon-judgment, canon-semantic-state
-- High density of routing/policy tests (canon-route dominant)
-- Coverage remains fragmented (no unified invariant suite)
-
----
-
-## 5. Plan Status (Cross-Product Invariant Suite)
-
-### Already Present
-- Control harness exists
-- Constraint types exist
-- Invariant pipeline exists
-- Partial cross-product + constraint harness files exist
-
-### Missing / Incomplete (Critical Gaps)
-
-#### T_S — Seed Coverage
-- ❌ No verified cross-product seed completeness
-
-#### T_SE — Transition Closure
-- ⚠ Partial (reachability added for control only)
-- ❌ Joint closure correctness not validated
-
-#### T_C — Constraint Precedence
-- ⚠ Implementation added
-- ❌ Not fully validated in pipeline behavior
-
-#### T_I — Lifecycle
-- ❌ No verified lifecycle module (promotion-only still dominant)
-
- #### T_P — Persistence
- - ❌ No round-trip validation
- - ❌ No idempotency checks
- - ❌ persistence module missing or unverified
- 
- #### T_R — Bisimulation
- - ⚠ Hook present in pipeline
- - ❌ bisim_check currently called with empty inputs (NOOP)
- - ❌ No real trace validation occurring
+Tests are embedded in source files, not centralized.
 
 ---
 
-## 6. Critical Wiring Gaps (Updated)
+## 5. Plan Status
 
-### GAP A — bisim_check ineffective
-- Called with empty slices
-- Always returns ok=true
-- Does not validate actual system behavior
+Plan: Fix noop_spam invariant (loop_acted without action)
 
-### GAP B — joint_reachability_table unused
-- Not written to disk
-- No coverage.json produced
-- Transition closure not externally observable
-
-### GAP C — Missing tests for new modules
-- constraint_harness
-- cross_product_harness
-- invariant_lifecycle
-- persistence
-- bisimulation
-- constraint_precedence
-
----
-
-## 7. Overall Status (Revised)
-
-State: PARTIALLY IMPLEMENTED / FUNCTIONALLY INCOMPLETE
-
-Primary blockers:
-1. Lifecycle system missing (no demotion path)
-2. Persistence system missing (no round-trip / idempotency)
-3. Bisimulation ineffective (no real inputs)
-4. Cross-product correctness unverified
-5. No test coverage for new invariant subsystems
-
-#### T_R — Bisimulation
-- ⚠ Hook added in pipeline
-- ❌ No verified correctness of projections or traces
+Status summary:
+- Diagnosis: PARTIALLY VERIFIED (claims exceed evidence)
+- loop_acted guards: PARTIAL (act.rs not fully covered)
+- executor fixes: INCOMPLETE
+- PlanningCompleted invariant: NOT VERIFIED (uses planned_pending)
+- log validation: NOT VERIFIED (no artifacts)
 
 ---
 
 ## 6. Key Observations
 
-- canon-route crate exists and is heavily tested (earlier assumption incorrect)
-- invariant expansion modules now exist but several are stub/partial
-- constraint_harness uses placeholder logic (identity-like transitions)
-- cross_product_harness depends on incomplete derive_route mapping
-- pipeline wiring (bisim + conflicts) recently added but not validated
-- lifecycle + persistence subsystems remain missing or incomplete
-- system is mid-transition from structural-only invariants to full cross-product system
+### A. Core Failure Pattern
+- Act executed with empty scheduler
+- loop_acted emitted without ToolCall
+- leads to noop_spam invariant
+
+### B. Missing Enforcement
+- scheduler_len not enforced at:
+  - policy
+  - executor
+  - act stage
+
+### C. Guard Fragmentation
+- executor guard exists but weak
+- act.rs has multiple emission paths
+- no unified has_action check
+
+### D. Logging Gaps
+- no evidence of:
+  - ACT_ENTRY logs
+  - ROUTE logs
+  - invariant correlation logs
+
+### E. Runtime Signals
+- observe_noop loops present
+- llm call timeout errors
+- diagnostics_triggered events
+
+---
+
+## 7. Risks
+
+- Act can be entered without work
+- loop_acted emitted incorrectly
+- FSM transitions may regress
+- invariants enforced only at bus (too late)
+
+---
+
+## Summary
+
+System structure is modular and extensive, but invariant enforcement is inconsistent.
+
+Primary issue remains unresolved:
+Act lifecycle can execute without actionable work, producing invalid loop_acted events.
+
+Fix requires:
+- unified has_action invariant
+- scheduler-based gating (not planned_pending)
+- enforcement at policy, executor, and act stage
