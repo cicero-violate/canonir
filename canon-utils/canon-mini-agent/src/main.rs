@@ -1,17 +1,20 @@
 use anyhow::{anyhow, bail, Context, Result};
+use canon_llm::{
+    config::CapabilityConfig,
+    endpoint_worker::{llm_worker_new_tabs, llm_worker_send_request},
+    ws_server,
+};
 use canon_tools_patch::apply_patch;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, OnceLock};
 
 const WORKSPACE: &str = "/workspace/ai_sandbox/canon";
 const PLAN_FILE: &str = "PLANS/mini-agent-plan.md";
-const RELAY_ADDR: &str = "127.0.0.1:9101";
-const RELAY_ROLE: &str = "harness_repair";
-const MAX_STEPS: usize = 40;
+const WS_ADDR: &str = "127.0.0.1:9100";
+const AGENT_ROLE: &str = "mini_agent";
+const MAX_STEPS: usize = 2000;
 const MAX_READ_BYTES: usize = 16 * 1024;
 const MAX_SNIPPET: usize = 3000;
 
@@ -63,45 +66,13 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
 - Output format: exactly one JSON array in a ```json code block. No prose outside it.
 "#;
 
-// ── Relay types (mirrors canon-llm-runtime relay.rs) ──────────────────────────
-
-#[derive(Serialize)]
-struct RelayRequest {
-    role: String,
-    endpoint_id: Option<String>,
-    prompt: String,
-    role_schema: String,
-    request_tag: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RelayResponse {
-    ok: bool,
-    response: Option<String>,
-    error: Option<String>,
-}
-
-fn relay_call(addr: &str, req: &RelayRequest) -> Result<RelayResponse> {
-    let mut stream =
-        TcpStream::connect(addr).with_context(|| format!("cannot connect to relay at {addr}"))?;
-    let bytes = serde_json::to_vec(req)?;
-    stream.write_all(&bytes)?;
-    stream.shutdown(std::net::Shutdown::Write)?;
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf)?;
-    let resp: RelayResponse = serde_json::from_slice(&buf)
-        .with_context(|| format!("relay returned non-JSON: {}", String::from_utf8_lossy(&buf)))?;
-    Ok(resp)
-}
-
 // ── Action parsing ─────────────────────────────────────────────────────────────
 
 fn parse_actions(raw: &str) -> Result<Vec<Value>> {
-    // Try to extract a ```json ... ``` block first.
     if let Some(json_text) = extract_json_fence(raw) {
-        return parse_json_array(json_text).with_context(|| "fenced json block was not a valid action array");
+        return parse_json_array(json_text)
+            .with_context(|| "fenced json block was not a valid action array");
     }
-    // Fall back to treating the whole response as JSON.
     parse_json_array(raw.trim()).with_context(|| {
         format!(
             "response was not a JSON action array: {:?}",
@@ -111,9 +82,9 @@ fn parse_actions(raw: &str) -> Result<Vec<Value>> {
 }
 
 fn extract_json_fence(text: &str) -> Option<&str> {
-    let start_marker = text.find("```json").or_else(|| text.find("```JSON"))?;
-    let after_marker = start_marker + text[start_marker..].find('\n')?;
-    let rest = &text[after_marker + 1..];
+    let start = text.find("```json").or_else(|| text.find("```JSON"))?;
+    let after_newline = start + text[start..].find('\n')?;
+    let rest = &text[after_newline + 1..];
     let end = rest.find("```")?;
     Some(rest[..end].trim())
 }
@@ -125,7 +96,6 @@ fn parse_json_array(text: &str) -> Result<Vec<Value>> {
         }
         return Ok(arr);
     }
-    // Single object shorthand.
     if let Ok(obj) = serde_json::from_str::<Value>(text) {
         if obj.is_object() && obj.get("action").is_some() {
             return Ok(vec![obj]);
@@ -177,24 +147,19 @@ fn exec_run_command(workspace: &Path, cmd: &str, cwd: &str) -> Result<(bool, Str
         bail!("run_command cwd escapes workspace: {cwd}");
     }
     ensure_safe_command(cmd)?;
-
     let output = Command::new("/bin/bash")
         .arg("-lc")
         .arg(cmd)
         .current_dir(&cwd_path)
         .output()
         .with_context(|| format!("failed to spawn: {cmd}"))?;
-
-    let combined = {
-        let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
-        if !output.stderr.is_empty() {
-            if !s.is_empty() {
-                s.push('\n');
-            }
-            s.push_str(&String::from_utf8_lossy(&output.stderr));
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    if !output.stderr.is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
         }
-        s
-    };
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    }
     Ok((output.status.success(), combined))
 }
 
@@ -227,7 +192,8 @@ fn truncate(s: &str, max: usize) -> &str {
 
 // ── Main ───────────────────────────────────────────────────────────────────────
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let workspace = PathBuf::from(WORKSPACE);
 
     let plan_path = workspace.join(PLAN_FILE);
@@ -240,6 +206,32 @@ fn main() -> Result<()> {
 
     eprintln!("[canon-mini-agent] objective loaded ({} bytes)", objective.len());
 
+    // Load capability config to get endpoint details.
+    let config = CapabilityConfig::snapshot_store_load()
+        .context("failed to load capability_config.toml")?;
+
+    let endpoint = config
+        .llm_endpoints
+        .iter()
+        .find(|e| e.role.as_deref() == Some(AGENT_ROLE))
+        .ok_or_else(|| anyhow!("no endpoint with role '{AGENT_ROLE}' in capability_config.toml"))?
+        .clone();
+
+    eprintln!(
+        "[canon-mini-agent] endpoint id={} url={} stateful={} max_tabs={}",
+        endpoint.id, endpoint.url, endpoint.stateful, endpoint.max_tabs
+    );
+
+    // Start the WebSocket bridge — Chrome extension connects here.
+    let ws_addr: std::net::SocketAddr = WS_ADDR.parse()?;
+    let bridge = ws_server::spawn(ws_addr, config.response_timeout_secs, Arc::new(OnceLock::new()));
+
+    eprintln!("[canon-mini-agent] waiting for Chrome extension on ws://{WS_ADDR}");
+    bridge.wait_for_connection().await;
+    eprintln!("[canon-mini-agent] Chrome extension connected");
+
+    let tabs = llm_worker_new_tabs();
+
     let initial_prompt = format!(
         "WORKSPACE: {WORKSPACE}\n\
          All relative paths resolve against WORKSPACE.\n\
@@ -250,9 +242,14 @@ fn main() -> Result<()> {
          Emit exactly one action to begin.",
     );
 
+    let mut step = 0usize;
     let mut last_result: Option<String> = None;
 
-    for step in 0..MAX_STEPS {
+    loop {
+        if step >= MAX_STEPS {
+            break;
+        }
+
         let (role_schema, prompt) = if step == 0 {
             (SYSTEM_INSTRUCTIONS.to_string(), initial_prompt.clone())
         } else {
@@ -272,32 +269,40 @@ fn main() -> Result<()> {
             prompt.len()
         );
 
-        let req = RelayRequest {
-            role: RELAY_ROLE.to_string(),
-            endpoint_id: None,
-            prompt,
-            role_schema,
-            request_tag: Some(format!("mini-agent-{}", step + 1)),
+        let raw = match llm_worker_send_request(
+            &bridge,
+            &endpoint.id,
+            &endpoint.url,
+            endpoint.stateful,
+            &prompt,
+            &role_schema,
+            None,
+            None,
+            false,
+            true,
+            "mini_agent",
+            &tabs,
+            endpoint.max_tabs,
+            config.tab_cooldown_ms,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[canon-mini-agent] step={} llm_error: {e}", step + 1);
+                last_result = Some(format!(
+                    "LLM error: {e}\nReturn exactly one action in a ```json code block."
+                ));
+                step += 1;
+                continue;
+            }
         };
 
-        let raw = match relay_call(RELAY_ADDR, &req) {
-            Ok(resp) if resp.ok => resp.response.unwrap_or_default(),
-            Ok(resp) => {
-                let err = resp.error.unwrap_or_default();
-                eprintln!("[canon-mini-agent] step={} relay_error: {err}", step + 1);
-                last_result = Some(format!(
-                    "LLM error: {err}\nReturn exactly one action in a ```json code block."
-                ));
-                continue;
-            }
-            Err(e) => {
-                eprintln!("[canon-mini-agent] step={} relay_failure: {e}", step + 1);
-                last_result = Some(format!(
-                    "Connection error: {e}\nReturn exactly one action in a ```json code block."
-                ));
-                continue;
-            }
-        };
+        eprintln!(
+            "[canon-mini-agent] step={} response_bytes={}",
+            step + 1,
+            raw.len()
+        );
 
         let actions = match parse_actions(&raw) {
             Ok(a) => a,
@@ -307,6 +312,7 @@ fn main() -> Result<()> {
                     "Parse error: {e}\n\
                      Return exactly one action in a ```json code block. No prose outside it."
                 ));
+                step += 1;
                 continue;
             }
         };
@@ -318,6 +324,7 @@ fn main() -> Result<()> {
             );
             eprintln!("[canon-mini-agent] step={} {msg}", step + 1);
             last_result = Some(msg);
+            step += 1;
             continue;
         }
 
@@ -327,8 +334,10 @@ fn main() -> Result<()> {
 
         let step_result: Result<(bool, String)> = (|| match kind {
             "done" => {
-                let reason =
-                    action.get("reason").and_then(|v| v.as_str()).unwrap_or("objective complete");
+                let reason = action
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("objective complete");
                 Ok((true, reason.to_string()))
             }
             "list_dir" => {
@@ -344,7 +353,8 @@ fn main() -> Result<()> {
                     .get("path")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("read_file missing 'path'"))?;
-                let line = action.get("line").and_then(|v| v.as_u64()).map(|n| n as usize);
+                let line =
+                    action.get("line").and_then(|v| v.as_u64()).map(|n| n as usize);
                 let out = exec_read_file(&workspace, path, line)?;
                 eprintln!(
                     "[canon-mini-agent] step={} read_file path={path} bytes={}",
@@ -368,10 +378,12 @@ fn main() -> Result<()> {
                     .get("cmd")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| anyhow!("run_command missing 'cmd'"))?;
-                let cwd = action.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORKSPACE);
+                let cwd =
+                    action.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORKSPACE);
                 eprintln!("[canon-mini-agent] step={} run_command cmd={cmd}", step + 1);
                 let (success, out) = exec_run_command(&workspace, cmd, cwd)?;
-                let label = if success { "run_command ok" } else { "run_command failed" };
+                let label =
+                    if success { "run_command ok" } else { "run_command failed" };
                 eprintln!(
                     "[canon-mini-agent] step={} {label} output_bytes={}",
                     step + 1,
@@ -379,7 +391,12 @@ fn main() -> Result<()> {
                 );
                 Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
             }
-            other => Ok((false, format!("unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, or done"))),
+            other => Ok((
+                false,
+                format!(
+                    "unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, or done"
+                ),
+            )),
         })();
 
         match step_result {
@@ -396,6 +413,8 @@ fn main() -> Result<()> {
                 last_result = Some(format!("Error executing action: {e}"));
             }
         }
+
+        step += 1;
     }
 
     bail!("mini-agent exhausted {MAX_STEPS} steps without completing the objective")
