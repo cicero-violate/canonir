@@ -1,65 +1,19 @@
-[
-O=\text{restore deterministic loop closure},\quad S=\text{system state},\quad I=\text{invariants},\quad R=\text{routes},\quad E=\text{events}
-]
+# INTENT
+## Objective
+Break the infinite planning loop caused by LLM planner timeouts by tracking consecutive failures and routing to observe after a threshold instead of repeatedly selecting plan.
+## Constraints
+- no build break
+- no test failure
+## Targets
+- canon-utils/canon-route/src/context.rs
+- canon-utils/canon-route/src/executor.rs
+## Success Criteria
+- consecutive LLM planning failures are incremented on llm_failed or timeout and reset on successful planning
+- routing switches to observe when failures ≥ 2
+- router_disabled_fallback returns observe instead of always selecting plan
+- infinite plan → plan loop is eliminated in runtime behavior
+- agent execution progresses past repeated LLM timeout scenarios
 
-[
-\forall e\in E:\ \text{valid}(e)\land \text{successor}(e)\neq \varnothing
-]
-Every control event must have a valid successor (no missing transitions).
-
-[
-\text{loop}=\text{observe}\rightarrow\text{plan}\rightarrow\text{act}\rightarrow\text{verify}\rightarrow\text{conclude}
-]
-Loop must complete without invariant violation.
-
-[
-\text{violation}=0,\quad \text{stack_overflow}=0,\quad \text{duplicate_route}=0
-]
-Zero critical failure conditions.
-
----
-
-### **Variables**
-
-* (O): objective
-* (S): runtime state
-* (I): invariant set
-* (R): routing decisions
-* (E): event stream
-
----
-
-### **Equations + meaning**
-
-1.
-
-[
-\text{append}(e)\Rightarrow \text{valid}(e)\land \text{required_successor}(e)
-]
-No invalid append; writer never rejects.
-
-2.
-
-[
-\text{RouteSelected}\rightarrow \text{PlanningCompleted}
-]
-Fix your current failure: missing successor.
-
-3.
-
-[
-\text{no_progress}\Rightarrow \text{Plan},\quad \text{actionable}\Rightarrow \text{Act}
-]
-Deterministic routing.
-
-4.
-
-[
-\text{trace depth}<\infty
-]
-No recursion / stack overflow.
-
----
 
 ### **Agent Objective (direct)**
 
@@ -95,8 +49,4 @@ Agents should not “improve” anything — only **restore closure**:
 
 This is a **repair objective**, not a growth objective.
 
----
 
-[
-\max(\text{intelligence},\text{efficiency},\text{correctness},\text{alignment},\text{robustness},\text{performance},\text{scalability},\text{determinism},\text{transparency},\text{collaboration},\text{empowerment},\text{benefit},\text{learning},\text{future\mbox{-}proofing})=\text{good}
-]
