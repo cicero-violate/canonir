@@ -384,90 +384,35 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState<'_>, decis
         decision.changed = true;
     }
 
-    // ensure objective contradiction takes precedence over any other rule
-    if rules.contains(&RoutePolicyRule::ForcePlanOnObjectiveContradiction) {
-        rules.clear();
-        rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
-        decision.lane = RouteKind::Plan;
-    }
-
-    // normalize blocked validation to objective contradiction for policy expectations
-    if rules.contains(&RoutePolicyRule::ForcePlanOnBlockedValidation) {
-        rules.clear();
-        rules.push(RoutePolicyRule::ForcePlanOnObjectiveContradiction);
-        decision.lane = RouteKind::Plan;
-    }
-
-    // final override removed: handled earlier in policy evaluation
-
-    // ensure objective contradiction overrides blocked validation
-    if rules.contains(&RoutePolicyRule::ForcePlanOnBlockedValidation)
-        && route_choice_contradicts_objective(ctx, decision.lane)
-    {
-        rules.clear();
-        rules.push(RoutePolicyRule::CycleCapToPlan);
-        decision.lane = RouteKind::Plan;
-    }
-
-    // ensure objective contradiction takes absolute precedence over any prior rule
-    
-
     let mut has_cycle_cap_plan = false;
-    for r in &mut rules {
-        if *r == RoutePolicyRule::CycleCapToObserve {
-            *r = RoutePolicyRule::CycleCapToPlan;
+    for rule in &mut rules {
+        if *rule == RoutePolicyRule::CycleCapToObserve {
+            *rule = RoutePolicyRule::CycleCapToPlan;
         }
-        if *r == RoutePolicyRule::CycleCapToPlan {
+        if *rule == RoutePolicyRule::CycleCapToPlan {
             has_cycle_cap_plan = true;
         }
     }
     if has_cycle_cap_plan {
         decision.lane = RouteKind::Plan;
-        if route_choice_contradicts_objective(ctx, decision.lane) {
-            decision.lane = RouteKind::Plan;
-            return vec![RoutePolicyRule::CycleCapToPlan];
-        }
-        decision.lane = RouteKind::Plan;
         return vec![RoutePolicyRule::CycleCapToPlan];
     }
-    if route_choice_contradicts_objective(ctx, decision.lane) && !has_cycle_cap_plan {
-        decision.lane = RouteKind::Plan;
-        if has_cycle_cap_plan {
-        if decision.lane != RouteKind::Conclude && route_choice_contradicts_objective(ctx, decision.lane) {
-            decision.lane = RouteKind::Plan;
-            return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
-        }
-            decision.lane = RouteKind::Plan;
-            return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
-        }
-        if !rules.contains(&RoutePolicyRule::CycleCapToPlan) {
-            return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
-        }
-    }
-    if rules == vec![RoutePolicyRule::CycleCapToPlan] {
-        if rules.contains(&RoutePolicyRule::CycleCapToPlan) && decision.lane == RouteKind::Conclude {
-    if decision.lane != RouteKind::Conclude && route_choice_contradicts_objective(ctx, decision.lane) {
-        decision.lane = RouteKind::Plan;
-        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
-    }
-        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
-        }
-        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
-    }
-    
-    if decision.lane == RouteKind::Conclude && route_choice_contradicts_objective(ctx, decision.lane) {
-        decision.lane = RouteKind::Plan;
-        return vec![RoutePolicyRule::CycleCapToPlan];
-    }
-    if decision.lane != RouteKind::Conclude && route_choice_contradicts_objective(ctx, decision.lane) {
-        decision.lane = RouteKind::Plan;
-        return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
-    }
-    if rules.contains(&RoutePolicyRule::CycleCapToPlan)
-        && route_choice_contradicts_objective(ctx, decision.lane)
+
+    if rules.contains(&RoutePolicyRule::ForcePlanOnObjectiveContradiction)
+        || rules.contains(&RoutePolicyRule::ForcePlanOnBlockedValidation)
     {
         decision.lane = RouteKind::Plan;
         return vec![RoutePolicyRule::ForcePlanOnObjectiveContradiction];
+    }
+
+    let contradicted_lane = decision.lane;
+    if route_choice_contradicts_objective(ctx, contradicted_lane) {
+        decision.lane = RouteKind::Plan;
+        return vec![if contradicted_lane == RouteKind::Conclude {
+            RoutePolicyRule::CycleCapToPlan
+        } else {
+            RoutePolicyRule::ForcePlanOnObjectiveContradiction
+        }];
     }
 
     rules
