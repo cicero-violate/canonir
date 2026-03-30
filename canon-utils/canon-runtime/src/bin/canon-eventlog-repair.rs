@@ -388,7 +388,7 @@ fn classify_incident(records: &[EventRecord]) -> IncidentReport {
             "Control routing is re-emitting route_selected(plan) before the required planning_completed successor is recorded.".to_string(),
             [
                 "Inspect route executor / dispatch handoff for duplicate plan-route emission while a planning_completed successor is still pending.",
-                "Verify awaiting_control_successor or pending_required_successor suppresses repeated route_selected(plan).",
+                "Verify pending_required_successor suppresses repeated route_selected(plan).",
                 "Add a synthetic harness case that reproduces: route_selected(plan) -> route_selected(plan) before planning_completed.",
             ]
             .join("\n"),

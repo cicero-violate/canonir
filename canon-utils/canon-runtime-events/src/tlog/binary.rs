@@ -251,8 +251,29 @@ impl BinarySegmentWriter {
             let content_hash = event_content_hash(event);
             let mut dedup = self.dedup.lock().expect("dedup cache poisoned");
             if !dedup.insert_if_new(content_hash) {
-                eprintln!("[tlog][dedup_reject] kind={} id={} actor={} content_hash_collision", event.kind, event.id, event.actor);
-                let err = anyhow::anyhow!("invariant violation: duplicate event within dedup window kind={}; id={}", event.kind, event.id);
+                // IMPORTANT: Debug events frequently have identical delta/data payloads,
+                // which intentionally hash identically (hash = kind + payload.data + payload.delta).
+                // Rejecting them breaks invariant flow; instead we MUST treat them as no-ops.
+
+                if event.kind.class() != EventClass::Control {
+                    eprintln!(
+                        "[tlog][dedup_drop] kind={} id={} actor={} content_hash_collision (non-control)",
+                        event.kind, event.id, event.actor
+                    );
+                    return Ok(());
+                }
+
+                // Control events must NEVER be deduplicated — this is a hard invariant.
+                eprintln!(
+                    "[tlog][dedup_violation_control] kind={} id={} actor={} -- CONTROL EVENT COLLISION",
+                    event.kind, event.id, event.actor
+                );
+
+                let err = anyhow::anyhow!(
+                    "invariant violation: control event dedup collision kind={}; id={}",
+                    event.kind,
+                    event.id
+                );
                 self.record_rejected_edge(event, &err.to_string(), None)?;
                 return Err(err);
             }

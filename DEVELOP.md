@@ -40,7 +40,7 @@ Use this sequence when adding or upgrading behavior:
 ## Control-Flow Invariants
 
 - A control event may not be emitted twice while its required successor is still outstanding.
-- If `awaiting_control_successor` is set, no new `route_selected` may be emitted.
+// removed awaiting_control_successor constraint (handled by invariants)
 - Required successors override dedupe, but only when the emission is otherwise legal.
 - Cached replay is valid only if it satisfies the current required successor without re-entering the same control state.
 

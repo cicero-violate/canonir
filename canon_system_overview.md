@@ -177,7 +177,7 @@ It currently models:
 
 - `pending_request`
 - `pending_required_successor_route_selected`
-- `awaiting_control_successor`
+// removed awaiting_control_successor (transition authority moved to invariants)
 - `route_emitted_for_current_control`
 - `has_cached_route`
 - `cached_route_is_observe`

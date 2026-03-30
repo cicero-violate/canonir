@@ -16,7 +16,7 @@ use canon_route::{
         evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_failure, evaluate_route_recovery, evaluate_route_transition,
         latest_apply_patch_outcome, latest_run_command_outcome, latest_verify_outcome, ApplyPatchOutcomeClass, DeterministicRouteRule, RouteCacheRule, RouteCacheState,
         RouteDispatchRule, RouteDispatchState, RouteEmitEffectRule, RouteEmitRule, RouteEmitState, RouteFailureRule, RoutePolicyRule, RoutePolicyState, RouteRecoveryRule, RunCommandOutcomeClass,
-        SuccessorConsumptionRule, VerifyOutcomeClass,
+        VerifyOutcomeClass,
     },
 };
 use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticExecutionResultRecord, SemanticStateSummary};
@@ -41,7 +41,6 @@ pub enum TransitionRow {
     RouteFailure(RouteFailureRow),
     RouteEmitEffect(RouteEmitEffectRow),
     RouteRecovery(RouteRecoveryRow),
-    SuccessorConsumption(()),
     PlannerJudgment(PlannerJudgmentRow),
     PlannerObjectiveAlignment(PlannerObjectiveAlignmentRow),
     RouteObjectiveAlignment(RouteObjectiveAlignmentRow),
@@ -713,14 +712,6 @@ pub struct RouteRecoveryRow {
     pub expected_rule: RouteRecoveryRule,
 }
 
-#[derive(Clone, Debug)]
-pub struct SuccessorConsumptionRow {
-    pub name: &'static str,
-    pub family: RouteScenarioFamily,
-    pub event: RouteRowEvent,
-    pub awaiting_control_successor: Option<&'static str>,
-    pub expected_rule: SuccessorConsumptionRule,
-}
 
 #[derive(Clone, Debug)]
 pub struct RunCommandOutcomeRow {
@@ -806,7 +797,6 @@ pub fn assert_transition_rows(rows: &[TransitionRow]) {
             TransitionRow::GoalRouteObjectiveDrift(row) => assert_goal_route_objective_drift_row(row),
             TransitionRow::ContradictionEventTrend(row) => assert_contradiction_event_trend_row(row),
             TransitionRow::RouteSemanticActionability(row) => assert_route_semantic_actionability_row(row),
-            TransitionRow::SuccessorConsumption(_) => {},
         }
     }
 }
@@ -841,7 +831,6 @@ pub fn coverage_report(rows: &[TransitionRow]) -> CoverageReport {
             TransitionRow::GoalRouteObjectiveDrift(row) => push_unique(&mut report.judgment_covered, row.family),
             TransitionRow::ContradictionEventTrend(row) => push_unique(&mut report.judgment_covered, row.family),
             TransitionRow::RouteSemanticActionability(row) => push_unique(&mut report.judgment_covered, row.family),
-            TransitionRow::SuccessorConsumption(_) => {},
         }
     }
 
@@ -1197,15 +1186,6 @@ pub fn route_recovery_rows() -> Vec<RouteRecoveryRow> {
     }]
 }
 
-pub fn successor_consumption_rows() -> Vec<SuccessorConsumptionRow> {
-    vec![SuccessorConsumptionRow {
-        name: "successor_consumes_awaiting",
-        family: RouteScenarioFamily::SuccessorConsumesAwaiting,
-        event: RouteRowEvent::LoopActed { action_kind: "apply_patch" },
-        awaiting_control_successor: Some("loop_acted"),
-        expected_rule: SuccessorConsumptionRule::None,
-    }]
-}
 
 pub fn planner_judgment_rows() -> Vec<PlannerJudgmentRow> {
     let mut rows = Vec::new();
@@ -2717,7 +2697,6 @@ mod tests {
                 TransitionRow::RouteFailure(row) => row.name,
                 TransitionRow::RouteEmitEffect(row) => row.name,
                 TransitionRow::RouteRecovery(row) => row.name,
-                TransitionRow::SuccessorConsumption(_) => "successor_consumption_removed",
                 TransitionRow::PlannerJudgment(row) => row.name,
                 TransitionRow::PlannerObjectiveAlignment(row) => row.name,
                 TransitionRow::RouteObjectiveAlignment(row) => row.name,
@@ -2826,7 +2805,6 @@ mod tests {
         assert!(!route_failure_rows().is_empty());
         assert!(!route_emit_effect_rows().is_empty());
         assert!(!route_recovery_rows().is_empty());
-        assert!(!successor_consumption_rows().is_empty());
 
         assert!(!loop_transition_rows().is_empty());
         assert!(!loop_runtime_rows().is_empty());

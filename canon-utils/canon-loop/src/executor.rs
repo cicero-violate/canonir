@@ -45,14 +45,29 @@ impl LoopStageExecutor {
         let _event_kind = canon_event::event_kind_str(event);
         // removed: successor consumption (handled by invariants)
     }
-    fn emit_debug(&self, trigger_id: &EventId, kind: &str, reason: &str, payload: serde_json::Value) {
+    fn emit_debug(&mut self, trigger_id: &EventId, kind: &str, reason: &str, payload: serde_json::Value) {
         if let Some(emitter) = self.ctx.emitter.as_ref() {
-            emitter.emit_child(
-                RuntimeEvent::Debug(canon_event::DebugEvent { source: "loop_stage_executor".to_string(), kind: kind.to_string(), payload: decision_trace_payload(reason, payload) }),
-                vec![trigger_id.clone()],
-                file!(),
-                line!(),
-            );
+            let debug_payload = decision_trace_payload(reason, payload);
+            use std::hash::{Hash, Hasher};
+            use std::collections::hash_map::DefaultHasher;
+
+            let mut hasher = DefaultHasher::new();
+            debug_payload.hash(&mut hasher);
+            let debug_hash = hasher.finish();
+
+            if self.ctx.last_delta_hash.as_ref() != Some(&debug_hash) {
+                self.ctx.last_delta_hash = Some(debug_hash);
+                emitter.emit_child(
+                    RuntimeEvent::Debug(canon_event::DebugEvent {
+                        source: "loop_stage_executor".to_string(),
+                        kind: kind.to_string(),
+                        payload: debug_payload,
+                    }),
+                    vec![trigger_id.clone()],
+                    file!(),
+                    line!(),
+                );
+            }
         }
     }
 
@@ -376,28 +391,19 @@ impl LoopStageExecutor {
             )
         };
         self.ctx.last_halt_reason = Some(reason.clone());
-        if let Some(emitter) = self.ctx.emitter.as_ref() {
-            emitter.emit_child(
-                RuntimeEvent::Debug(canon_event::DebugEvent {
-                    source: "loop_stage_executor".to_string(),
-                    kind: "loop_halt_reason".to_string(),
-                    payload: decision_trace_payload(
-                        "loop entered halted state",
-                        serde_json::json!({
-                            "reason": reason,
-                            "tick": rewarded.tick,
-                            "reward": rewarded.reward,
-                            "stagnant_ticks": rewarded.stagnant_ticks,
-                            "errors_before": rewarded.errors_before,
-                            "errors_after": rewarded.errors_after,
-                        }),
-                    ),
-                }),
-                vec![trigger_id.clone()],
-                file!(),
-                line!(),
-            );
-        }
+        self.emit_debug(
+            trigger_id,
+            "loop_halt_reason",
+            "loop entered halted state",
+            serde_json::json!({
+                "reason": reason,
+                "tick": rewarded.tick,
+                "reward": rewarded.reward,
+                "stagnant_ticks": rewarded.stagnant_ticks,
+                "errors_before": rewarded.errors_before,
+                "errors_after": rewarded.errors_after,
+            }),
+        );
     }
 
     fn handle_loop_acted(&mut self, trigger_id: &EventId, acted: &canon_event::LoopActed) {
@@ -849,4 +855,3 @@ impl EventConsumer for LoopStageExecutor {
         self.execute_stage_event(&trigger_id, event)
     }
 }
-

@@ -19,7 +19,7 @@ const MAX_STEPS: usize = 2000;
 const MAX_FULL_READ_LINES: usize = 500;
 const MAX_SNIPPET: usize = 3000;
 
-const SYSTEM_INSTRUCTIONS_EXECUTOR: &str = r#"You are the canon mini-agent-executor.
+const SYSTEM_INSTRUCTIONS_EXECUTOR: &str = r#"You are the canon mini-agent.
 
 Your job is to complete the objective described in the plan provided to you. Read the plan carefully and execute it step by step.
 
@@ -81,18 +81,6 @@ Keep the rest of the plan file intact — only change the line(s) you just compl
 - Output format: exactly one JSON array in a ```json code block. No prose outside it.
 "#;
 
-const SYSTEM_INSTRUCTIONS_INTENT: &str = r#"You are the intent agent.
-
-Your job is to clarify the objective and write structured instructions into INTENT.md.
-
-Rules:
-- Only modify INTENT.md
-- Do not modify code
-- Keep instructions concise and actionable
-
-Output exactly one JSON action.
-"#;
-
 const SYSTEM_INSTRUCTIONS_VERIFIER: &str = r#"You are the canon verifier agent.
 
 Your job is to critically review PLANS/mini-agent-plan.md and verify that every task marked as complete (`- [x]`) was actually completed correctly in the codebase. Be skeptical — do not trust the status marks at face value.
@@ -128,7 +116,7 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
    {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon"}
 
 5. done — declare verification complete
-   {"action":"done","reason":"{\"verified\":false,\"summary\":\"summary of findings: N tasks verified, M incorrect or missing\"}"}
+   {"action":"done","reason":"summary of findings: N tasks verified, M incorrect or missing"}
    ⚠ done triggers cargo build --workspace then cargo test --workspace — fix any failures first.
 
 ━━━ VERIFICATION PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -145,9 +133,6 @@ For each task marked `- [x]` in the plan:
 - Do not mark anything verified unless you have read the actual code or seen passing tests.
 - Only modify PLANS/mini-agent-plan.md — never edit source files.
 - Emit exactly one action per turn.
-- When using `done`, the `reason` field must be a compact JSON object string with exactly:
-  - `verified`: boolean
-  - `summary`: string
 - Output format: exactly one JSON array in a ```json code block. No prose outside it.
 "#;
 
@@ -155,7 +140,7 @@ const SYSTEM_INSTRUCTIONS_PLANNER: &str = r#"You are the canon planner agent.
 
 Your job is to review PLANS/mini-agent-plan.md and break down any pending tasks (marked `- [ ]`) into concrete, actionable sub-steps that the executor agent can follow.
 
-You work inside the canon workspace at /workspace/ai_sandbox/canon. Use bash or git discovery commands to review the current status of the project. Things have change
+You work inside the canon workspace at /workspace/ai_sandbox/canon.
 
 Each turn you receive either:
   (a) the initial plan; or
@@ -177,7 +162,7 @@ You respond with exactly one action per turn, wrapped in a `json` code block:
    {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120}
 
 3. apply_patch — update PLANS/mini-agent-plan.md with expanded steps
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n ## Step 2 — Remove Assignment  \n ← NOT VERIFIED: assignment עדיין קיים ב-test executor\n@@\n DELETE:\n@@\n self.awaiting_control_successor = match decision.lane.as_str() { ... }\n@@\n ---\n+SUBSTEPS:\n+1. run rg -n \"awaiting_control_successor =\".\n+2. open each match and locate assignment blocks.\n+3. delete the assignment expression.\n+4. remove any dependent variables or match arms.\n+5. confirm no remaining assignment references exist.\n*** End Patch"}
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n context\n+added step\n context\n*** End Patch"}
 
 4. run_command — inspect the codebase
    {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon"}
@@ -470,13 +455,6 @@ fn truncate(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
-fn verifier_confirmed(reason: &str) -> bool {
-    match serde_json::from_str::<Value>(reason) {
-        Ok(v) => v.get("verified").and_then(|x| x.as_bool()).unwrap_or(false),
-        Err(_) => false,
-    }
-}
-
 // ── Agent loop ─────────────────────────────────────────────────────────────────
 
 /// Run one agent role until it calls `done` or exhausts MAX_STEPS.
@@ -661,6 +639,12 @@ async fn run_agent(
 
 }
 
+fn has_pending_tasks(plan: &str) -> bool {
+    plan.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with("- [ ]") || t.starts_with("* [ ]")
+    })
+}
 
 fn find_endpoint<'a>(config: &'a CapabilityConfig, role: &str) -> Result<&'a LlmEndpoint> {
     config.llm_endpoints.iter()
@@ -674,14 +658,6 @@ fn find_endpoint<'a>(config: &'a CapabilityConfig, role: &str) -> Result<&'a Llm
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let orchestrate = args.iter().any(|a| a == "--orchestrate");
-    let start_role = args
-        .windows(2)
-        .find(|w| w[0] == "--start")
-        .map(|w| w[1].as_str())
-        .unwrap_or("executor");
-    if !matches!(start_role, "executor" | "verifier" | "planner" | "intent") {
-        bail!("invalid --start value: {start_role} (expected executor|verifier|planner|intent)");
-    }
     let is_verifier  = !orchestrate && args.iter().any(|a| a == "--verifier");
     let is_planner   = !orchestrate && args.iter().any(|a| a == "--planner");
     let ws_port: u16 = args.windows(2)
@@ -705,81 +681,45 @@ async fn main() -> Result<()> {
 
     if orchestrate {
         const MAX_CYCLES: usize = 10;
-        eprintln!("[orchestrate] start_role={start_role}");
         for cycle in 0..MAX_CYCLES {
             eprintln!("[orchestrate] ── cycle {} ──────────────────────────────", cycle + 1);
-            let order: [&str; 4] = match start_role {
-                "verifier" => ["verifier", "planner", "executor", "intent"],
-                "planner" => ["planner", "executor", "verifier", "intent"],
-                "intent" => ["intent", "planner", "executor", "verifier"],
-                _ => ["executor", "verifier", "planner", "intent"],
-            };
 
-            let mut verify_result: Option<String> = None;
+            // ── Executor ──
+            let plan = std::fs::read_to_string(&plan_path)
+                .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+            let ep_exec = find_endpoint(&config, "mini_agent")?.clone();
+            eprintln!("[orchestrate] starting executor");
+            let exec_prompt = format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin."
+            );
+            let _ = run_agent("executor", SYSTEM_INSTRUCTIONS_EXECUTOR, exec_prompt, &ep_exec, &bridge, &workspace, &config, &tabs, false).await;
 
-            for role in order {
-                match role {
-                    "intent" => {
-                        let ep = find_endpoint(&config, "intent")?.clone();
-                        let prompt = format!(
-                            "Read PLANS/mini-agent-plan.md.\n\
-Extract the TRUE objective.\n\
-Write INTENT.md with EXACT structure:\n\n\
-# INTENT\n\
-## Objective\n<one sentence>\n\
-## Constraints\n- no build break\n- no test failure\n\
-## Targets\n<modules/files>\n\
-## Success Criteria\n- verifiable conditions\n\n\
-ONLY write INTENT.md using apply_patch.\n\
-DO NOT modify any other file."
-                        );
-                        let _ = run_agent("intent", SYSTEM_INSTRUCTIONS_INTENT, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
-                    }
-                    "executor" => {
-                        let plan = std::fs::read_to_string(&plan_path)
-                            .with_context(|| format!("failed to read {PLAN_FILE}"))?;
-                        let ep = find_endpoint(&config, "mini_agent")?.clone();
-                        eprintln!("[orchestrate] starting executor");
-                        let prompt = format!(
-                            "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin."
-                        );
-                        let _exec_result = run_agent("executor", SYSTEM_INSTRUCTIONS_EXECUTOR, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
-                    }
-                    "verifier" => {
-                        let plan = std::fs::read_to_string(&plan_path)
-                            .with_context(|| format!("failed to read {PLAN_FILE}"))?;
-                        let ep = find_endpoint(&config, "verifier")?.clone();
-                        eprintln!("[orchestrate] starting verifier");
-                        let prompt = format!(
-                            "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan to verify (from {PLAN_FILE}):\n{plan}\n\nBegin by reading the plan and identifying all tasks marked `- [x]`. Verify each one. Emit exactly one action to begin."
-                        );
-                        verify_result = Some(
-                            run_agent("verifier", SYSTEM_INSTRUCTIONS_VERIFIER, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?
-                        );
-                    }
-                    "planner" => {
-                        let plan_after = std::fs::read_to_string(&plan_path)
-                            .with_context(|| format!("failed to read {PLAN_FILE}"))?;
-                        let intent = std::fs::read_to_string(workspace.join("INTENT.md")).unwrap_or_default();
-                        let ep = find_endpoint(&config, "mini_planner")?.clone();
-                        eprintln!("[orchestrate] starting planner");
-                        let prompt = format!(
-                            "WORKSPACE: {WORKSPACE}\n\nINTENT:\n{intent}\n\nPLAN:\n{plan_after}\n\nExpand all pending tasks."
-                        );
-                        let _plan_result = run_agent("planner", SYSTEM_INSTRUCTIONS_PLANNER, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
-                    }
-                    _ => unreachable!("validated start role"),
-                }
-            }
+            // ── Verifier ──
+            let plan = std::fs::read_to_string(&plan_path)
+                .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+            let ep_ver = find_endpoint(&config, "verifier")?.clone();
+            eprintln!("[orchestrate] starting verifier");
+            let ver_prompt = format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan to verify (from {PLAN_FILE}):\n{plan}\n\nBegin by reading the plan and identifying all tasks marked `- [x]`. Verify each one. Emit exactly one action to begin."
+            );
+            let _ = run_agent("verifier", SYSTEM_INSTRUCTIONS_VERIFIER, ver_prompt, &ep_ver, &bridge, &workspace, &config, &tabs, false).await;
 
-            let verify_result = verify_result.unwrap_or_else(|| "{\"verified\":false,\"summary\":\"verifier did not run\"}".to_string());
-            if verifier_confirmed(&verify_result) {
-                eprintln!("[orchestrate] verifier confirms completion — done after {} cycle(s)", cycle + 1);
+            // ── Convergence check ──
+            let plan_after = std::fs::read_to_string(&plan_path)
+                .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+            if !has_pending_tasks(&plan_after) {
+                eprintln!("[orchestrate] all tasks complete after {} cycle(s) — done", cycle + 1);
                 println!("orchestrate: converged after {} cycle(s)", cycle + 1);
                 return Ok(());
             }
+            eprintln!("[orchestrate] pending tasks remain — running planner");
 
-            eprintln!("[orchestrate] verifier detected incomplete work — continuing");
+            // ── Planner ──
+            let ep_plan = find_endpoint(&config, "mini_planner")?.clone();
+            let plan_prompt = format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCurrent plan (from {PLAN_FILE}):\n{plan_after}\n\nExpand all pending tasks (`- [ ]`) into concrete, actionable steps. Emit exactly one action to begin."
+            );
+            let _ = run_agent("planner", SYSTEM_INSTRUCTIONS_PLANNER, plan_prompt, &ep_plan, &bridge, &workspace, &config, &tabs, false).await;
         }
         bail!("orchestrate: did not converge after {MAX_CYCLES} cycles");
     } else {

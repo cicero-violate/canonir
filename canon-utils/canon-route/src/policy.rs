@@ -99,9 +99,6 @@ pub enum RouteRecoveryRule {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SuccessorConsumptionRule {
-    None,
-}
 
 pub struct RoutePolicyState {}
 
@@ -205,10 +202,6 @@ pub struct RouteRecoveryEvaluation {
     pub expected_successor: Option<String>,
 }
 
-pub struct SuccessorConsumptionEvaluation {
-    pub rule: SuccessorConsumptionRule,
-    pub clear_awaiting_control_successor: bool,
-}
 
 impl RoutePolicyRule {
     pub fn note(self) -> &'static str {
@@ -861,23 +854,7 @@ pub fn evaluate_route_recovery(pending_required_successor: Option<&str>) -> Rout
     }
 }
 
-pub fn evaluate_successor_consumption(event: &RuntimeEvent, awaiting_control_successor: Option<&str>) -> SuccessorConsumptionEvaluation {
-    let matched = match event {
-        RuntimeEvent::LoopObserved(_) => Some("loop_observed"),
-        RuntimeEvent::PlanningCompleted(_) => Some("planning_completed"),
-        RuntimeEvent::LoopActed(_) => Some("loop_acted"),
-        RuntimeEvent::LoopVerified(_) => Some("loop_verified"),
-        RuntimeEvent::VerifierPolicyUpdated(_) => Some("verifier_policy_updated"),
-        RuntimeEvent::LoopRewarded(_) => Some("loop_rewarded"),
-        _ => None,
-    };
-
-    if matched.is_some() && matched == awaiting_control_successor {
-        SuccessorConsumptionEvaluation { rule: SuccessorConsumptionRule::None, clear_awaiting_control_successor: false }
-    } else {
-        SuccessorConsumptionEvaluation { rule: SuccessorConsumptionRule::None, clear_awaiting_control_successor: false }
-    }
-}
+// removed evaluate_successor_consumption
 
 pub fn evaluate_route_transition(ctx: &RouteContext, _state: RoutePolicyState, event: Option<&RuntimeEvent>, decision: Option<&RouteDecision>) -> RouteTransitionEvaluation {
     let deterministic = event.and_then(|e| deterministic_route_for_event(ctx, e));

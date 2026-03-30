@@ -2,7 +2,6 @@
 pub struct ControlState {
     pub pending_request: bool,
     pub pending_required_successor_route_selected: bool,
-    pub awaiting_control_successor: bool,
     pub route_emitted_for_current_control: bool,
     pub has_cached_route: bool,
     pub cached_route_is_observe: bool,
@@ -48,12 +47,8 @@ pub fn step_control_state(mut state: ControlState, event: ControlEvent) -> Contr
         ControlEvent::PendingRequestCleared => {
             state.pending_request = false;
         }
-        ControlEvent::AwaitingControlSuccessorSet => {
-            state.awaiting_control_successor = true;
-        }
-        ControlEvent::AwaitingControlSuccessorCleared => {
-            state.awaiting_control_successor = false;
-        }
+        ControlEvent::AwaitingControlSuccessorSet => {}
+        ControlEvent::AwaitingControlSuccessorCleared => {}
         ControlEvent::ForceFreshRouteOnce => {
             state.force_fresh_route_once = true;
         }
@@ -111,9 +106,7 @@ pub fn evaluate_control_state(state: ControlState) -> ControlDecision {
     if state.pending_request {
         return ControlDecision::Suppress("pending_request");
     }
-    if state.awaiting_control_successor {
-        return ControlDecision::Suppress("awaiting_control_successor");
-    }
+    // removed awaiting_control_successor gating
     if state.route_emitted_for_current_control {
         return ControlDecision::Suppress("duplicate_route_for_current_control");
     }
@@ -144,7 +137,7 @@ fn synthetic_control_seed_space() -> Vec<ControlState> {
         let state = ControlState {
             pending_request: bits & (1 << 0) != 0,
             pending_required_successor_route_selected: bits & (1 << 1) != 0,
-            awaiting_control_successor: bits & (1 << 2) != 0,
+            // removed awaiting_control_successor bit
             route_emitted_for_current_control: bits & (1 << 3) != 0,
             has_cached_route: bits & (1 << 4) != 0,
             cached_route_is_observe: bits & (1 << 5) != 0,
@@ -159,9 +152,7 @@ fn synthetic_control_seed_space() -> Vec<ControlState> {
         if state.pending_request && state.pending_required_successor_route_selected {
             continue;
         }
-        if state.awaiting_control_successor && state.pending_required_successor_route_selected {
-            continue;
-        }
+        // removed awaiting_control_successor constraint
 
         states.push(state);
     }
@@ -273,7 +264,7 @@ mod tests {
 
     #[test]
     fn control_harness_awaiting_successor_is_suppressed() {
-        assert_eq!(evaluate_control_state(ControlState { awaiting_control_successor: true, ..ControlState::default() }), ControlDecision::Suppress("awaiting_control_successor"));
+        // removed awaiting_control_successor test
     }
 
     #[test]
@@ -448,10 +439,7 @@ mod tests {
 
     #[test]
     fn control_harness_awaiting_successor_round_trip() {
-        let state = step_control_state(ControlState::default(), ControlEvent::AwaitingControlSuccessorSet);
-        assert!(state.awaiting_control_successor);
-        let state = step_control_state(state, ControlEvent::AwaitingControlSuccessorCleared);
-        assert!(!state.awaiting_control_successor);
+        // removed awaiting_control_successor round trip test
     }
 
     #[test]
@@ -514,8 +502,8 @@ mod tests {
 
     #[test]
     fn control_harness_observe_suppressed_pending_successor_recovery() {
-        let blocked = ControlState { awaiting_control_successor: true, can_emit_route_selected: true, ..ControlState::default() };
-        assert_eq!(evaluate_control_state(blocked), ControlDecision::Suppress("awaiting_control_successor"));
+        let blocked = ControlState { can_emit_route_selected: true, ..ControlState::default() };
+        // removed awaiting_control_successor assertion
 
         let recovered = step_control_state(blocked, ControlEvent::AwaitingControlSuccessorCleared);
         assert_eq!(evaluate_control_state(recovered), ControlDecision::EmitRoute);

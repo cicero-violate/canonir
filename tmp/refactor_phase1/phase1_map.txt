@@ -889,7 +889,7 @@
 17-    policy::{
 18:        apply_route_policy, evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit,
 19:        evaluate_route_emit_effects, evaluate_route_event_dispatch, evaluate_route_failure,
-20:        evaluate_route_recovery, evaluate_route_transition, evaluate_successor_consumption,
+20:        evaluate_route_recovery, evaluate_route_transition,
 21-        DeterministicRouteDecision, RouteCacheRule, RouteCacheState, RouteDispatchState,
 22-        RouteEmitRule, RouteEmitState, RouteEventDispatchRule, RoutePolicyState,
 23-        RoutePolicyRule,
@@ -1002,7 +1002,7 @@
 392-    }
 393-
 394-    fn emit_route_stall(&self, emitter: &EventEmitterHandle, trigger_id: EventId, reason: &str) {
-395:        if self.pending_request_id.is_some() || self.awaiting_control_successor.is_some() {
+395:        if self.pending_request_id.is_some() {
 396-            return;
 397-        }
 398-        emitter.emit_child(
@@ -1028,7 +1028,6 @@
 484-                "last_control_kind": self.last_control_kind,
 485:                "pending_required_successor": self.pending_required_successor,
 486-                "verify_seen": self.ctx.verify_seen,
-487:                "awaiting_control_successor": self.awaiting_control_successor,
 488-            }),
 489-        ))
 490-    }
@@ -1036,9 +1035,6 @@
 659-            return EventOutcome::NoOp("verifier_sequence_invariant_violation");
 660-        }
 661-        let successor_eval =
-662:            evaluate_successor_consumption(event, self.awaiting_control_successor.as_deref());
-663:        if successor_eval.clear_awaiting_control_successor {
-664:            self.awaiting_control_successor = None;
 665-        }
 666-        self.ctx.update_from_event(event, &self.workspace);
 667-        self.record_control_state(event, &trigger_id);
@@ -1078,7 +1074,6 @@
 842-        self.last_route_prompt_hash = Some(hash_str(&decision.prompt));
 843-        self.last_route_selected = Some(route_payload.clone());
 844-        let tid = self.current_trigger.clone().expect("emit_route_selected_from_decision called without current_trigger set");
-845:        self.awaiting_control_successor = match decision.lane.as_str() {
 846-            "observe" => Some("loop_observed".to_string()),
 847-            "plan" => Some("planning_completed".to_string()),
 848-            "act" => Some("loop_acted".to_string()),
