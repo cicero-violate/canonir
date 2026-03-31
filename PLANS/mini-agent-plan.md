@@ -175,3 +175,221 @@ but
 [
 \max(\text{intelligence, efficiency, correctness, alignment}) = \text{good}
 ]
+
+[
+D = f(C) \rightarrow L
+]
+
+**Variables**
+[
+D=\text{decision},\quad C=\text{ConstraintState},\quad L=\text{location},\quad M=\text{module}
+]
+
+**Equations**
+
+* (L_{decision} = 1) — single canonical location
+* (M \Rightarrow consume(D)) — modules do not decide
+* (Violation \Rightarrow D \notin L)
+
+---
+
+# Canonical Locations
+
+## 1. Decision Engine (ONLY place decisions live)
+
+**File**
+
+* `canon-invariant/src/lib.rs`
+
+**Responsibility**
+
+* Define `ConstraintState`
+* Define `Decision`
+* Implement:
+
+```rust
+fn decide(state: ConstraintState) -> Decision
+```
+
+---
+
+## 2. Constraint Construction
+
+**Files**
+
+* `canon-loop/src/context.rs`
+* `canon-loop/src/env_model.rs`
+* `canon-semantic-state/src/lib.rs`
+
+**Responsibility**
+
+* Build `ConstraintState`
+* NO branching into actions
+* Only collect facts
+
+---
+
+## 3. Route Execution (Consumer ONLY)
+
+**File**
+
+* `canon-route/src/executor.rs`
+
+**Responsibility**
+
+```rust
+let decision = decide(state);
+emit_route(decision);
+```
+
+❌ Forbidden:
+
+* `if scheduler.len() > 0`
+* `if planned_pending`
+* any routing logic
+
+---
+
+## 4. Route Policy (REMOVE decision logic)
+
+**File**
+
+* `canon-route/src/policy.rs`
+
+**Responsibility**
+
+* Should be **thin or deleted**
+* Only mapping / normalization if needed
+
+❌ Forbidden:
+
+* `if validation_blocked`
+* `if missing_target`
+* `if actionable_failure`
+
+---
+
+## 5. Planner (Executor of Plan ONLY)
+
+**File**
+
+* `canon-loop/src/stage/plan.rs`
+
+**Responsibility**
+
+```rust
+if decision == Decision::Plan {
+    generate_plan();
+}
+```
+
+❌ Forbidden:
+
+* deciding whether to plan
+
+---
+
+## 6. Act Stage (Execution ONLY)
+
+**File**
+
+* `canon-loop/src/stage/act.rs`
+
+**Responsibility**
+
+```rust
+if decision == Decision::Act {
+    execute_tools();
+}
+```
+
+❌ Forbidden:
+
+* `if scheduler.len() > 0`
+* any gating logic
+
+---
+
+## 7. Verify Stage
+
+**File**
+
+* `canon-loop/src/stage/verify.rs`
+
+**Responsibility**
+
+```rust
+if decision == Decision::Verify {
+    run_verifier();
+}
+```
+
+---
+
+## 8. Runtime Invariants (Transition legality ONLY)
+
+**Files**
+
+* `canon-runtime-events/src/invariants.rs`
+* `canon-runtime-events/src/tlog/binary.rs`
+
+**Responsibility**
+
+* Validate transitions
+
+```rust
+(prev, next) -> bool
+```
+
+❌ Forbidden:
+
+* deciding what next should be
+
+---
+
+## 9. Supervisor (Optional orchestration)
+
+**Files**
+
+* `canon-runtime-supervisor/src/*.rs`
+
+**Responsibility**
+
+* MAY call `decide`
+* MUST NOT override it
+
+---
+
+# Global Rule
+
+[
+\boxed{
+\text{Decision logic exists only in } canon\text{-}invariant/src/lib.rs
+}
+]
+
+---
+
+# Anti-Pattern Map
+
+| File                                       | Problem                      |
+| ------------------------------------------ | ---------------------------- |
+| `canon-route/src/policy.rs`                | duplicated routing decisions |
+| `canon-route/src/executor.rs`              | local Act gating             |
+| `canon-loop/src/planning_preconditions.rs` | hidden decision logic        |
+| `canon-loop/src/stage/plan.rs`             | planning decision leakage    |
+| `canon-runtime/src/bin/harness_repair.rs`  | test-time decision overrides |
+
+---
+
+# Final Structure
+
+[
+\text{State} \rightarrow \textbf{canon-invariant} \rightarrow \text{Decision} \rightarrow \text{Execution}
+]
+
+---
+
+[
+\max(\text{intelligence, efficiency, correctness, alignment}) = \text{good}
+]
