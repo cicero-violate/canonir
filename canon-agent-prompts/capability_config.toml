@@ -105,10 +105,10 @@ stateful = true
 max_tabs = 1
 
 [[llm.endpoints]]
-id = "discovery_chatgpt"
+id = "diagnostics_chatgpt"
 url = "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118"
 role_markdown = "builtin:planner"
-role = "discovery"
+role = "diagnostics"
 stateful = true
 max_tabs = 1
 
@@ -283,10 +283,10 @@ harness_eventlog_chatgpt = 100
 [llm.roles.harness_eventlog]
 burst = 1
 
-[llm.roles.discovery.weights]
-discovery_chatgpt = 100
+[llm.roles.diagnostics.weights]
+diagnostics_chatgpt = 100
 
-[llm.roles.discovery]
+[llm.roles.diagnostics]
 burst = 1
 
 [llm.roles.exec.weights]
@@ -390,7 +390,7 @@ tool_capabilities = ["apply_patch", "bash"]
 
 [[agents.cards]]
 agent_url = "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118"
-agent_id = "discovery"
+agent_id = "diagnostics"
 role = "builtin:planner"
 goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
+tool_capabilities = ["apply_patch", "bash", "python"]

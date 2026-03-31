@@ -154,6 +154,8 @@ impl Gatekeeper {
         // overwrites `lane` and appends a note. Later rules can further refine.
         // Action mapping: scan/repair/block→observe  shape/replan/explore→plan
         //                 validate/checkpoint→verify  execute→act
+        // Decision logic removed: routing must be centralized in canon-invariant
+        // Keep binding to avoid compile errors, but do not rely on it for routing
         if let Some(s) = &signals.llm_signals {
             // ── CRITICAL: universal blockers (fire regardless of current lane) ──
 

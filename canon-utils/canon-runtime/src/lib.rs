@@ -65,6 +65,8 @@ pub struct EventRuntime {
     last_kind_hash: HashMap<canon_event::EventKind, u64>,
     /// Per-kind id of the last written event; set as `prev_event_id` on the next write.
     last_event_id_per_kind: HashMap<canon_event::EventKind, canon_event::EventId>,
+    /// Most recently written event id across all kinds; used to parent corrective violations.
+    last_written_event_id: Option<canon_event::EventId>,
     invariant_engine: InvariantEngine,
     mode: RuntimeMode,
 }
@@ -96,6 +98,7 @@ impl EventRuntime {
             dispatched_ids: HashSet::new(),
             last_kind_hash: HashMap::new(),
             last_event_id_per_kind: HashMap::new(),
+            last_written_event_id: None,
             invariant_engine: InvariantEngine::new(),
             mode: RuntimeMode::Running,
         }
@@ -148,6 +151,7 @@ impl EventRuntime {
         self.dispatched_ids.clear();
         self.last_kind_hash.clear();
         self.last_event_id_per_kind.clear();
+        self.last_written_event_id = None;
         self.mode = RuntimeMode::Running;
     }
 
@@ -573,7 +577,8 @@ impl EventRuntime {
                 if !matches!(event, RuntimeEvent::Code(_)) {
                     let recovery = RuntimeEvent::Code(Code { delta: invariant_violation_delta(err), state: invariant_violation_state() });
                     let recovery_id = canon_event::EventId::new(canon_event::new_event_id());
-                    self.append_runtime_event(&recovery, file, line, Vec::new(), recovery_id);
+                    let recovery_parents = self.last_written_event_id.clone().into_iter().collect();
+                    self.append_runtime_event(&recovery, file, line, recovery_parents, recovery_id);
                 }
                 return;
             }
@@ -613,6 +618,7 @@ impl EventRuntime {
         // Set the per-kind causal chain pointer before writing, then advance the cursor.
         wire.prev_event_id = self.last_event_id_per_kind.get(&wire.kind).cloned();
         self.last_event_id_per_kind.insert(wire.kind, wire.id.clone());
+        self.last_written_event_id = Some(wire.id.clone());
 
         if is_segment_dir_path(&path) {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
@@ -725,8 +731,6 @@ fn runtime_event_to_wire(
         canon_event::EventKind::AgentRegistered,
         canon_event::EventKind::SystemConfigLoaded,
         canon_event::EventKind::RuntimeStarted,
-        canon_event::EventKind::Debug,
-        canon_event::EventKind::Code,
     ];
     let root = ROOT_KINDS.contains(&kind);
     if parent_ids.is_empty() && !root {

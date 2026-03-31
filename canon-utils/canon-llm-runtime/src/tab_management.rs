@@ -41,11 +41,24 @@ pub async fn tab_manager_get_or_open_tab(bridge: &WsBridge, endpoint_id: &str, u
     Ok(id)
 }
 pub async fn tab_manager_get_owner_tab(endpoint_id: &str, tabs: &TabManagerHandle) -> Option<u32> {
-    let mut tabs = tabs.lock().await;
-    let id = tabs.owner.get(endpoint_id).copied()?;
-    let meta = tabs.meta.entry(id).or_default();
-    meta.in_flight = true;
-    Some(id)
+    loop {
+        let wait_ms = {
+            let mut tabs = tabs.lock().await;
+            let id = tabs.owner.get(endpoint_id).copied()?;
+            let meta = tabs.meta.entry(id).or_default();
+            let now = tab_manager_now_ms();
+            let cooldown_until = meta.cooldown_until_ms.unwrap_or(0);
+            if cooldown_until > now {
+                Some((id, cooldown_until.saturating_sub(now) as u64))
+            } else {
+                meta.in_flight = true;
+                return Some(id);
+            }
+        };
+        let (id, delay_ms) = wait_ms?;
+        tab_manager_log_llm(format!("endpoint={} tab={} cooldown_wait_ms={}", endpoint_id, id, delay_ms));
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+    }
 }
 pub async fn tab_manager_set_tab_id(endpoint_id: &str, id: u32, tabs: &TabManagerHandle, _max_tabs: usize) {
     let mut tabs = tabs.lock().await;

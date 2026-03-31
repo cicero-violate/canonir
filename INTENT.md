@@ -1,6 +1,6 @@
 # INTENT
 ## Objective
-Prevent illegal Act transitions and empty-scheduler execution to restore a valid observe→plan→act→verify loop.
+Prevent Act-stage execution with an empty scheduler and block illegal Act → classifying transitions to restore a valid observe→plan→act→verify loop.
 ## Constraints
 - no build break
 - no test failure
@@ -9,9 +9,9 @@ Prevent illegal Act transitions and empty-scheduler execution to restore a valid
 - canon-utils/canon-loop/src/stage/act.rs
 - canon-utils/canon-runtime/src/bus.rs
 ## Success Criteria
-- Act is never selected when scheduler_len == 0
+- Act is only selected when scheduler_len > 0
 - act_stall never transitions to classifying
-- illegal Act → classifying transitions are blocked
-- PlanningCompleted only occurs when actionable steps exist
+- Act → classifying transitions are explicitly guarded and blocked
+- PlanningCompleted is emitted only when executable actions exist
 - no repeated noop or PlanningCompleted loops without progress
-- runtime logs show stable observe→plan→act→verify progression
+- runtime logs confirm Observe → Plan → Act → ToolCall → ToolResult → Verify sequence without stalls

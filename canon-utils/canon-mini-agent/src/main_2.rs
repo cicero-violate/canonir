@@ -649,69 +649,6 @@ fn action_rationale(action: &Value) -> Option<&str> {
     action.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
 }
 
-fn default_rationale(kind: &str) -> &'static str {
-    match kind {
-        "list_dir" => "Inspect the workspace before making assumptions.",
-        "read_file" => "Read the current file contents before acting on them.",
-        "apply_patch" => "Apply the concrete change after gathering enough context.",
-        "run_command" => "Run a command to inspect or verify the current state.",
-        "python" => "Use Python for structured analysis that is awkward in shell.",
-        "done" => "The required work appears complete and ready for final checks.",
-        _ => "Take the next most justified step based on the available evidence.",
-    }
-}
-
-fn normalize_action(action: &mut Value) -> Result<()> {
-    let obj = action
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
-    let kind = obj
-        .get("action")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("action missing 'action'"))?
-        .to_string();
-    if obj.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).is_none() {
-        obj.insert("rationale".to_string(), Value::String(default_rationale(&kind).to_string()));
-    }
-    if kind == "done" && obj.get("reason").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).is_none() {
-        return Err(anyhow!("done missing 'reason'"));
-    }
-    Ok(())
-}
-
-fn validate_action(action: &Value) -> Result<()> {
-    let obj = action
-        .as_object()
-        .ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
-    let kind = obj
-        .get("action")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("action missing 'action'"))?;
-    let rationale = obj
-        .get("rationale")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("action missing non-empty 'rationale'"))?;
-    let _ = rationale;
-    if kind == "done" {
-        obj.get("reason")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow!("done missing non-empty 'reason'"))?;
-    }
-    Ok(())
-}
-
-fn is_explicit_idle_action(action: &Value) -> bool {
-    if action.get("action").and_then(|v| v.as_str()) != Some("run_command") {
-        return false;
-    }
-    let cmd = action.get("cmd").and_then(|v| v.as_str()).unwrap_or("").trim();
-    matches!(cmd, "echo idle" | "echo \"idle\"" | "true" | ":")
-}
-
 fn action_command_summary(action: &Value) -> String {
     let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown");
     match kind {
@@ -784,7 +721,6 @@ async fn run_agent(
     let mut step = 0usize;
     let mut last_result: Option<String> = None;
     let mut diagnostics_eventlog_python_done = false;
-    let mut idle_streak = 0usize;
 
     loop {
         if step >= MAX_STEPS {
@@ -834,30 +770,25 @@ async fn run_agent(
             continue;
         }
 
-        let mut action = actions[0].clone();
-        if let Err(e) = normalize_action(&mut action) {
-            last_result = Some(format!(
-                "Invalid action: {e}\nReturn exactly one action with a non-empty `rationale` and any required fields."
-            ));
-            step += 1;
-            continue;
-        }
-        if let Err(e) = validate_action(&action) {
-            last_result = Some(format!(
-                "Invalid action: {e}\nReturn exactly one action with a non-empty `rationale` and any required fields."
-            ));
-            step += 1;
-            continue;
-        }
+        let action = &actions[0];
         let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown");
         eprintln!("[{role}] step={} action={kind}", step + 1);
 
-        if let Err(e) = append_action_log(role, &action) {
+        if action_rationale(action).is_none() {
+            last_result = Some(
+                "Every action must include a non-empty `rationale` string explaining why this is the next best step."
+                    .to_string(),
+            );
+            step += 1;
+            continue;
+        }
+
+        if let Err(e) = append_action_log(role, action) {
             eprintln!("[{role}] step={} action_log_error: {e}", step + 1);
         }
 
         if role == "diagnostics" && !diagnostics_eventlog_python_done {
-            if diagnostics_python_reads_event_logs(&action) {
+            if diagnostics_python_reads_event_logs(action) {
                 diagnostics_eventlog_python_done = true;
             } else if step == 0 {
                 last_result = Some(
@@ -874,15 +805,6 @@ async fn run_agent(
                 step += 1;
                 continue;
             }
-        }
-
-        if is_explicit_idle_action(&action) {
-            idle_streak += 1;
-            if idle_streak >= 3 {
-                bail!("[{role}] stuck: no progress in 3 steps (repeated explicit idle commands)");
-            }
-        } else {
-            idle_streak = 0;
         }
 
         let step_result: Result<(bool, String)> = (|| match kind {

@@ -49,7 +49,7 @@ fn dispatch_capability_done(c: CapabilityCompleted, ctx: &mut LoopContext, trigg
                     "pending_act": ctx.pending_act.is_some(),
                 }),
             }),
-            vec![],
+            vec![trigger_id.clone()],
             file!(),
             line!(),
         );

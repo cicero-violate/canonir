@@ -6,7 +6,7 @@ use super::tab_management::{
 
 pub use super::tab_management::{tab_manager_log_llm, tab_manager_now_ms, TabManagerHandle};
 use crate::llm_domains::{is_chatgpt_url, is_gemini_url};
-use crate::ws_server::WsBridge;
+use crate::ws_server::{WsBridge, WsBridgeError};
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -73,84 +73,116 @@ impl LlmWorker {
         let _ = req.response.send(result);
     }
     async fn send_turn(&mut self, phase: &str, req_id: u64, allow_req_id_mismatch: bool, prompt: String, role_schema: String) -> Result<String> {
-        let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
+        const MAX_SEND_ATTEMPTS: usize = 2;
+        for attempt in 0..MAX_SEND_ATTEMPTS {
+            let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
 
-        // For stateful endpoints, send the role/system prompt only on the first
-        // turn to this tab; all subsequent turns carry only the user prompt.
-        // For non-stateful endpoints the role_schema is always prepended (each
-        // call starts a fresh context).
-        let include_role = !role_schema.trim().is_empty() && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
-        let raw_prompt = if include_role { format!("{}\n\n{}", role_schema.trim_end(), prompt) } else { prompt };
-        let full_prompt = if raw_prompt.len() > 120_000 {
-            // Walk back from byte 120_000 to the nearest valid char boundary.
-            let mut safe = 120_000usize;
-            while safe > 0 && !raw_prompt.is_char_boundary(safe) {
-                safe -= 1;
-            }
-            let cut = raw_prompt[..safe].rfind('\n').unwrap_or(safe);
-            let mut s = raw_prompt[..cut].to_string();
-            s.push_str("\n... [prompt truncated]\n");
-            s
-        } else {
-            raw_prompt
-        };
+            // For stateful endpoints, send the role/system prompt only on the first
+            // turn to this tab; all subsequent turns carry only the user prompt.
+            // For non-stateful endpoints the role_schema is always prepended (each
+            // call starts a fresh context).
+            let include_role = !role_schema.trim().is_empty() && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
+            let raw_prompt = if include_role {
+                format!("{}\n\n{}", role_schema.trim_end(), prompt)
+            } else {
+                prompt.clone()
+            };
+            let full_prompt = if raw_prompt.len() > 120_000 {
+                // Walk back from byte 120_000 to the nearest valid char boundary.
+                let mut safe = 120_000usize;
+                while safe > 0 && !raw_prompt.is_char_boundary(safe) {
+                    safe -= 1;
+                }
+                let cut = raw_prompt[..safe].rfind('\n').unwrap_or(safe);
+                let mut s = raw_prompt[..cut].to_string();
+                s.push_str("\n... [prompt truncated]\n");
+                s
+            } else {
+                raw_prompt
+            };
 
-        tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
-        tab_manager_log_llm(format!("phase={} endpoint={} tab={} send", phase, self.endpoint_id, tab_id));
-        let raw = match self.bridge.send_turn(tab_id, &self.url, full_prompt).await {
-            Ok(v) => v,
-            Err(e) => {
-                tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
-                tab_manager_drop_tab(&self.tabs, &self.endpoint_id, tab_id).await;
-                // Tab is gone — clear role_sent so the next fresh tab gets the role_schema again.
-                self.tabs_with_role_sent.remove(&tab_id);
-                tab_manager_log_llm(format!("phase={} endpoint={} tab={} send_error={}", phase, self.endpoint_id, tab_id, e));
-                return Err(anyhow::anyhow!("llm send_turn error: {e}"));
-            }
-        };
-        tab_manager_mark_tab_response(&self.tabs, tab_id).await;
-        tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
-        tab_manager_log_llm(format!("phase={} endpoint={} tab={} response_ok bytes={}", phase, self.endpoint_id, tab_id, raw.len()));
-        if !llm_worker_response_matches_req_id(&raw, req_id) {
-            tab_manager_log_llm(format!("phase={} endpoint={} tab={} req_id_mismatch expected={}", phase, self.endpoint_id, tab_id, req_id));
-            if !allow_req_id_mismatch {
-                return Err(anyhow::anyhow!("req_id mismatch"));
-            }
-            tab_manager_log_llm(format!("phase={} endpoint={} tab={} req_id_mismatch_accepted", phase, self.endpoint_id, tab_id));
-        }
-        let _ = response_router::response_router_resolve(req_id).await;
-        if !self.stateful && is_gemini_url(&self.url) {
-            let _ = self.bridge.new_chat(tab_id).await;
-            match self.bridge.wait_new_chat(tab_id, 20).await {
-                Ok(()) => tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, self.endpoint_id, tab_id)),
+            tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
+            tab_manager_log_llm(format!(
+                "phase={} endpoint={} tab={} send attempt={}",
+                phase,
+                self.endpoint_id,
+                tab_id,
+                attempt + 1
+            ));
+            let raw = match self.bridge.send_turn(tab_id, &self.url, full_prompt).await {
+                Ok(v) => v,
                 Err(e) => {
-                    tab_manager_mark_tab_in_flight(&self.tabs, tab_id, true).await;
-                    tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, self.endpoint_id, tab_id, e));
-                    return Err(anyhow::anyhow!("new_chat timeout"));
+                    tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
+                    tab_manager_drop_tab(&self.tabs, &self.endpoint_id, tab_id).await;
+                    self.tabs_with_role_sent.remove(&tab_id);
+                    let _ = self.bridge.close_tab(tab_id).await;
+                    tab_manager_log_llm(format!(
+                        "phase={} endpoint={} tab={} send_error={} attempt={}",
+                        phase,
+                        self.endpoint_id,
+                        tab_id,
+                        e,
+                        attempt + 1
+                    ));
+                    if should_retry_send_turn(&e) && attempt + 1 < MAX_SEND_ATTEMPTS {
+                        tab_manager_log_llm(format!(
+                            "phase={} endpoint={} retrying_fresh_tab_after_error={}",
+                            phase, self.endpoint_id, e
+                        ));
+                        continue;
+                    }
+                    return Err(anyhow::anyhow!("llm send_turn error: {e}"));
                 }
-            }
-        } else if !self.stateful && is_chatgpt_url(&self.url) {
-            let _ = self.bridge.new_chat(tab_id).await;
-            match self.bridge.wait_new_chat(tab_id, 20).await {
-                Ok(()) => tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, self.endpoint_id, tab_id)),
-                Err(e) => {
-                    tab_manager_mark_tab_in_flight(&self.tabs, tab_id, true).await;
-                    tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, self.endpoint_id, tab_id, e));
-                    return Err(anyhow::anyhow!("new_chat timeout"));
+            };
+            tab_manager_mark_tab_response(&self.tabs, tab_id).await;
+            tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
+            tab_manager_log_llm(format!("phase={} endpoint={} tab={} response_ok bytes={}", phase, self.endpoint_id, tab_id, raw.len()));
+            if !llm_worker_response_matches_req_id(&raw, req_id) {
+                tab_manager_log_llm(format!("phase={} endpoint={} tab={} req_id_mismatch expected={}", phase, self.endpoint_id, tab_id, req_id));
+                if !allow_req_id_mismatch {
+                    return Err(anyhow::anyhow!("req_id mismatch"));
                 }
+                tab_manager_log_llm(format!("phase={} endpoint={} tab={} req_id_mismatch_accepted", phase, self.endpoint_id, tab_id));
             }
-            // temp_chat removed: redirect to temporary-chat UI races with prompt injection.
+            let _ = response_router::response_router_resolve(req_id).await;
+            if !self.stateful && is_gemini_url(&self.url) {
+                let _ = self.bridge.new_chat(tab_id).await;
+                match self.bridge.wait_new_chat(tab_id, 20).await {
+                    Ok(()) => tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, self.endpoint_id, tab_id)),
+                    Err(e) => {
+                        tab_manager_mark_tab_in_flight(&self.tabs, tab_id, true).await;
+                        tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, self.endpoint_id, tab_id, e));
+                        return Err(anyhow::anyhow!("new_chat timeout"));
+                    }
+                }
+            } else if !self.stateful && is_chatgpt_url(&self.url) {
+                let _ = self.bridge.new_chat(tab_id).await;
+                match self.bridge.wait_new_chat(tab_id, 20).await {
+                    Ok(()) => tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, self.endpoint_id, tab_id)),
+                    Err(e) => {
+                        tab_manager_mark_tab_in_flight(&self.tabs, tab_id, true).await;
+                        tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_timeout={}", phase, self.endpoint_id, tab_id, e));
+                        return Err(anyhow::anyhow!("new_chat timeout"));
+                    }
+                }
+                // temp_chat removed: redirect to temporary-chat UI races with prompt injection.
+            }
+            if self.tab_cooldown_ms > 0 {
+                tab_manager_mark_tab_cooldown(&self.tabs, tab_id, self.tab_cooldown_ms).await;
+            }
+            let hash = llm_worker_stable_hash64(&raw);
+            if !self.seen_hashes.insert(hash) {
+                // Duplicate outputs can legitimately occur for verify/observe steps; don't fail the call.
+                tab_manager_log_llm(format!("phase={} endpoint={} tab={} duplicate_hash={}", phase, self.endpoint_id, tab_id, hash));
+            }
+            return Ok(raw);
         }
-        if self.tab_cooldown_ms > 0 {
-            tab_manager_mark_tab_cooldown(&self.tabs, tab_id, self.tab_cooldown_ms).await;
-        }
-        let hash = llm_worker_stable_hash64(&raw);
-        if !self.seen_hashes.insert(hash) {
-            // Duplicate outputs can legitimately occur for verify/observe steps; don't fail the call.
-            tab_manager_log_llm(format!("phase={} endpoint={} tab={} duplicate_hash={}", phase, self.endpoint_id, tab_id, hash));
-        }
-        Ok(raw)
+        Err(anyhow::anyhow!("llm send_turn exhausted retries"))
     }
+}
+
+fn should_retry_send_turn(err: &WsBridgeError) -> bool {
+    matches!(err, WsBridgeError::Timeout | WsBridgeError::Cancelled | WsBridgeError::NoTab | WsBridgeError::NotConnected)
 }
 pub async fn llm_worker_send_request(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,

@@ -10,19 +10,9 @@ use crossbeam_channel as cc;
 use crate::context::RouteContext;
 
 pub fn heuristic_route_json(ctx: &RouteContext) -> String {
-    let route = if ctx.finish_ready {
-        canon_decision::RouteKind::Conclude
-    } else if ctx.planned_pending > 0 {
-        canon_decision::RouteKind::Act
-    } else if ctx.acted_unverified {
-        canon_decision::RouteKind::Verify
-    } else if ctx.workspace_dirty_tracker.any_dirty() {
-        canon_decision::RouteKind::Act
-    } else if ctx.context_ready {
-        canon_decision::RouteKind::Plan
-    } else {
-        canon_decision::RouteKind::Observe
-    };
+    // Routing decision removed: must be produced by canon-invariant::decide
+    // This helper now emits a neutral placeholder only
+    let route = canon_decision::RouteKind::Observe;
     serde_json::json!({
         "route": route.as_str(),
         "rationale": "heuristic proposal from runtime state",
@@ -30,7 +20,7 @@ pub fn heuristic_route_json(ctx: &RouteContext) -> String {
         "signals": {
             "context_ready": ctx.context_ready,
             "workspace_dirty": ctx.workspace_dirty_tracker.any_dirty(),
-            "planned_pending": ctx.planned_pending,
+            "scheduler_len": ctx.scheduler_len,
             "acted_unverified": ctx.acted_unverified,
             "finish_ready": ctx.finish_ready,
         }

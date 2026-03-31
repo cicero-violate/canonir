@@ -37,6 +37,9 @@ impl WorkspaceDirtyTracker {
 #[derive(Default)]
 pub struct RouteContext {
     pub scheduler_tick: u64,
+    // NEW: expose scheduler length for routing invariants
+    // This is the single source of truth for executable work
+    pub scheduler_len: usize,
     pub mission_raw: String,
     pub mission_summary: String,
     pub mission_goal_spec: Option<GoalSpec>,

@@ -32,59 +32,25 @@ struct GraphProofOutcome {
 }
 
 pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
+    // HARD GUARD: never allow Act when scheduler is empty
+    if ctx.scheduler.len() == 0 {
+        emit_act_stall(ctx, &trigger_id, "scheduler empty; blocking Act");
+        return Ok(LoopStageResult::Noop);
+    }
+
     if ctx.pending_act.is_some() {
         emit_act_stall(ctx, &trigger_id, "pending_act already present; cannot dispatch a new action");
         return Ok(LoopStageResult::Noop);
     }
-    // HARD GUARD: block Act dispatch if scheduler is empty (precondition enforcement)
-    if !can_execute_act(ctx) {
-        return Ok(LoopStageResult::Noop);
-    }
-    if ctx.scheduler.is_empty() {
-        // HARD FIX: do NOT emit act_stall — silently no-op and let routing recover
-        ctx.active_batch_llm_request_id = None;
-        return Ok(LoopStageResult::Noop);
-    }
     let filtered_batch_id = ctx.active_batch_llm_request_id.clone();
-    let scheduler_len_before = ctx.scheduler.len();
+    let _scheduler_len_before = ctx.scheduler.len();
     let task = if let Some(batch_id) = filtered_batch_id.as_deref() { ctx.scheduler.pop_for_llm(Some(batch_id)) } else { ctx.scheduler.pop_any() };
     let task = match task {
         Some(task) => task,
         None => {
-            if scheduler_len_before > 0 && filtered_batch_id.is_some() {
-                // A stale batch affinity can strand otherwise dispatchable work from a newer plan.
-                ctx.active_batch_llm_request_id = None;
-                if let Some(task) = ctx.scheduler.pop_any() {
-                    task
-                } else {
-                    emit_act_stall_with_context(
-                        ctx,
-                        &trigger_id,
-                        "scheduler has queued work but no dispatchable task was returned",
-                        serde_json::json!({
-                            "scheduler_len": scheduler_len_before,
-                            "filtered_batch_id": filtered_batch_id,
-                            "dispatch_mode": "pop_for_llm_then_pop_any",
-                        }),
-                    );
-                    return Ok(LoopStageResult::Noop);
-                }
-            } else {
-                if scheduler_len_before > 0 {
-                    emit_act_stall_with_context(
-                        ctx,
-                        &trigger_id,
-                        "scheduler has queued work but no dispatchable task was returned",
-                        serde_json::json!({
-                            "scheduler_len": scheduler_len_before,
-                            "filtered_batch_id": filtered_batch_id,
-                            "dispatch_mode": if filtered_batch_id.is_some() { "pop_for_llm" } else { "pop_any" },
-                        }),
-                    );
-                }
-                ctx.active_batch_llm_request_id = None;
-                return Ok(LoopStageResult::Noop);
-            }
+            emit_act_stall(ctx, &trigger_id, "no task available for execution");
+            ctx.active_batch_llm_request_id = None;
+            return Ok(LoopStageResult::Noop);
         }
     };
     ctx.active_batch_llm_request_id = task.plan.llm_request_id.clone();
@@ -1307,6 +1273,16 @@ fn emit_conflict(_planned: &LoopPlanned, agent: &str, action: &str, path: &str) 
 }
 
 fn emit_acted(pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>) -> RuntimeEvent {
+    // HARD GUARD: LoopActed must only be emitted if there was an actual tool result (actionable execution)
+    if tool_result_id.is_none() {
+        return RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "act_stage".to_string(),
+            kind: "loop_acted_blocked_no_tool_result".to_string(),
+            payload: serde_json::json!({
+                "reason": "no_tool_result_id"
+            }),
+        });
+    }
     RuntimeEvent::LoopActed(LoopActed {
         tick: pending.tick,
         action_kind: pending.action_kind,
@@ -1470,25 +1446,8 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
     }
     // HARD GUARD: do not emit synthetic loop_acted without real actionable execution
     if false {
-        events.push(RuntimeEvent::LoopActed(LoopActed {
-            tick: 0,
-            action_kind: "timeout_marker".to_string(),
-            capability_request_id: String::new(),
-            tool_call_id: None,
-            tool_result_id: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: None,
-            duration_ms: 0,
-            success: true,
-            trace_id: None,
-            execution_id: None,
-            span_id: None,
-            parent_span_id: None,
-            plan_id: None,
-            plan_step_id: None,
-            action_id: None,
-        }));
+        // HARD BLOCK: prevent any future accidental emission without tool_result_id
+        debug_assert!(false, "[ACT][INVARIANT] attempted LoopActed emission without tool_result_id");
     }
     events
 }
@@ -1548,7 +1507,7 @@ pub fn reconcile_stale_pending_artifacts(ctx: &mut LoopContext) -> Vec<RuntimeEv
             row["output"] = serde_json::json!({"error": error});
             changed = true;
 
-            let tick = row.get("tick").and_then(|v| v.as_u64()).unwrap_or(0);
+            let _tick = row.get("tick").and_then(|v| v.as_u64()).unwrap_or(0);
             events.push(RuntimeEvent::ToolResult(ToolResult {
                 node_id: node_id.clone(),
                 tool_call_id: tool_call_id.clone(),
@@ -1558,25 +1517,7 @@ pub fn reconcile_stale_pending_artifacts(ctx: &mut LoopContext) -> Vec<RuntimeEv
                 output: serde_json::json!({"error": error}),
                 success: false,
             }));
-            events.push(RuntimeEvent::LoopActed(LoopActed {
-                tick,
-                action_kind: row.get("action_kind").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                capability_request_id: request_id,
-                tool_call_id: Some(tool_call_id),
-                tool_result_id: Some(tool_result_id),
-                stdout: String::new(),
-                stderr: error.to_string(),
-                exit_code: None,
-                duration_ms: now_ms.saturating_sub(dispatched_ms),
-                success: false,
-                trace_id: row.get("trace_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                execution_id: row.get("execution_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                span_id: Some(Uuid::new_v4().to_string()),
-                parent_span_id: row.get("parent_span_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                plan_id: row.get("plan_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                plan_step_id: row.get("plan_step_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                action_id: row.get("action_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            }));
+            // HARD FIX: do NOT emit LoopActed for reconciled/timeout artifacts (non-actionable)
 
             ctx.mark_batch_completion(row.get("llm_request_id").and_then(|v| v.as_str()), false);
         }

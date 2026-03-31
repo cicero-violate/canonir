@@ -763,6 +763,8 @@ fn planning_constraint_state(semantic_summary: &SemanticStateSummary) -> Constra
         failure_scope_workspace,
         failure_scope_tooling,
         route_objective_contradiction: false,
+        scheduler_len: 0,
+        has_plan: false,
     }
 }
 

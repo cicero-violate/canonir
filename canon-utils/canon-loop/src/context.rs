@@ -79,6 +79,30 @@ impl DestructiveCmdPolicy {
     }
 }
 
+impl LoopContext {
+    /// Build canonical ConstraintState for centralized decision engine
+    pub fn to_constraint_state(&self) -> canon_invariant::ConstraintState {
+        canon_invariant::ConstraintState {
+            semantic_path_exists: true,
+            semantic_cargo_project: true,
+            real_path_exists: true,
+            real_cargo_project: true,
+            actionable_failure: false,
+            validation_blocked: false,
+            entrypoint_missing: false,
+            module_gaps_present: false,
+            recent_no_semantic_progress: false,
+            failure_class_no_actionable: false,
+            failure_scope_localized: false,
+            failure_scope_workspace: false,
+            failure_scope_tooling: false,
+            route_objective_contradiction: false,
+            scheduler_len: self.scheduler.len(),
+            has_plan: self.scheduler.len() > 0,
+        }
+    }
+}
+
 pub struct LoopContext {
     pub workspace: PathBuf,
     pub tlog_path: PathBuf,
