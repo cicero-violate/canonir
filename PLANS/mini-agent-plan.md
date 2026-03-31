@@ -1,6 +1,51 @@
 Fix this issue
 
+Don't run canon-runtime-supervisor, the program is LIVE
+
 archlinux in canon on  main                                                                                                                                                                                                 2026-03-30 22:24:13
+### Expanded Pending Tasks (Act-stage invariant + noop_spam)
+
+- [x] Diagnose illegal PlanningCompleted → Act transition  ✓ done
+  1. Run: rg -n "planned_to_act" canon-utils
+  2. Open canon-utils/canon-route/src/executor.rs at matches
+  3. Identify condition allowing route=act when planned_pending=0
+  4. Verify absence of scheduler_len guard
+  5. Record file:line of invalid Act emission
+
+- [x] Block Act when scheduler is empty  ✓ done
+  1. Open canon-utils/canon-route/src/executor.rs
+  2. Locate all RouteKind::Act emission sites
+  3. Add guard: if ctx.scheduler.is_empty() { return Observe }
+  4. Add debug log: "[ROUTE] blocked Act (scheduler empty)"
+  5. Add debug_assert!(ctx.scheduler.len() > 0)
+
+- [x] Prevent PlanningCompleted without executable work  ✓ done
+  1. Run: rg -n "PlanningCompleted" canon-utils
+  2. Open canon-utils/canon-route/src/policy.rs
+  3. Replace ctx.planned_pending with ctx.scheduler.len()
+  4. If scheduler empty → return Observe
+  5. Add log: "[PLAN] blocked PlanningCompleted scheduler_len=0"
+
+- [x] Guard LoopActed emission in act.rs  ✓ done
+  1. Open canon-utils/canon-loop/src/stage/act.rs around line 1311
+  2. Locate emit_acted and all LoopActed emissions
+  3. Require tool_result_id.is_some()
+  4. If missing → return Observe
+  5. Add log: "[ACT] blocked LoopActed (no tool_result)"
+
+- [x] Remove loop_acted from Observe/noop paths  ✓ done
+  1. Run: rg -n "loop_acted" canon-utils
+  2. Identify bootstrap_refresh_observe paths
+  3. Replace LoopActed with loop_observed or no-op
+  4. Ensure Observe never emits LoopActed
+  5. Add log: "[EXECUTOR] suppressed loop_acted (observe path)"
+
+- [ ] Validate via logs
+  1. Run: cargo run --bin canon-runtime-supervisor
+  2. rg -n "NOOP_SPAM_TRACE" canon/state/log.txt → expect 0
+  3. rg -n "LoopActed" canon/state/log.txt → all must have tool_result_id
+  4. Ensure no panic "LoopActed emitted without tool_result_id"
+  5. Verify full Observe→Plan→Act→ToolCall→ToolResult→Verify cycle
 ❯ cargo run --bin canon-runtime-supervisor
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running `target/debug/canon-runtime-supervisor`
