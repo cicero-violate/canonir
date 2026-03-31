@@ -1,10 +1,177 @@
-Fix this issue
+[
+P = \text{local fixes} - \text{global invariants}
+]
 
-{"id":"023de160-8892-47bb-aa19-44c83c784343","parent_ids":["68320cb1-2e32-4763-9cbd-02c87fd23223"],"actor":"event-runtime","kind":"capability_completed","ts":1774925212748,"payload":{"input":{"capability":"llm.call","request_id":"e06981c9-38c7-40c1-8d8c-0ccaa62f13ef"},"output":{"result":{"Llm":{"duration_ms":9115,"response":[{"action":"list_dir","path":"."},{"action":"list_dir","path":"src"}],"success":true}}},"delta":{"result":{"Llm":{"duration_ms":9115,"response":[{"action":"list_dir","path":"."},{"action":"list_dir","path":"src"}],"success":true}}},"meta":{"file":"canon-utils/canon-exec/src/exec/llm.rs","line":375},"data":{"capability":"llm.call","request_id":"e06981c9-38c7-40c1-8d8c-0ccaa62f13ef","result":{"Llm":{"duration_ms":9115,"response":[{"action":"list_dir","path":"."},{"action":"list_dir","path":"src"}],"success":true}}}},"prev_event_id":"b2d486b3-433c-4adc-94b8-59401d8f6c65"}
-{"id":"b6ac1aee-c5f0-4cfd-b4bf-848b1021eaea","parent_ids":["023de160-8892-47bb-aa19-44c83c784343"],"actor":"agent-consumer","kind":"tool_result","ts":1774925212749,"payload":{"input":{"kind":"llm.plan","tool_call_id":"1347f7b6-bcd9-4de1-b748-dc21d59895c9"},"output":{"output":{},"success":true},"delta":{"output":{}},"meta":{"file":"canon-utils/canon-loop/src/stage/plan.rs","line":1022},"data":{"kind":"llm.plan","node_id":"plan_consumer","output":{},"request_id":"e06981c9-38c7-40c1-8d8c-0ccaa62f13ef","success":true,"tool_call_id":"1347f7b6-bcd9-4de1-b748-dc21d59895c9","tool_result_id":"f2d8e862-82eb-42df-be29-bae99cb87343"}},"prev_event_id":"9a3498c9-590c-40e1-a139-00c6442bfb0e"}
-{"id":"dfafbfaa-a2be-4620-b001-d7a660b8d086","parent_ids":["023de160-8892-47bb-aa19-44c83c784343"],"actor":"plan","kind":"loop_planned","ts":1774925212749,"payload":{"input":{"action_kind":"list_dir","action_payload":{"failure_class":"no_actionable_failure","failure_scope":"none","path":"."},"tick":0},"output":{"reason":"llm_list_dir"},"delta":{"signals":null},"meta":{"file":"canon-utils/canon-loop/src/executor.rs","line":94},"data":{"action_id":"9b1d0b71-08c2-4c0e-8e16-779a137cc16e","action_kind":"list_dir","action_payload":{"failure_class":"no_actionable_failure","failure_scope":"none","path":"."},"depends_on":[],"execution_id":"fa3f122b-c529-4d12-b8e6-ebdcc2594e4e","llm_request_id":"e06981c9-38c7-40c1-8d8c-0ccaa62f13ef","parent_span_id":"d6f5457b-d7d2-4e2a-ae72-618d73f37ef3","plan_id":"b696afb9-5591-4e0d-ab52-6871c99023ce","plan_step_id":"9b1d0b71-08c2-4c0e-8e16-779a137cc16e","reason":"llm_list_dir","signals":null,"span_id":"7355f4ed-8348-45ad-92f6-ac3312e6cd99","tick":0,"trace_id":"b091fa30-7f42-4b78-99e0-6da4f8b8a601"}}}
-{"id":"6c0b2bb3-5cba-48e2-9764-30d0389be84b","parent_ids":["023de160-8892-47bb-aa19-44c83c784343"],"actor":"plan","kind":"loop_planned","ts":1774925212750,"payload":{"input":{"action_kind":"list_dir","action_payload":{"failure_class":"no_actionable_failure","failure_scope":"none","path":"src"},"tick":0},"output":{"reason":"llm_list_dir"},"delta":{"signals":null},"meta":{"file":"canon-utils/canon-loop/src/executor.rs","line":94},"data":{"action_id":"cfdf8370-f81d-4927-b602-1e383f31f7a7","action_kind":"list_dir","action_payload":{"failure_class":"no_actionable_failure","failure_scope":"none","path":"src"},"depends_on":[],"execution_id":"fa3f122b-c529-4d12-b8e6-ebdcc2594e4e","llm_request_id":"e06981c9-38c7-40c1-8d8c-0ccaa62f13ef","parent_span_id":"d6f5457b-d7d2-4e2a-ae72-618d73f37ef3","plan_id":"b696afb9-5591-4e0d-ab52-6871c99023ce","plan_step_id":"cfdf8370-f81d-4927-b602-1e383f31f7a7","reason":"llm_list_dir","signals":null,"span_id":"c2cf5c79-6116-43ea-b09f-099e8dd4bedb","tick":0,"trace_id":"b091fa30-7f42-4b78-99e0-6da4f8b8a601"}},"prev_event_id":"dfafbfaa-a2be-4620-b001-d7a660b8d086"}
-{"id":"8924439e-0293-431e-a8b7-4a873b5e4bec","parent_ids":["023de160-8892-47bb-aa19-44c83c784343"],"actor":"plan","kind":"planning_completed","ts":1774925212751,"payload":{"input":{"llm_request_id":"e06981c9-38c7-40c1-8d8c-0ccaa62f13ef","tick":0},"output":{"planned_count":2,"status":"planned"},"delta":{"planned_count":2},"meta":{"file":"canon-utils/canon-loop/src/executor.rs","line":94},"data":{"llm_request_id":"e06981c9-38c7-40c1-8d8c-0ccaa62f13ef","planned_count":2,"status":"planned","tick":0}}}
-{"id":"d48461c0-acb8-45ae-8ff5-ec5d671c1d6b","parent_ids":["8924439e-0293-431e-a8b7-4a873b5e4bec"],"actor":"supervisor","kind":"route_selected","ts":1774925212752,"payload":{"input":{"prompt":"deterministic:planned_to_act","suggested_route":"act","tick":0},"output":{"approved_route":"act","rationale":"invariant: PlanningCompleted -> Act"},"delta":{"gate_changed":false},"meta":{"file":"canon-utils/canon-route/src/executor.rs","line":793},"data":{"approved_route":"act","confidence":1.0,"gate_changed":false,"gate_note":"deterministic_route","gate_rules_fired":["deterministic:planned_to_act"],"gate_should_stop":false,"model_json":"{\"confidence\":1.0,\"rationale\":\"invariant: PlanningCompleted -> Act\",\"route\":\"act\"}","prompt":"deterministic:planned_to_act","rationale":"invariant: PlanningCompleted -> Act","suggested_route":"act","tick":0}},"prev_event_id":"2d918fba-e305-4099-8b66-9ab61d644f9c"}
-{"id":"212cf980-af47-4de5-a42d-d10436f8bca9","parent_ids":["d48461c0-acb8-45ae-8ff5-ec5d671c1d6b"],"actor":"agent-consumer","kind":"tool_result","ts":1774925212753,"payload":{"input":{"kind":"list_dir","tool_call_id":"56618969-7953-4c22-9f95-2c9751669ad8"},"output":{"output":{"duration_ms":0,"path":"/workspace/ai_sandbox/canon/test_projects/goalgen/workflow-engine/.","stderr":"","stdout":"=== /workspace/ai_sandbox/canon/test_projects/goalgen/workflow-engine/. ===\nCargo.toml\nsrc/","success":true},"success":true},"delta":{"output":{"duration_ms":0,"path":"/workspace/ai_sandbox/canon/test_projects/goalgen/workflow-engine/.","stderr":"","stdout":"=== /workspace/ai_sandbox/canon/test_projects/goalgen/workflow-engine/. ===\nCargo.toml\nsrc/","success":true}},"meta":{"file":"canon-utils/canon-loop/src/executor.rs","line":94},"data":{"kind":"list_dir","node_id":"9b1d0b71-08c2-4c0e-8e16-779a137cc16e","output":{"duration_ms":0,"path":"/workspace/ai_sandbox/canon/test_projects/goalgen/workflow-engine/.","stderr":"","stdout":"=== /workspace/ai_sandbox/canon/test_projects/goalgen/workflow-engine/. ===\nCargo.toml\nsrc/","success":true},"request_id":"9f110ebe-9afc-4b09-807f-65796c1993f1","success":true,"tool_call_id":"56618969-7953-4c22-9f95-2c9751669ad8","tool_result_id":"0c3e6a76-7fe2-4d6a-b803-9e8a8cfc164c"}},"prev_event_id":"b6ac1aee-c5f0-4cfd-b4bf-848b1021eaea"}
-{"id":"324987d7-fd4c-481d-98f4-7da828455bd2","parent_ids":["d48461c0-acb8-45ae-8ff5-ec5d671c1d6b"],"actor":"act_stage","kind":"debug","ts":1774925212753,"payload":{"input":{"kind":"loop_acted_blocked_no_tool_result","source":"act_stage"},"output":{"payload":{"reason":"no_tool_result_id"}},"delta":{"payload":{"reason":"no_tool_result_id"}},"meta":{"file":"canon-utils/canon-loop/src/executor.rs","line":94},"data":{"kind":"loop_acted_blocked_no_tool_result","payload":{"reason":"no_tool_result_id"},"source":"act_stage"}},"prev_event_id":"0ee3ca80-38f5-4784-8257-ce3d35bb73b4"}
+**Variables**
+[
+P=\text{plan quality},\quad L=\text{local patches},\quad G=\text{global decision model},\quad D=\text{decision centralization}
+]
+
+**Equations**
+
+* (P \uparrow \iff G \uparrow)
+* (L \uparrow \land D=0 \Rightarrow instability)
+* (Correct \Rightarrow D=1)
+
+---
+
+## Assessment
+
+From your plan: 
+
+### What is GOOD
+
+* You found **real invariant violations**
+* You validated with logs (strong)
+* You identified **scheduler_len as ground truth**
+* You enforced:
+
+  * no Act without work
+  * no PlanningCompleted without work
+  * no LoopActed without tool_result
+
+[
+\text{You fixed symptoms correctly}
+]
+
+---
+
+## What is WRONG (core)
+
+[
+\boxed{
+\text{You are still patching decisions locally}
+}
+]
+
+Examples from your plan:
+
+* “replace planned_pending with scheduler.len()”
+* “add guard before Act emission”
+* “add early return → Observe”
+
+These are all:
+
+[
+D_{route},\ D_{executor},\ D_{policy}
+]
+
+→ still distributed
+
+---
+
+## Concrete Issue
+
+You now have:
+
+```rust
+// route executor
+if scheduler.len() > 0 { Act }
+
+// policy
+if scheduler.len() == 0 { Observe }
+```
+
+Looks correct… but:
+
+[
+D_{route} \neq D_{policy} \quad \text{(can diverge later)}
+]
+
+---
+
+## Hidden Problem (already visible)
+
+From your log:
+
+```json
+"approved_route":"act",
+"rationale":"invariant: PlanningCompleted -> Act"
+```
+
+→ decision still comes from:
+
+* **route invariant**
+* NOT global constraint engine
+
+[
+D = f_{route},\ not\ f_{constraint}
+]
+
+---
+
+## What You SHOULD do
+
+### Replace this entire plan with:
+
+#### Step 1 — Define decision once
+
+```rust
+fn decide(state: ConstraintState) -> Decision {
+    match state {
+        ConstraintState { scheduler_len: 0, .. } => Observe,
+        ConstraintState { has_plan: true, .. } => Act,
+        _ => Plan,
+    }
+}
+```
+
+---
+
+#### Step 2 — Remove ALL local guards
+
+Delete:
+
+* `if scheduler.len() > 0` (route)
+* `if scheduler.is_empty()` (policy)
+* `planned_pending` checks everywhere
+
+---
+
+#### Step 3 — Route uses decision only
+
+```rust
+let decision = decide(state);
+emit_route(decision);
+```
+
+---
+
+## Final Judgment
+
+[
+\text{Your plan} = \textbf{high quality debugging}
+]
+
+but
+
+[
+\textbf{not yet architectural fix}
+]
+
+---
+
+## Exact Classification
+
+| Layer                   | Status    |
+| ----------------------- | --------- |
+| Debugging               | ✅ strong  |
+| Invariant awareness     | ✅ strong  |
+| Determinism             | ⚠ partial |
+| Decision centralization | ❌ missing |
+
+---
+
+## Final
+
+[
+\boxed{
+\text{Stop patching branches. Start eliminating their ownership.}
+}
+]
+
+---
+
+[
+\max(\text{intelligence, efficiency, correctness, alignment}) = \text{good}
+]
