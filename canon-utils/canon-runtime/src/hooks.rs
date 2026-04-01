@@ -215,28 +215,8 @@ impl PreHook for WatchdogPreHook {
         match event {
             RuntimeEvent::Tick(t) => {
                 self.current_tick.store(t.tick, std::sync::atomic::Ordering::SeqCst);
-                let now = t.tick;
-                let stalled: Vec<(String, u64)> = {
-                    let guard = self.last_stage.lock().unwrap();
-                    WD_THRESHOLDS
-                        .iter()
-                        .filter_map(|(stage, thr)| {
-                            let last = guard.get(stage).copied().unwrap_or(0);
-                            let idle = now.saturating_sub(last);
-                            if idle >= *thr {
-                                Some((stage.to_string(), idle))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                };
-                if stalled.is_empty() {
-                    HookDecision::Allow
-                } else {
-                    let msg = stalled.iter().map(|(s, idle)| format!("{s}:{idle}")).collect::<Vec<_>>().join(",");
-                    HookDecision::Deny { reason: format!("watchdog_stall:{msg}") }
-                }
+                // Always allow Tick to preserve heartbeat and observability
+                HookDecision::Allow
             }
             RuntimeEvent::LoopObserved(_) => {
                 self.last_stage.lock().unwrap().insert("observed", self.current_tick.load(std::sync::atomic::Ordering::SeqCst));

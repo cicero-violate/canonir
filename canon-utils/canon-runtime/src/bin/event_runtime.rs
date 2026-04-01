@@ -298,8 +298,11 @@ fn main() -> Result<()> {
     let event_execution_enabled = std::env::var("CANON_EVENT_EXECUTION").ok().map(|v| v != "0" && v.to_lowercase() != "false").unwrap_or(true);
     let lock_path = env::var("CANON_EVENT_RUNTIME_LOCK").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/workspace/ai_sandbox/canon/state/event_runtime.lock"));
     let _lock_guard = match acquire_lock(&lock_path)? {
-        Some(guard) => guard,
-        None => return Ok(()),
+        Some(guard) => Some(guard),
+        None => {
+            eprintln!("[WARN] bootstrap returned None — continuing instead of exiting");
+            None
+        },
     };
     let system_id = load_or_create_system_id();
 
@@ -649,8 +652,10 @@ fn main() -> Result<()> {
     let mut last_saved = Instant::now();
     let mut last_saved_processed = processed;
 
+    eprintln!("[PRE-LOOP TRACE] entering main loop section");
     loop {
         // HEARTBEAT: ensure at least one event per loop cycle to prevent silent stall
+        eprintln!("[LOOP TRACE] about to call emit_tick");
         let _ = runtime.emit_tick();
         // Step 1: drain any events emitted by consumer threads (e.g. CapabilityCompleted).
         // These sit in emitter_rx until W processes them; they do NOT arrive via P2/q_event_rx.

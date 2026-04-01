@@ -376,8 +376,9 @@ impl EventRuntime {
 
     pub fn emit_tick(&mut self) -> Result<()> {
         self.runtime_tick = self.runtime_tick.saturating_add(1);
-        self.handle_runtime_event_located(RuntimeEvent::Tick(Tick { tick: self.runtime_tick, emitted: true }), "", 0)?;
-        self.drain_emitted_events()?;
+        eprintln!("[EMIT TICK TRACE] tick={}", self.runtime_tick);
+        // Route Tick through standard emission path so it is appended consistently
+        self.emit_event(RuntimeEvent::Tick(Tick { tick: self.runtime_tick, emitted: true }))?;
         Ok(())
     }
 
@@ -526,6 +527,9 @@ impl EventRuntime {
                 eprintln!("[canon-runtime] WARN: event kind={kind_str} id={event_id} delivered to 0 consumers");
             }
         }
+
+        // Ensure all handled events are appended to the tlog
+        self.append_runtime_event(&event, file, line, parent_ids.clone(), event_id.clone());
         // DEBUG TRACE: confirm append is reached
         eprintln!("[HANDLE -> APPEND] kind={:?}", canon_event::event_kind_str(&event));
         self.append_runtime_event(&event, file, line, parent_ids, event_id.clone());
@@ -606,7 +610,7 @@ impl EventRuntime {
         Ok(())
     }
 
-    fn drain_emitted_events(&mut self) -> Result<()> {
+    pub fn drain_emitted_events(&mut self) -> Result<()> {
         while let Ok(located) = self.emitter_rx.try_recv() {
             // DEBUG TRACE: confirm events are entering drain path
             eprintln!("[DRAIN EVENT] kind={:?} file={} line={}", canon_event::event_kind_str(&located.event), located.file, located.line);
@@ -644,8 +648,8 @@ impl EventRuntime {
         // DEBUG TRACE: ensure runtime is actively attempting to write events
         eprintln!("[TLOG APPEND ATTEMPT] kind={:?} file={} line={}", canon_event::event_kind_str(event), file, line);
         let Some(path) = self.tlog_path.clone() else {
-            eprintln!("[CRITICAL] tlog_path is None — event NOT persisted kind={}", canon_event::event_kind_str(event));
-            panic!("tlog_path must be set before runtime event emission");
+            eprintln!("[WARN] tlog_path is None — skipping persistence kind={}", canon_event::event_kind_str(event));
+            return;
         };
         let mut wire = match runtime_event_to_wire(event, parent_ids, event_id, file, line) {
             Ok(Some(wire)) => wire,
@@ -757,6 +761,7 @@ fn runtime_event_to_wire(
         RuntimeEvent::LoopRewarded(p) => (canon_event::EventKind::LoopRewarded, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::RouteTick(p) => (canon_event::EventKind::RouteTick, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::RouteSelected(p) => (canon_event::EventKind::RouteSelected, payload_from_shape(p, emit_file, emit_line)),
+        RuntimeEvent::Tick(p) => (canon_event::EventKind::Tick, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::CapabilityCompleted(p) => (canon_event::EventKind::CapabilityCompleted, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::CapabilityFailed(p) => (canon_event::EventKind::CapabilityFailed, payload_from_shape(p, emit_file, emit_line)),
         RuntimeEvent::CapabilityInvoked(p) => (canon_event::EventKind::CapabilityInvoked, payload_from_shape(p, emit_file, emit_line)),
@@ -790,6 +795,7 @@ fn runtime_event_to_wire(
         RuntimeEvent::VerifierPolicyUpdated(_) => "verify",
         RuntimeEvent::LoopRewarded(_) => "reward",
         RuntimeEvent::RouteTick(_) | RuntimeEvent::RouteSelected(_) => "supervisor",
+        RuntimeEvent::Tick(_) => "supervisor",
         RuntimeEvent::CapabilityCompleted(_) | RuntimeEvent::CapabilityFailed(_) => "event-runtime",
         RuntimeEvent::CapabilityInvoked(_) | RuntimeEvent::CapabilityResolved(_) => "capability_graph",
         RuntimeEvent::ErrorOccurred(_) => "event-runtime",

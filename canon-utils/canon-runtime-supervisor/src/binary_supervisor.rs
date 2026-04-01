@@ -21,6 +21,8 @@ pub fn run_binary_supervisor(binary_path: &Path) {
         child = Command::new(binary_path)
             .arg("--tlog")
             .arg("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
             .spawn()
             .ok();
         if let Ok(meta) = fs::metadata(binary_path) {
@@ -42,6 +44,8 @@ pub fn run_binary_supervisor(binary_path: &Path) {
             child = Command::new(binary_path)
                 .arg("--tlog")
                 .arg("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit())
                 .spawn()
                 .ok();
         }
