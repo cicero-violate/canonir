@@ -62,23 +62,10 @@ impl EventConsumer for DiagnosticsConsumer {
                 return EventOutcome::NoOp("planning_completed_no_synthetic_dispatch");
             }
             // 🔥 CRITICAL: RouteSelected must trigger execution
-            RuntimeEvent::RouteSelected(route) => {
-                let dispatch = canon_event::RequestDispatch {
-                    agent_id: "planner".to_string(),
-                    dispatch_id: format!("dispatch-{}", route.tick),
-                    parent_request_id: "".to_string(),
-                    task_prompt: route.prompt.clone(),
-                    task_kind: route.approved_route.clone(),
-                    deps: vec![],
-                    workspace_scope: None,
-                    dispatched: false,
-                };
-
-                return EventOutcome::emit(
-                    RuntimeEvent::RequestDispatch(dispatch),
-                    file!(),
-                    line!(),
-                );
+            RuntimeEvent::RouteSelected(_route) => {
+                // REMOVE: synthetic RequestDispatch emission
+                // Execution must flow through canonical RouteExecutor only
+                return EventOutcome::NoOp("route_selected_no_synthetic_dispatch");
             }
             RuntimeEvent::ErrorOccurred(err) => {
                 if err.source == "watchdog" {

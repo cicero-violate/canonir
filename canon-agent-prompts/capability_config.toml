@@ -111,6 +111,14 @@ role = "diagnostics"
 stateful = true
 max_tabs = 1
 
+[[llm.endpoints]]
+id = "exec_chatgpt_d"
+url = "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02"
+role_markdown = "builtin:exec"
+role = "executor_b"
+stateful = true
+max_tabs = 1
+
 
 [llm.roles.mini_planner.weights]
 mini_planner_chatgpt = 100
@@ -163,6 +171,14 @@ id = "mini_agent_chatgpt"
 url = "https://chatgpt.com/gg/69ca500acd888199a32b90339c82fa31"
 role_markdown = "builtin:planner"
 role = "mini_agent"
+stateful = true
+max_tabs = 1
+
+[llm.endpoints.executor_b]
+id = "exec_chatgpt_d"
+url = "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02"
+role_markdown = "builtin:exec"
+role = "executor_b"
 stateful = true
 max_tabs = 1
 

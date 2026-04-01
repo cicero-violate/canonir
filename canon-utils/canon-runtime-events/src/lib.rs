@@ -35,7 +35,7 @@ pub use events::{
     CapabilityResult, CargoBuild, CargoCheck, CargoEvent, CargoRun, Code, DebugEvent, DeleteSymbol, EditEvent, ErrorOccurred, EventConsumer, EventEmitter, EventEmitterHandle, EventFilter, EventMask,
     EventOutcome, ExtractModule, FileEvent, FilePatch, FileRead, FileWrite, GoalEdgeDefined, GoalGraphCheckpointed, GoalNodeCreated, GoalNodeRetracted, GoalNodeRewritten, GoalSelected,
     GoodnessSnapshot, InlineModule, InvariantDiscovered, LlmCall, LlmResult, LocatedEvent, LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, MoveSymbol, NodeCompleted, NodeFailed,
-    NodeReady, NodeStarted, PlanningCompleted, PolicyBaselineUpdated, ProcessResult, PromptLoaded, RenameDir, RenameModule, RenameSymbol, RequestDispatch, RouteSelected, RouteTick, RuntimeEvent,
+    NodeReady, NodeStarted, PlanningCompleted, PolicyBaselineUpdated, ProcessResult, PromptLoaded, RenameDir, RenameModule, RenameSymbol, RouteSelected, RouteTick, RuntimeEvent,
     RuntimeStateUpdated, RustcCaptureCompleted, RustcCaptureFailed, RustcCaptureStarted, RustcEventConsumer, RustcGraphArtifactWritten, SubTaskResult, SystemConfigLoaded, Tick, ToolBatchSettled,
     ToolCall, ToolResult, EVENT_SCHEMA_VERSION,
 };

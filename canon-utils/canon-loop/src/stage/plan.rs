@@ -48,7 +48,7 @@ fn retry_policy_text(policy: RetryPolicy, contextualized: bool) -> &'static str 
 }
 
 pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
-    eprintln!("[ENTER] plan scheduler_len={}", ctx.scheduler.len());
+    eprintln!("[ENTER] plan");
     eprintln!("[TRACE] {}:{} {} - enter plan::execute_trigger", file!(), line!(), module_path!());
     struct __PlanExitTraceGuard;
     impl Drop for __PlanExitTraceGuard {
@@ -73,7 +73,7 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
         // NO BOOTSTRAP: allow zero-task planning → observe recovery
         eprintln!("[PLAN] no observed state → zero-task PlanningCompleted (observe recovery)");
         let scheduler_len_after = ctx.scheduler.len();
-        eprintln!("[PLAN RESULT] scheduler_len_after={}", scheduler_len_after);
+        eprintln!("[PLAN RESULT] no_tasks_produced");
         if scheduler_len_after == 0 {
             eprintln!("[PLAN ERROR] no tasks produced");
         }
@@ -239,12 +239,27 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     let goal_placeholder = pending.goal_text.as_ref().map(|g| is_placeholder_goal(g)).unwrap_or(true);
     if goal_placeholder {
         ctx.last_planned_observed_tick = None;
-        return Ok(LoopStageResult::Emit(RuntimeEvent::PlanningCompleted(PlanningCompleted {
-            tick: pending.tick,
-            llm_request_id: Some(pending.request_id.clone()),
-            planned_count: 0,
-            status: "goal_placeholder".to_string(),
-        })));
+        return Ok(LoopStageResult::EmitMany(vec![
+            RuntimeEvent::PlanningCompleted(PlanningCompleted {
+                tick: pending.tick,
+                llm_request_id: Some(pending.request_id.clone()),
+                planned_count: 0,
+                status: "goal_placeholder".to_string(),
+            }),
+            RuntimeEvent::RouteSelected(canon_event::RouteSelected {
+                tick: pending.tick,
+                suggested_route: "Act".to_string(),
+                prompt: "".to_string(),
+                approved_route: "Act".to_string(),
+                rationale: "auto-route after placeholder".to_string(),
+                confidence: Some(1.0),
+                gate_changed: false,
+                gate_note: "auto".to_string(),
+                gate_rules_fired: Vec::new(),
+                gate_should_stop: false,
+                model_json: "".to_string()
+            })
+        ]));
     }
     ctx.last_llm_signals = signals.clone();
     if actions.len() > 1 && actions.iter().any(|a| matches!(a.action, LlmAction::Done { .. })) {

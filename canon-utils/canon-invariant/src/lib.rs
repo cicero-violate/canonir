@@ -132,26 +132,40 @@ pub enum ConstraintDecision {
 
 /// CENTRALIZED decision function (single source of truth)
 pub fn decide(state: DecisionState) -> Decision {
-    // SINGLE SOURCE OF TRUTH: decision depends ONLY on scheduler_len + has_plan
+    // SINGLE SOURCE OF TRUTH: decision must NOT depend on scheduler_len
+    // Routing MUST derive from semantic signals, not queue length
     // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
     static TRACE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let trace_id = TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let decision = if state.scheduler_len == 0 {
-        // INVARIANT: no scheduled work must always route to Observe
-        Decision::Observe
+    // DECISION BRANCHES — explicit and traceable
+    let decision = if !state.has_plan {
+        // no actionable plan → Observe (recover semantic state)
+        let d = Decision::Observe;
+        eprintln!(
+            "[DECIDE TRACE BRANCH] trace_id={} branch=Observe has_plan={}",
+            trace_id,
+            state.has_plan
+        );
+        d
     } else {
-        Decision::Act
+        // actionable work exists → Act
+        let d = Decision::Act;
+        eprintln!(
+            "[DECIDE TRACE BRANCH] trace_id={} branch=Act has_plan={}",
+            trace_id,
+            state.has_plan
+        );
+        d
     };
     // ensure impossible state never occurs
-    debug_assert!(!(state.scheduler_len == 0 && matches!(decision, Decision::Act)));
+    debug_assert!(!(matches!(decision, Decision::Act) && !state.has_plan));
     // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
     eprintln!(
-        "[DECIDE TRACE] trace_id={} {}:{} {} fn=decide scheduler_len={} has_plan={} decision={:?}",
+        "[DECIDE TRACE] trace_id={} {}:{} {} fn=decide has_plan={} decision={:?}",
         trace_id,
         file!(),
         line!(),
         module_path!(),
-        state.scheduler_len,
         state.has_plan,
         decision
     );
@@ -871,9 +885,12 @@ pub fn meta_invariant_verifier_sequence_contract(
             }
         }
         MetaInvariantVerifierSequenceStep::LoopRewarded => {
-            if last_control_kind == Some("verifier_policy_updated") && pending_required_successor == Some("loop_rewarded") {
+            let last = last_control_kind.map(|s| s.to_ascii_lowercase());
+            let pending = pending_required_successor.map(|s| s.to_ascii_lowercase());
+
+            if last.as_deref() == Some("verifier_policy_updated") && pending.as_deref() == Some("loop_rewarded") {
                 None
-            } else if last_control_kind == Some("route_selected") && pending_required_successor == Some("loop_rewarded") {
+            } else if last.as_deref() == Some("route_selected") && pending.as_deref() == Some("loop_rewarded") {
                 None
             } else {
                 Some("loop_rewarded must follow verifier_policy_updated, except for direct conclude routing")

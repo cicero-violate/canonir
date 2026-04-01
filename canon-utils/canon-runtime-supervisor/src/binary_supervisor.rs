@@ -12,6 +12,12 @@ pub fn run_binary_supervisor(binary_path: &Path) {
 
     // Initial spawn (always run immediately)
     if binary_path.is_file() {
+        // ensure stale runtime lock does not block initial instance
+        let lock_path = "/workspace/ai_sandbox/canon/state/event_runtime.lock";
+        if std::path::Path::new(lock_path).exists() {
+            eprintln!("[SUPERVISOR FIX] removing stale runtime lock (initial spawn): {}", lock_path);
+            let _ = std::fs::remove_file(lock_path);
+        }
         child = Command::new(binary_path)
             .arg("--tlog")
             .arg("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
@@ -53,7 +59,13 @@ pub fn run_binary_supervisor(binary_path: &Path) {
                     }
 
                     // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
-                    eprintln!("[ENTER] {}:{} {} - spawning new child", file!(), line!(), module_path!());
+    eprintln!("[ENTER] {}:{} {} - spawning new child", file!(), line!(), module_path!());
+    // CRITICAL FIX: ensure stale runtime lock does not block new instance
+    let lock_path = "/workspace/ai_sandbox/canon/state/event_runtime.lock";
+    if std::path::Path::new(lock_path).exists() {
+        eprintln!("[SUPERVISOR FIX] removing stale runtime lock: {}", lock_path);
+        let _ = std::fs::remove_file(lock_path);
+    }
                     child = Command::new(binary_path)
                         .arg("--tlog")
                         .arg("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")

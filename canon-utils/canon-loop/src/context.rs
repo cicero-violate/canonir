@@ -88,7 +88,7 @@ impl LoopContext {
 
         println!("[STATE DETAIL] goal_text_present={} pending_plan_present={}", self.goal_text.is_some(), self.pending_plan.is_some());
 
-        eprintln!("[STATE] {}:{} {} scheduler_len={} has_plan={} (source=pending_plan|semantic_goal)", file!(), line!(), module_path!(), self.scheduler.len(), has_plan);
+        eprintln!("[STATE] {}:{} {} has_plan={} (source=pending_plan|semantic_goal)", file!(), line!(), module_path!(), has_plan);
 
         canon_invariant::ConstraintState {
             semantic_path_exists: true,

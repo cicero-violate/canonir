@@ -969,22 +969,6 @@ canon_event_struct!(
     }
 );
 
-canon_event_struct!(
-    #[impl_shape]
-    #[event(class = "Effect")]
-    RequestDispatch {
-        dispatch_id: String,
-        #[input] parent_request_id: String,
-        agent_id: String,
-        #[input] task_prompt: String,
-        task_kind: String,
-        #[serde(default)]
-        #[delta] deps: Vec<String>,
-        #[serde(default)]
-        workspace_scope: Option<String>,
-        #[output] dispatched: bool,
-    }
-);
 
 canon_event_struct!(
     #[impl_shape]
@@ -1088,7 +1072,6 @@ canon_event_enum!(RuntimeEvent {
     File(FileEvent),
     Bash(BashInvoke),
     Llm(LlmCall),
-    RequestDispatch(RequestDispatch),
     SubTaskResult(SubTaskResult),
     Analysis(AnalysisEvent),
     RuntimeStateUpdated(RuntimeStateUpdated),
@@ -1162,7 +1145,6 @@ pub fn event_kind_str(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::GoalGraphCheckpointed(_) => "goal_graph_checkpointed",
         RuntimeEvent::GoalSelected(_) => "goal_selected",
         RuntimeEvent::AgentRegistered(_) => "agent_registered",
-        RuntimeEvent::RequestDispatch(_) => "request_dispatch",
         RuntimeEvent::SubTaskResult(_) => "sub_task_result",
         RuntimeEvent::Tick(_) => "tick",
         RuntimeEvent::Code(_) => "code",

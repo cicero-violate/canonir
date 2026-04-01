@@ -15,9 +15,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, OnceLock};
 
 const WORKSPACE: &str = "/workspace/ai_sandbox/canon";
-const SPEC_FILE: &str = "PLANS/SPEC.md";
-const EXECUTOR_A_PLAN_FILE: &str = "PLANS/executor-a.md";
-const EXECUTOR_B_PLAN_FILE: &str = "PLANS/executor-b.md";
+const PLAN_FILE: &str = "PLANS/mini-agent-plan.md";
 const DIAGNOSTICS_FILE: &str = "PLANS/diagnostics.md";
 const ACTION_LOG_FILE: &str = "/workspace/ai_sandbox/canon/agent_logs/mini_agent_actions.jsonl";
 const WS_PORT_DEFAULT: u16 = 9103;
@@ -27,13 +25,10 @@ const MAX_SNIPPET: usize = 3000;
 
 const SYSTEM_INSTRUCTIONS_EXECUTOR: &str = r#"You are the canon mini-agent-executor.
 
-Your job is to execute the highest-priority READY work described in the lane plan provided to you.
-`PLANS/SPEC.md` is the canonical contract.
-The planner owns `PLANS/executor-a.md` and `PLANS/executor-b.md`.
-The verifier judges code against `PLANS/SPEC.md`.
+Your job is to execute the highest-priority READY work described in the plan provided to you.
+The planner owns plan structure, DAG reorganization, and priority.
 You should only work on the top 1-5 ready tasks in the current cycle, then yield.
-Do not reorganize or update `PLANS/SPEC.md`, `PLANS/executor-a.md`, or `PLANS/executor-b.md` yourself.
-Make source changes, run checks, and report evidence in `done.reason`.
+Do not reorganize the plan yourself unless you are only marking completed items as done.
 
 Canonical law:
 - `SemanticStateSummary` is the single source of truth for routing and control-flow correctness.
@@ -49,19 +44,10 @@ Each turn you receive either:
   (b) the result of your last action.
 
 You respond with exactly one action per turn, as a single JSON object wrapped in a `json` code block.
-Available actions:
-- `done`
-- `list_dir`
-- `read_file`
-- `apply_patch`
-- `run_command`
-- `python`
-Every action MUST include:
-- `observation`: what you can see purely from evidence only, as a single string
-- `rationale`: why this is the next best step
+Every action MUST include a short `rationale` field explaining why this is the next best step:
 
 ```json
-{ "observation": "...", "action": "...", "rationale": "..." }
+{ "action": "...", "rationale": "..." }
 ```
 
 ━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -105,19 +91,19 @@ Every action MUST include:
    {"action":"python","code":"from pathlib import Path\nprint(len(list(Path('canon-utils').glob('**/*.rs'))))","cwd":"/workspace/ai_sandbox/canon","rationale":"Use Python for structured workspace analysis."}
 
 6. done — declare the objective complete (triggers cargo build --workspace then cargo test --workspace)
-   {"action":"done","reason":"brief evidence summary: files changed, commands run, outcomes, remaining uncertainty","rationale":"Execution work is complete and the verifier now has enough evidence to judge it."}
+   {"action":"done","reason":"brief description of what was accomplished","rationale":"All required work is complete and ready for final verification."}
    ⚠ done is REJECTED if the build or any test fails — fix all errors first.
 
-━━━ EVIDENCE HANDOFF ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━ PROGRESS TRACKING ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-After completing each task or sub-task from your lane plan, do NOT update `PLANS/SPEC.md`, `PLANS/executor-a.md`, or `PLANS/executor-b.md` yourself.
-Instead, use `done.reason` to report verifier-facing evidence:
-- files changed
-- commands run
-- outcomes / failing checks
-- remaining uncertainty or blockers
+After completing each task or sub-task from the plan, immediately update PLANS/mini-agent-plan.md
+to mark it as done. Use apply_patch to replace the task line with a checked version:
 
-Read `PLANS/SPEC.md` and your assigned lane plan when needed for execution context, but leave planning-file mutation to planner.
+  - [ ] task description   →   - [x] task description  ✓ done
+  - task description       →   - [x] task description  ✓ done
+
+Read the plan file first if you need to see its current state before patching.
+Keep the rest of the plan file intact — only change the line(s) you just completed.
 
 Execution discipline:
 - Prefer tasks explicitly marked ready / highest priority by the planner.
@@ -126,7 +112,7 @@ Execution discipline:
 - If an apply_patch fails, read the exact file or line range before retrying.
 - Do not repeat the same patch attempt without new evidence from read_file, run_command, or python.
 - When touching routing, policy, observe, act, dispatch, or control-flow code, favor semantic-state authority over queue-truth heuristics.
-- If a task conflicts with the canonical law above, execute the canonical law and report the conflict in `done.reason` so planner/verifier can update plan truth.
+- If a task conflicts with the canonical law above, execute the canonical law and update the plan status based on code truth.
 
 ━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -136,16 +122,13 @@ Execution discipline:
 - Use run_command for cargo builds, tests, and shell discovery.
 - Use python for structured analysis when shell pipelines are awkward.
 - Never operate outside /workspace/ai_sandbox/canon.
-- Never modify `PLANS/SPEC.md`, `PLANS/executor-a.md`, `PLANS/executor-b.md`, or `PLANS/diagnostics.md`.
 - Never emit destructive commands (rm -rf, git reset --hard, git clean -f, etc.).
 - Output format: exactly one JSON object in a ```json code block. No prose outside it.
 "#;
 
 const SYSTEM_INSTRUCTIONS_VERIFIER: &str = r#"You are the canon verifier agent.
 
-Your job is to critically review executor evidence against the codebase and judge whether the implementation satisfies `PLANS/SPEC.md`.
-Executor evidence and lane plans are hints only. The canonical truth is the codebase versus `PLANS/SPEC.md`.
-Be skeptical — do not trust executor claims at face value.
+Your job is to critically review PLANS/mini-agent-plan.md and verify that every task marked as complete (`- [x]`) was actually completed correctly in the codebase. Be skeptical — do not trust the status marks at face value.
 
 Canonical law:
 - `SemanticStateSummary` is the single source of truth for routing and control-flow correctness.
@@ -159,18 +142,10 @@ Each turn you receive either:
   (b) the result of your last action.
 
 You respond with exactly one action per turn, as a single JSON object wrapped in a `json` code block.
-Available actions:
-- `done`
-- `list_dir`
-- `read_file`
-- `run_command`
-- `python`
-Every action MUST include:
-- `observation`: what you can see purely from evidence only, as a single string
-- `rationale`: why this is the next best step
+Every action MUST include a short `rationale` field explaining why this is the next best step:
 
 ```json
-{ "observation": "...", "action": "...", "rationale": "..." }
+{ "action": "...", "rationale": "..." }
 ```
 
 ━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -186,9 +161,13 @@ Every action MUST include:
      writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
      WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
 
-3. apply_patch — unavailable in verifier mode
-   Do not use `apply_patch` as verifier.
-   Judge the code against `PLANS/SPEC.md` and report findings in `done.reason`.
+3. apply_patch — correct the plan file if a status mark is wrong
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n line_before_before\n line_before\n- [x] task ✓ done\n+- [ ] task  ← NOT VERIFIED\n line_after\n*** End Patch","rationale":"Correct the plan status to reflect the failed verification."}
+
+   Rules:
+   - Every @@ hunk needs AT LEAST 3 unchanged context lines (space-prefixed) around the change.
+   - WRONG: @@\n- [x] task\n+- [ ] task  (no context — will anchor-miss)
+   - RIGHT: @@\n line_above\n line_above2\n- [x] task\n+- [ ] task\n line_below
 
 4. run_command — run build/test commands to verify correctness
    {"action":"run_command","cmd":"cargo check -p some-crate","cwd":"/workspace/ai_sandbox/canon","rationale":"Validate the crate implicated by the completed task."}
@@ -196,27 +175,26 @@ Every action MUST include:
    {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon","rationale":"Find the implementation or call sites mentioned by the completed task."}
 
 5. python — run focused verification analysis
-   {"action":"python","code":"from pathlib import Path\nprint(Path('PLANS/SPEC.md').exists())","cwd":"/workspace/ai_sandbox/canon","rationale":"Use Python when structured verification logic is easier than shell commands."}
+   {"action":"python","code":"from pathlib import Path\nprint(Path('PLANS/mini-agent-plan.md').exists())","cwd":"/workspace/ai_sandbox/canon","rationale":"Use Python when structured verification logic is easier than shell commands."}
 
-6. done — declare verification complete — DO NOT say done if spec obligations are still unmet
+6. done — declare verification complete - DO NOT say done if there are still pending works to be done in the plan
    {"action":"done","reason":"{\"verified\":false,\"summary\":\"summary of findings: N tasks verified, M incorrect or missing\"}","rationale":"Verification is complete and the findings are summarized."}
    ⚠ done triggers cargo build --workspace then cargo test --workspace — fix any failures first.
 
 ━━━ VERIFICATION PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-For each executor claim:
-1. Use the executor result summary plus `PLANS/SPEC.md` to derive the candidate obligations.
-2. Read the relevant source files to confirm the described change exists.
-3. Run cargo check or cargo test if the task involves code correctness.
-4. Judge whether the code satisfies the spec.
-5. Report verified or unverified status in `done.reason`.
-6. For any routing/control-flow claim, verify whether decisions are derived from semantic state rather than queue-local heuristics.
+For each task marked `- [x]` in the plan:
+1. Read the relevant source files to confirm the described change exists.
+2. Run cargo check or cargo test if the task involves code correctness.
+3. If the task is NOT actually done: use apply_patch to revert its status to `- [ ]` and add a note.
+4. If the task IS done correctly: leave it as-is.
+5. For any routing/control-flow claim, verify whether decisions are derived from semantic state rather than queue-local heuristics.
 
 ━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 - Be critical and thorough — verify evidence, not just the claim.
 - Do not mark anything verified unless you have read the actual code or seen passing tests.
-- Do not modify `PLANS/SPEC.md`, `PLANS/executor-a.md`, `PLANS/executor-b.md`, or source files.
+- Only modify PLANS/mini-agent-plan.md — never edit source files.
 - Emit exactly one action per turn.
 - Reject any claimed completion that still leaves `scheduler_len` or local queue mirrors acting as routing authority when `SemanticStateSummary` is available.
 - When using `done`, the `reason` field must be a compact JSON object string with exactly:
@@ -227,9 +205,9 @@ For each executor claim:
 
 const SYSTEM_INSTRUCTIONS_PLANNER: &str = r#"You are the canon planner agent.
 
-Your job is to read `PLANS/SPEC.md` and continuously derive executor lane plans.
-You own priority, dependency ordering, task allocation, and the ready-work window for each executor.
-On every cycle, re-evaluate the workspace and rewrite `PLANS/executor-a.md` and `PLANS/executor-b.md` so each executor only needs to perform the top 1-5 ready tasks.
+Your job is to continuously reorganize PLANS/mini-agent-plan.md into a DAG-driven execution plan.
+You own priority, dependency ordering, and the ready-work window for the executor.
+On every cycle, re-evaluate the workspace and rewrite the plan so the executor only needs to perform the top 1-5 ready tasks.
 
 Canonical law:
 - `SemanticStateSummary` is the single source of truth for routing and control-flow correctness.
@@ -243,19 +221,10 @@ Each turn you receive either:
   (b) the result of your last action.
 
 You respond with exactly one action per turn, as a single JSON object wrapped in a `json` code block.
-Available actions:
-- `done`
-- `list_dir`
-- `read_file`
-- `apply_patch`
-- `run_command`
-- `python`
-Every action MUST include:
-- `observation`: what you can see purely from evidence only, as a single string
-- `rationale`: why this is the next best step
+Every action MUST include a short `rationale` field explaining why this is the next best step:
 
 ```json
-{ "observation": "...", "action": "...", "rationale": "..." }
+{ "action": "...", "rationale": "..." }
 ```
 
 ━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -270,8 +239,8 @@ Every action MUST include:
      writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
      WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
 
-3. apply_patch — update `PLANS/executor-a.md` and `PLANS/executor-b.md` with derived lane plans, refreshed priorities, and concrete steps
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/executor-a.md\n@@\n line_before_before\n line_before\n - [ ] task to expand\n+  1. sub-step one\n+  2. sub-step two\n line_after\n line_after_after\n*** End Patch","rationale":"Refresh a lane plan so ready work, dependencies, and priority are explicit."}
+3. apply_patch — update PLANS/mini-agent-plan.md with a reorganized DAG plan, refreshed priorities, and concrete steps
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n line_before_before\n line_before\n - [ ] task to expand\n+  1. sub-step one\n+  2. sub-step two\n line_after\n line_after_after\n*** End Patch","rationale":"Reorganize the plan so ready work, dependencies, and priority are explicit."}
 
    Rules:
    - Every @@ hunk needs AT LEAST 3 unchanged context lines (space-prefixed) around the change.
@@ -291,19 +260,19 @@ Every action MUST include:
 ━━━ PLANNING PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 On every planning cycle:
-1. Read `PLANS/SPEC.md`, diagnostics, relevant source files, and recent workspace state to understand what changed.
-2. Derive `PLANS/executor-a.md` and `PLANS/executor-b.md` from the spec.
-3. Maintain a READY NOW window containing at most 1-5 executable tasks for each executor.
+1. Read relevant source files, diagnostics, and recent workspace state to understand what changed.
+2. Reorganize PLANS/mini-agent-plan.md into a DAG-style plan with explicit dependencies and priority.
+3. Maintain a READY NOW window containing at most 1-5 executable tasks for the executor.
 4. Move blocked work behind its dependencies instead of leaving it in the ready window.
 5. Rewrite priorities whenever new evidence changes the critical path.
 6. If queue-truth and semantic-state authority conflict, prioritize semantic-state authority and move queue-truth cleanup behind it as follow-on work.
 
 ━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-- Only modify `PLANS/executor-a.md` and `PLANS/executor-b.md` — never edit source files or `PLANS/SPEC.md`.
-- The planner owns lane-task ordering, dependency structure, and ready-task selection.
+- Only modify PLANS/mini-agent-plan.md — never edit source files directly.
+- The planner owns task ordering, dependency structure, and ready-task selection.
 - Prefer rewriting whole plan sections when needed so priority order stays globally coherent.
-- Keep each executor's ready window small: 1-5 tasks maximum.
+- Keep the executor's ready window small: 1-5 tasks maximum.
 - Prefer root-cause tasks that remove queue-driven routing over local patches that merely suppress symptoms.
 - Emit exactly one action per turn.
 - Output format: exactly one JSON object in a ```json code block. No prose outside it.
@@ -327,19 +296,10 @@ Each turn you receive either:
   (b) the result of your last action.
 
 You respond with exactly one action per turn, as a single JSON object wrapped in a `json` code block.
-Available actions:
-- `done`
-- `list_dir`
-- `read_file`
-- `apply_patch`
-- `run_command`
-- `python`
-Every action MUST include:
-- `observation`: what you can see purely from evidence only, as a single string
-- `rationale`: why this is the next best step
+Every action MUST include a short `rationale` field explaining why this is the next best step:
 
 ```json
-{ "observation": "...", "action": "...", "rationale": "..." }
+{ "action": "...", "rationale": "..." }
 ```
 
 ━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -443,75 +403,6 @@ fn patch_first_file(patch: &str) -> Option<&str> {
         }
     }
     None
-}
-
-fn patch_targets<'a>(patch: &'a str) -> Vec<&'a str> {
-    patch
-        .lines()
-        .filter_map(|line| line.strip_prefix("*** Update File:").or_else(|| line.strip_prefix("*** Add File:")))
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .collect()
-}
-
-fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
-    let targets = patch_targets(patch);
-    if targets.is_empty() {
-        return None;
-    }
-
-    let touches_spec = targets.iter().any(|path| *path == SPEC_FILE);
-    let touches_exec_a = targets.iter().any(|path| *path == EXECUTOR_A_PLAN_FILE);
-    let touches_exec_b = targets.iter().any(|path| *path == EXECUTOR_B_PLAN_FILE);
-    let touches_lane = touches_exec_a || touches_exec_b;
-    let touches_diagnostics = targets.iter().any(|path| *path == DIAGNOSTICS_FILE);
-    let touches_other = targets
-        .iter()
-        .any(|path| *path != SPEC_FILE && *path != EXECUTOR_A_PLAN_FILE && *path != EXECUTOR_B_PLAN_FILE && *path != DIAGNOSTICS_FILE);
-
-    match role {
-        "mini_agent" | "executor_a" | "executor_b" => {
-            if touches_spec || touches_lane || touches_diagnostics {
-                Some(
-                    "Executor may not patch `PLANS/SPEC.md`, lane plans, or `PLANS/diagnostics.md`. Execute code/tests only and report evidence in `done.reason`."
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        "verifier" | "verifier_a" | "verifier_b" => {
-            if touches_spec || touches_lane || touches_diagnostics || touches_other {
-                Some(
-                    "Verifier is read-only for `PLANS/SPEC.md`, lane plans, diagnostics, and source files. Judge the code against the spec and report via `done.reason`."
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        "planner" | "mini_planner" => {
-            if touches_spec || touches_diagnostics || touches_other {
-                Some(
-                    "Planner may only patch `PLANS/executor-a.md` and `PLANS/executor-b.md` because planner derives lane plans from the spec."
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        "diagnostics" => {
-            if touches_spec || touches_lane || touches_other {
-                Some(
-                    "Diagnostics may only patch PLANS/diagnostics.md because diagnostics owns ranked failure reporting."
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }
 
 /// Walk up from `file_path` (workspace-relative) to find the nearest Cargo.toml.
@@ -837,10 +728,6 @@ fn action_rationale(action: &Value) -> Option<&str> {
     action.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
 }
 
-fn action_observation(action: &Value) -> Option<&str> {
-    action.get("observation").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
-}
-
 fn default_rationale(kind: &str) -> &'static str {
     match kind {
         "list_dir" => "Inspect the workspace before making assumptions.",
@@ -868,9 +755,8 @@ fn normalize_action(action: &mut Value) -> Result<()> {
 fn validate_action(action: &Value) -> Result<()> {
     let obj = action.as_object().ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
     let kind = obj.get("action").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("action missing 'action'"))?;
-    let observation = obj.get("observation").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("action missing non-empty 'observation'"))?;
     let rationale = obj.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("action missing non-empty 'rationale'"))?;
-    let _ = (observation, rationale);
+    let _ = rationale;
     if kind == "done" {
         obj.get("reason").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("done missing non-empty 'reason'"))?;
     }
@@ -913,12 +799,10 @@ fn action_command_summary(action: &Value) -> String {
 }
 
 fn append_action_log(role: &str, action: &Value) -> Result<()> {
-    let observation = action_observation(action).unwrap_or("");
     let rationale = action_rationale(action).unwrap_or("");
     let record = json!({
         "ts_ms": canon_llm::endpoint_worker::tab_manager_now_ms(),
         "agent_type": role,
-        "observation": observation,
         "action": action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown"),
         "command_used": action_command_summary(action),
         "rationale": rationale,
@@ -1007,12 +891,12 @@ async fn run_agent(
 
         let mut action = actions[0].clone();
         if let Err(e) = normalize_action(&mut action) {
-            last_result = Some(format!("Invalid action: {e}\nReturn exactly one action with a non-empty `observation`, a non-empty `rationale`, and any required fields."));
+            last_result = Some(format!("Invalid action: {e}\nReturn exactly one action with a non-empty `rationale` and any required fields."));
             step += 1;
             continue;
         }
         if let Err(e) = validate_action(&action) {
-            last_result = Some(format!("Invalid action: {e}\nReturn exactly one action with a non-empty `observation`, a non-empty `rationale`, and any required fields."));
+            last_result = Some(format!("Invalid action: {e}\nReturn exactly one action with a non-empty `rationale` and any required fields."));
             step += 1;
             continue;
         }
@@ -1088,39 +972,35 @@ async fn run_agent(
             }
             "apply_patch" => {
                 let patch = action.get("patch").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("apply_patch missing 'patch'"))?;
-                if let Some(msg) = patch_scope_error(role, patch) {
-                    Ok((false, msg))
-                } else {
-                    match apply_patch(patch, workspace) {
-                        Ok(_) => {
-                            eprintln!("[{role}] step={} apply_patch ok", step + 1);
-                            let check_result = patch_first_file(patch).and_then(|f| infer_crate_for_patch(workspace, f)).map(|krate| {
-                                eprintln!("[{role}] step={} cargo check -p {krate}", step + 1);
-                                exec_run_command(workspace, &format!("cargo check -p {krate}"), WORKSPACE).unwrap_or_else(|e| (false, e.to_string()))
-                            });
-                            match check_result {
-                                Some((ok, out)) => {
-                                    let label = if ok { "cargo check ok" } else { "cargo check failed" };
-                                    eprintln!("[{role}] step={} {label}", step + 1);
-                                    Ok((false, format!("apply_patch ok\n\n{label}:\n{}", truncate(&out, MAX_SNIPPET))))
-                                }
-                                None => Ok((false, "apply_patch ok".to_string())),
+                match apply_patch(patch, workspace) {
+                    Ok(_) => {
+                        eprintln!("[{role}] step={} apply_patch ok", step + 1);
+                        let check_result = patch_first_file(patch).and_then(|f| infer_crate_for_patch(workspace, f)).map(|krate| {
+                            eprintln!("[{role}] step={} cargo check -p {krate}", step + 1);
+                            exec_run_command(workspace, &format!("cargo check -p {krate}"), WORKSPACE).unwrap_or_else(|e| (false, e.to_string()))
+                        });
+                        match check_result {
+                            Some((ok, out)) => {
+                                let label = if ok { "cargo check ok" } else { "cargo check failed" };
+                                eprintln!("[{role}] step={} {label}", step + 1);
+                                Ok((false, format!("apply_patch ok\n\n{label}:\n{}", truncate(&out, MAX_SNIPPET))))
+                            }
+                            None => Ok((false, "apply_patch ok".to_string())),
+                        }
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        eprintln!("[{role}] step={} apply_patch failed: {err_str}", step + 1);
+                        let read_path = extract_anchor_fail_path(&err_str).or_else(|| patch_first_file(patch).map(|s| s.to_string()));
+                        let guidance = patch_failure_guidance(read_path.as_deref(), &err_str);
+                        let mut msg = format!("apply_patch failed: {err_str}\n\n{guidance}");
+                        if let Some(fp) = read_path {
+                            if let Ok(content) = auto_read_for_patch_anchor(workspace, &fp, &err_str) {
+                                eprintln!("[{role}] step={} auto_read path={fp}", step + 1);
+                                msg = format!("apply_patch failed: {err_str}\n\n{guidance}\n\n{content}");
                             }
                         }
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            eprintln!("[{role}] step={} apply_patch failed: {err_str}", step + 1);
-                            let read_path = extract_anchor_fail_path(&err_str).or_else(|| patch_first_file(patch).map(|s| s.to_string()));
-                            let guidance = patch_failure_guidance(read_path.as_deref(), &err_str);
-                            let mut msg = format!("apply_patch failed: {err_str}\n\n{guidance}");
-                            if let Some(fp) = read_path {
-                                if let Ok(content) = auto_read_for_patch_anchor(workspace, &fp, &err_str) {
-                                    eprintln!("[{role}] step={} auto_read path={fp}", step + 1);
-                                    msg = format!("apply_patch failed: {err_str}\n\n{guidance}\n\n{content}");
-                                }
-                            }
-                            Ok((false, msg))
-                        }
+                        Ok((false, msg))
                     }
                 }
             }
@@ -1182,9 +1062,7 @@ async fn main() -> Result<()> {
     let ws_port: u16 = args.windows(2).find(|w| w[0] == "--port").and_then(|w| w[1].parse().ok()).unwrap_or(WS_PORT_DEFAULT);
 
     let workspace = PathBuf::from(WORKSPACE);
-    let spec_path = workspace.join(SPEC_FILE);
-    let exec_a_plan_path = workspace.join(EXECUTOR_A_PLAN_FILE);
-    let exec_b_plan_path = workspace.join(EXECUTOR_B_PLAN_FILE);
+    let plan_path = workspace.join(PLAN_FILE);
 
     let config = CapabilityConfig::snapshot_store_load().context("failed to load capability_config.toml")?;
 
@@ -1195,8 +1073,6 @@ async fn main() -> Result<()> {
     eprintln!("[canon-mini-agent] Chrome extension connected");
 
     let tabs = llm_worker_new_tabs();
-    let tabs_exec_a = llm_worker_new_tabs();
-    let tabs_exec_b = llm_worker_new_tabs();
 
     if orchestrate {
         const MAX_CYCLES: usize = 10;
@@ -1204,6 +1080,11 @@ async fn main() -> Result<()> {
         let mut last_verifier_summary = String::new();
         for cycle in 0..MAX_CYCLES {
             eprintln!("[orchestrate] ── cycle {} ──────────────────────────────", cycle + 1);
+            let order: [&str; 3] = match start_role {
+                "verifier" => ["verifier", "planner", "executor"],
+                "planner" => ["planner", "executor", "verifier"],
+                _ => ["executor", "verifier", "planner"],
+            };
 
             {
                 let ep = find_endpoint(&config, "diagnostics")?.clone();
@@ -1212,7 +1093,7 @@ async fn main() -> Result<()> {
 Always inspect state/event_log/event.tlog.d and the relevant canon system files.\n\
 Prioritize canon-route, canon-loop, canon-runtime, and canon-mini-agent when control flow or prompt contracts are implicated.\n\n\
 Latest verifier summary:\n{}\n\n\
-Use {SPEC_FILE} as the canonical contract, not lane plans.\n\
+Do not use PLANS/mini-agent-plan.md as input.\n\
 Infer failures from code, logs, runtime state, and verifier findings.\n\
 Focus on route/control-flow correctness, event successor discharge, duplicate fanout, scheduler-state drift, and prompt-shell mismatches.\n\n\
 Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin.",
@@ -1222,117 +1103,44 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
                 let _ = run_agent("diagnostics", SYSTEM_INSTRUCTIONS_DIAGNOSTICS, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
             }
 
-            let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
-            let spec = std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
-            let planner_ep = find_endpoint(&config, "mini_planner")?.clone();
-            eprintln!("[orchestrate] starting planner");
-            let planner_prompt = format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n- Derive lane plans from the spec; do not change spec truth.\n\nCreate or refresh {EXECUTOR_A_PLAN_FILE} and {EXECUTOR_B_PLAN_FILE}. Emit exactly one action to begin."
-            );
-            let _plan_result = run_agent("planner", SYSTEM_INSTRUCTIONS_PLANNER, planner_prompt, &planner_ep, &bridge, &workspace, &config, &tabs, false).await?;
+            let mut verify_result: Option<String> = None;
 
-            let exec_a_plan = std::fs::read_to_string(&exec_a_plan_path).with_context(|| format!("failed to read {EXECUTOR_A_PLAN_FILE}"))?;
-            let exec_a_ep = find_endpoint(&config, "mini_agent")?.clone();
-            let exec_a_prompt = format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_A_PLAN_FILE}):\n{exec_a_plan}\n\nYou are executor A. Work only on the highest-priority READY items from your lane plan. Do not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
-            );
+            for role in order {
+                match role {
+                    "executor" => {
+                        let plan = std::fs::read_to_string(&plan_path).with_context(|| format!("failed to read {PLAN_FILE}"))?;
+                        let ep = find_endpoint(&config, "mini_agent")?.clone();
+                        eprintln!("[orchestrate] starting executor");
+                        let prompt = format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.");
+                        let _exec_result = run_agent("executor", SYSTEM_INSTRUCTIONS_EXECUTOR, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
+                    }
+                    "verifier" => {
+                        let plan = std::fs::read_to_string(&plan_path).with_context(|| format!("failed to read {PLAN_FILE}"))?;
+                        let ep = find_endpoint(&config, "verifier")?.clone();
+                        eprintln!("[orchestrate] starting verifier");
+                        let prompt = format!(
+                            "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan to verify (from {PLAN_FILE}):\n{plan}\n\nBegin by reading the plan and identifying all tasks marked `- [x]`. Verify each one. Emit exactly one action to begin."
+                        );
+                        verify_result = Some(run_agent("verifier", SYSTEM_INSTRUCTIONS_VERIFIER, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?);
+                        if let Some(result) = verify_result.as_deref() {
+                            last_verifier_summary = result.to_string();
+                        }
+                    }
+                    "planner" => {
+                        let plan_after = std::fs::read_to_string(&plan_path).with_context(|| format!("failed to read {PLAN_FILE}"))?;
+                        let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
+                        let ep = find_endpoint(&config, "mini_planner")?.clone();
+                        eprintln!("[orchestrate] starting planner");
+                        let prompt = format!(
+                            "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCurrent plan (from {PLAN_FILE}):\n{plan_after}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nUse the diagnostics report to prioritize and expand pending tasks (`- [ ]`) into concrete, actionable steps. Emit exactly one action to begin."
+                        );
+                        let _plan_result = run_agent("planner", SYSTEM_INSTRUCTIONS_PLANNER, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
+                    }
+                    _ => unreachable!("validated start role"),
+                }
+            }
 
-            let exec_b_plan = std::fs::read_to_string(&exec_b_plan_path).with_context(|| format!("failed to read {EXECUTOR_B_PLAN_FILE}"))?;
-            let exec_b_ep = find_endpoint(&config, "executor_b")?.clone();
-            let exec_b_prompt = format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_B_PLAN_FILE}):\n{exec_b_plan}\n\nYou are executor B. Work only on the highest-priority READY items from your lane plan and avoid duplicating executor A's lane. Do not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
-            );
-
-            let verifier_ep_a = find_endpoint(&config, "verifier")?.clone();
-            let verifier_ep_b = find_endpoint(&config, "verifier")?.clone();
-
-            eprintln!("[orchestrate] starting executor/verifier lanes concurrently");
-            let lane_a = async {
-                let exec_a_result = run_agent(
-                    "executor_a",
-                    SYSTEM_INSTRUCTIONS_EXECUTOR,
-                    exec_a_prompt,
-                    &exec_a_ep,
-                    &bridge,
-                    &workspace,
-                    &config,
-                    &tabs_exec_a,
-                    false,
-                )
-                .await?;
-
-                let verify_spec_a =
-                    std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
-                let verifier_prompt_a = format!(
-                    "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nExecutor lane: A\nExecutor result summary:\n{exec_a_result}\n\nCanonical spec (from {SPEC_FILE}):\n{verify_spec_a}\n\nVerify whether the current code satisfies the spec. Executor evidence is only a hint. Emit exactly one action to begin."
-                );
-                let verify_a_result = run_agent(
-                    "verifier_a",
-                    SYSTEM_INSTRUCTIONS_VERIFIER,
-                    verifier_prompt_a,
-                    &verifier_ep_a,
-                    &bridge,
-                    &workspace,
-                    &config,
-                    &tabs,
-                    false,
-                )
-                .await?;
-
-                Ok::<String, anyhow::Error>(verify_a_result)
-            };
-
-            let lane_b = async {
-                let exec_b_result = run_agent(
-                    "executor_b",
-                    SYSTEM_INSTRUCTIONS_EXECUTOR,
-                    exec_b_prompt,
-                    &exec_b_ep,
-                    &bridge,
-                    &workspace,
-                    &config,
-                    &tabs_exec_b,
-                    false,
-                )
-                .await?;
-
-                let verify_spec_b =
-                    std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
-                let verifier_prompt_b = format!(
-                    "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nExecutor lane: B\nExecutor result summary:\n{exec_b_result}\n\nCanonical spec (from {SPEC_FILE}):\n{verify_spec_b}\n\nVerify whether the current code satisfies the spec. Executor evidence is only a hint. Emit exactly one action to begin."
-                );
-                let verify_b_result = run_agent(
-                    "verifier_b",
-                    SYSTEM_INSTRUCTIONS_VERIFIER,
-                    verifier_prompt_b,
-                    &verifier_ep_b,
-                    &bridge,
-                    &workspace,
-                    &config,
-                    &tabs,
-                    false,
-                )
-                .await?;
-
-                Ok::<String, anyhow::Error>(verify_b_result)
-            };
-
-            let (verify_a_result, verify_b_result) = tokio::join!(lane_a, lane_b);
-            let verify_a_result = verify_a_result?;
-            let verify_b_result = verify_b_result?;
-            last_verifier_summary =
-                format!("lane_a={verify_a_result}\nlane_b={verify_b_result}");
-
-            let verify_result = if verifier_confirmed(&verify_a_result) && verifier_confirmed(&verify_b_result) {
-                "{\"verified\":true,\"summary\":\"both verifier lanes confirmed completion\"}".to_string()
-            } else {
-                format!(
-                    "{{\"verified\":false,\"summary\":\"lane_a={} | lane_b={}\"}}",
-                    verify_a_result.replace('"', "'"),
-                    verify_b_result.replace('"', "'")
-                )
-            };
-
+            let verify_result = verify_result.unwrap_or_else(|| "{\"verified\":false,\"summary\":\"verifier did not run\"}".to_string());
             if verifier_confirmed(&verify_result) {
                 eprintln!("[orchestrate] verifier confirms completion — done after {} cycle(s)", cycle + 1);
                 println!("orchestrate: converged after {} cycle(s)", cycle + 1);
@@ -1354,35 +1162,24 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
             ("mini_agent", SYSTEM_INSTRUCTIONS_EXECUTOR)
         };
 
-        let primary_input_path = if is_verifier || is_planner {
-            &spec_path
-        } else {
-            &exec_a_plan_path
-        };
-        let primary_input_name = if is_verifier || is_planner {
-            SPEC_FILE
-        } else {
-            EXECUTOR_A_PLAN_FILE
-        };
-        let primary_input = std::fs::read_to_string(primary_input_path).with_context(|| format!("failed to read {primary_input_name}"))?;
-        if primary_input.trim().is_empty() {
-            bail!("input file is empty — write content into {primary_input_name} before running");
+        let plan = std::fs::read_to_string(&plan_path).with_context(|| format!("failed to read {PLAN_FILE}"))?;
+        if plan.trim().is_empty() {
+            bail!("plan file is empty — write an objective into {PLAN_FILE} before running");
         }
-        eprintln!("[canon-mini-agent] role={role} input loaded ({} bytes)", primary_input.len());
+        eprintln!("[canon-mini-agent] role={role} plan loaded ({} bytes)", plan.len());
 
         let endpoint = find_endpoint(&config, role)?.clone();
         eprintln!("[canon-mini-agent] endpoint id={} url={}", endpoint.id, endpoint.url);
 
         let initial_prompt = if is_verifier {
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nVerify whether the current code satisfies the spec. Emit exactly one action to begin.")
+            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan to verify (from {PLAN_FILE}):\n{plan}\n\nBegin by reading the plan and identifying all tasks marked `- [x]`. Verify each one. Emit exactly one action to begin.")
         } else if is_diagnostics {
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nUse {SPEC_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin.")
+            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nDo not use PLANS/mini-agent-plan.md as input.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin.")
         } else if is_planner {
             let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nDerive {EXECUTOR_A_PLAN_FILE} and {EXECUTOR_B_PLAN_FILE} from the spec. Emit exactly one action to begin.")
+            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCurrent plan (from {PLAN_FILE}):\n{plan}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nUse the diagnostics report to prioritize and expand pending tasks (`- [ ]`) into concrete, actionable steps. Emit exactly one action to begin.")
         } else {
-            let spec = std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_A_PLAN_FILE}):\n{primary_input}\n\nDo not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin.")
+            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.")
         };
 
         let reason = run_agent(role, instructions, initial_prompt, &endpoint, &bridge, &workspace, &config, &tabs, true).await?;

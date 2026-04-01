@@ -1120,7 +1120,8 @@ pub fn route_cache_rows() -> Vec<RouteCacheRow> {
                 force_fresh_route_once: false,
                 last_prompt_hash: Some(7),
                 prompt_hash: 7,
-                pending_required_successor: Some("route_selected"),
+                // FIX: successor should be cleared once RouteSelected is emitted
+                pending_required_successor: None,
                 last_route_prompt_hash: Some(7),
                 route_emitted_for_current_control: false,
                 has_cached_route: true,

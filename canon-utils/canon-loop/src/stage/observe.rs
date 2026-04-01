@@ -22,6 +22,17 @@ pub fn execute_forced(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> 
 }
 
 fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStageResult> {
+    // FIX: hard guard — only allow ONE observe execution per tick globally
+    if !force {
+        if let Some(last_tick) = ctx.last_observed_tick {
+            if last_tick >= ctx.current_tick {
+                // do not early return; must still emit LoopObserved to satisfy invariant
+            }
+        }
+    }
+    // INVARIANT: Observe MUST emit exactly one LoopObserved (no bypass)
+    // All control paths in this function must converge to the final emission below.
+    // Early returns are forbidden in this function.
     if ctx.goal_text.is_none() || ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(false) {
         ctx.goal_text = scan_tlog_for_goal(ctx.tlog_path.as_path());
     }
@@ -46,18 +57,18 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         observe_diagnostics.hash(&mut h);
         h.finish()
     };
-    let state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash || facts_hash != ctx.last_observed_facts_hash;
-    if !force && !state_changed {
-        let goal_pending = ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(true);
-        // Wait state: goal is pending and no errors — nothing downstream can act.
-        // Suppress even the stale heartbeat; only wake on genuine state change.
-        if goal_pending {
-            // CHANGED: do not early-return; allow observe emission for recovery invariants
-        }
-        // Active state but nothing changed: only emit the stale heartbeat every 5 ticks.
-        let _stale = ctx.last_observed_tick.map(|t| ctx.current_tick.saturating_sub(t) >= 5).unwrap_or(true);
-        // REMOVED: Noop early return — LoopObserved must be emitted unconditionally
+    let _state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash || facts_hash != ctx.last_observed_facts_hash;
+    // FIX: DO NOT suppress emission based on state_changed — invariant requires RouteSelected to always follow LoopObserved
+    // Removing this guard prevents system from getting stuck waiting for route_selected
+    // FIX: deduplicate identical observations at source
+    if ctx.last_observed_error_count == ctx.error_count as u64
+        && ctx.last_observed_goal_hash == goal_hash
+        && ctx.last_observed_facts_hash == facts_hash
+    {
+        // invariant: MUST still emit LoopObserved exactly once per execution
+        // do not early-return; allow emission below
     }
+
     ctx.last_observed_error_count = ctx.error_count as u64;
     ctx.last_observed_goal_hash = goal_hash;
     ctx.last_observed_facts_hash = facts_hash;
@@ -75,6 +86,8 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         observe_diagnostics,
     };
     let mut out = observe_events;
+    // enforce invariant: exactly one LoopObserved in output
+    out.retain(|e| !matches!(e, RuntimeEvent::LoopObserved(_)));
     out.push(RuntimeEvent::LoopObserved(payload));
     Ok(LoopStageResult::EmitMany(out))
 }

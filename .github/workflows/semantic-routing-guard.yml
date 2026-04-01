@@ -1,0 +1,21 @@
+name: Semantic Routing Guard
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for forbidden routing signals
+        run: |
+          set -e
+          echo "Scanning for forbidden signals in routing paths..."
+          if rg -n "scheduler_len|planned_pending|pending_tool_result_ids" canon-utils/canon-route/src | grep -v "DEPRECATED"; then
+            echo "❌ Forbidden queue-derived signals detected in routing code"
+            exit 1
+          fi
+          echo "✅ No forbidden signals detected"

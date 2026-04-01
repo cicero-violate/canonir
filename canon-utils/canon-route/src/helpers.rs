@@ -20,7 +20,6 @@ pub fn heuristic_route_json(ctx: &RouteContext) -> String {
         "signals": {
             "context_ready": ctx.context_ready,
             "workspace_dirty": ctx.workspace_dirty_tracker.any_dirty(),
-            "scheduler_len": ctx.scheduler_len,
             "acted_unverified": ctx.acted_unverified,
             "finish_ready": ctx.finish_ready,
         }

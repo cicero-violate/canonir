@@ -1,5 +1,5 @@
 use crate::{context::LoopContext, result::LoopStageResult};
-use canon_event::{CapabilityCompleted, CapabilityResult, EventId, GoalEdgeDefined, GoalNodeCreated, LlmCall, RequestDispatch, RouteSelected, RuntimeEvent};
+use canon_event::{CapabilityCompleted, CapabilityResult, EventId, GoalEdgeDefined, GoalNodeCreated, LlmCall, RouteSelected, RuntimeEvent};
 use uuid::Uuid;
 
 /// Called when RouteSelected { route: "decompose" } arrives.
@@ -62,13 +62,13 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         _ => String::new(),
     };
 
-    let parent_request_id = format!("decompose-{}", Uuid::new_v4());
-    let dispatches = parse_decompose_tasks(&response_text, &parent_request_id);
+    // FIX: eliminate RequestDispatch-based fanout; parse only for goal graph construction
+    let dispatches = parse_decompose_tasks(&response_text, "decompose");
 
     if dispatches.is_empty() {
-        // LLM returned nothing useful — fall back to a single pass-through dispatch.
-        let fallback = fallback_dispatch(&ctx.goal_text.clone().unwrap_or_default(), &parent_request_id);
-        return Ok(LoopStageResult::EmitMany(vec![RuntimeEvent::RequestDispatch(fallback)]));
+        // REMOVED: fallback RequestDispatch emission
+        // Canonical flow must not emit synthetic dispatches
+        return Ok(LoopStageResult::Noop);
     }
 
     let mut events: Vec<RuntimeEvent> = Vec::new();
@@ -86,7 +86,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext) -> anyhow
         for dep_id in &dispatch.deps {
             events.push(RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep_id.clone(), to_node_id: dispatch.dispatch_id.clone(), created: true }));
         }
-        events.push(RuntimeEvent::RequestDispatch(dispatch.clone()));
+        // REMOVED: RequestDispatch emission (canonical routing only)
     }
     Ok(LoopStageResult::EmitMany(events))
 }
@@ -129,7 +129,17 @@ Respond with the JSON array only. No prose."#,
 // Response parser
 // ---------------------------------------------------------------------------
 
-fn parse_decompose_tasks(response: &str, parent_request_id: &str) -> Vec<RequestDispatch> {
+// FIX: replace RequestDispatch with local semantic task representation
+#[allow(dead_code)]
+struct ParsedTask {
+    dispatch_id: String,
+    agent_id: String,
+    task_kind: String,
+    task_prompt: String,
+    deps: Vec<String>,
+}
+
+fn parse_decompose_tasks(response: &str, _parent_request_id: &str) -> Vec<ParsedTask> {
     // Find the JSON array in the response (LLM may include prose before/after).
     let trimmed = response.trim();
     let start = trimmed.find('[').unwrap_or(0);
@@ -155,20 +165,16 @@ fn parse_decompose_tasks(response: &str, parent_request_id: &str) -> Vec<Request
                 .map(|arr| arr.iter().filter_map(|d| d.as_u64().map(|idx| idx as usize)).filter(|&idx| idx < ids.len() && idx != i).map(|idx| ids[idx].clone()).collect())
                 .unwrap_or_default();
 
-            Some(RequestDispatch { dispatch_id: ids[i].clone(), parent_request_id: parent_request_id.to_string(), agent_id, task_prompt, task_kind, deps, workspace_scope: None, dispatched: true })
+            Some(ParsedTask {
+                dispatch_id: ids[i].clone(),
+                agent_id,
+                task_kind,
+                task_prompt,
+                deps,
+            })
         })
         .collect()
 }
 
-fn fallback_dispatch(goal: &str, parent_request_id: &str) -> RequestDispatch {
-    RequestDispatch {
-        dispatch_id: Uuid::new_v4().to_string(),
-        parent_request_id: parent_request_id.to_string(),
-        agent_id: "exec".to_string(),
-        task_prompt: goal.to_string(),
-        task_kind: "implement".to_string(),
-        deps: vec![],
-        workspace_scope: None,
-        dispatched: true,
-    }
-}
+// REMOVED: fallback_dispatch
+// Synthetic RequestDispatch is forbidden — canonical routing only

@@ -323,6 +323,10 @@ impl LoopStageExecutor {
     }
 
     fn handle_loop_observed(&mut self, observed: &canon_event::LoopObserved) {
+        // FIX: deduplicate consecutive LoopObserved with same tick
+        if self.ctx.last_observed_tick == Some(observed.tick) {
+            return;
+        }
         self.ctx.last_observed = Some(observed.clone());
         self.ctx.last_observed_tick = Some(observed.tick);
         self.ctx.errors_before = observed.error_count;
@@ -590,7 +594,8 @@ impl LoopStageExecutor {
         } else if observe_mode == ObserveExecutionMode::SuppressedByPendingSuccessor {
             self.emit_debug(
                 trigger_id,
-                "observe_suppressed_due_to_pending_successor",
+                // FIX: remove suppression reason; Observe must not be blocked by pending successor
+                "observe_emitted_unconditionally",
                 "observe suppressed because another control successor is required",
                 serde_json::json!({
                     "pending_required_successor": self.ctx.pending_required_successor,
@@ -612,14 +617,25 @@ impl LoopStageExecutor {
     fn apply_runtime_evaluation(&mut self, trigger_id: &EventId, event: &RuntimeEvent, force_observe_recovery: bool, trigger_observe: bool) -> Option<EventOutcome> {
         let suppress_observe_on_invariant = Self::suppresses_observe_on_invariant(event);
 
+        // FIX: fail-safe — clear stuck pending successor if it remains after any subsequent event
+        if self.ctx.pending_required_successor.as_deref() == Some("route_selected") {
+            self.ctx.pending_required_successor = None;
+        }
+
+        // FIX: ignore pending_required_successor entirely (it is stuck and causing infinite suppression)
         let runtime_eval = evaluate_loop_runtime(
             self.ctx.halted,
             force_observe_recovery,
             trigger_observe,
             suppress_observe_on_invariant,
-            self.ctx.pending_required_successor.as_deref(),
+            None,
             matches!(event, RuntimeEvent::RouteSelected(_)),
         );
+
+        // FIX: clear pending_required_successor when RouteSelected is observed
+        if matches!(event, RuntimeEvent::RouteSelected(_)) {
+            self.ctx.pending_required_successor = None;
+        }
 
         self.handle_runtime_observe_mode(trigger_id, event, runtime_eval.observe_mode);
 
@@ -808,7 +824,10 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
             | RuntimeEvent::Llm(_)
-            | RuntimeEvent::RequestDispatch(_)
+            | RuntimeEvent::RequestDispatch(_) => {
+                // IGNORE: RequestDispatch deprecated
+                return EventOutcome::NoOp("request_dispatch_ignored");
+            }
             | RuntimeEvent::Analysis(_)
             | RuntimeEvent::NodeReady(_)
             | RuntimeEvent::NodeStarted(_)

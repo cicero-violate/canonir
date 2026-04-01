@@ -115,7 +115,10 @@ impl EventConsumer for GoalGraphConsumer {
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
             | RuntimeEvent::Llm(_)
-            | RuntimeEvent::RequestDispatch(_)
+            | RuntimeEvent::RequestDispatch(_) => {
+                // IGNORE: RequestDispatch deprecated
+                return EventOutcome::NoOp("request_dispatch_ignored");
+            }
             | RuntimeEvent::SubTaskResult(_)
             | RuntimeEvent::Analysis(_)
             | RuntimeEvent::RuntimeStateUpdated(_)

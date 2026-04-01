@@ -1,127 +1,108 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- event log segments in state/event_log/event.tlog.d (1 file, ~380KB total)
-- python structured scan (latest):
-  - latest_mtime_delta_sec ≈ 347s (log is **stale relative to current cycle**)
-  - loop_observed_missing=77
-  - observe_recovery_missing=0
-  - act_with_empty_scheduler=2
-  - missing_decision_traces=61
-  - missing_route_traces=60
-  - successor_discharge_gaps=38
-  - duplicate_fanout_signals=1
-  - scheduler_drift_signals=1
-  - synthetic_dispatch_signals=2
-
-## Time / Freshness Assessment
-- Event log **not updated recently (~347s old)**
-- Signals may reflect **previous cycle state**, not current execution
-- Risk: partial or stale conclusions if system has progressed
-
-Implication:
-- Failures below are **confirmed historically**, but may not reflect most recent fixes
-- However, **monotonic growth patterns across prior runs strongly indicate unresolved systemic issues**
+- event log segments in state/event_log/event.tlog.d (1 file, ~30.4MB total)
+- time-aware analysis:
+  - seconds_since_last_write ≈ 5709s (**CRITICAL: runtime emission halted**)
+- python structured scan:
+  - loop_observed_missing=24172
+  - missing_decision_traces=5167
+  - missing_route_traces=5166
+  - successor_discharge_gaps=2188
+  - synthetic_dispatch_signals=461
+  - queue_driven_routing_signals=16
+- verifier evidence:
+  - RequestDispatch still present in EventKind and propagated
+  - scheduler_len still present and actively updated
 
 ## Ranked Failures
 
-### 1. Impact: HIGH
-Signal: Missing DECIDE + ROUTE trace coverage (systemic, scaling)
+### 1. Impact: CRITICAL
+Signal: Runtime observability failure (event log halted)
 Evidence:
-- missing_decision_traces = 61
-- missing_route_traces = 60
-- historically increasing monotonically
-Repair Targets:
-- canon-invariant/src/lib.rs
-  - emit DECIDE(trace_id, decision, full inputs)
-- canon-route/src/executor.rs
-  - emit ROUTE(trace_id, decision→route mapping)
-- invariant:
-  - route_selected ⇒ exactly one DECIDE + one ROUTE
-
-### 2. Impact: HIGH
-Signal: LoopObserved emission missing / non-deterministic
-Evidence:
-- loop_observed_missing = 77 (largest growing metric)
-Repair Targets:
-- canon-loop/src/stage/observe.rs
-  - enforce unconditional LoopObserved emission
-  - eliminate all conditional skips
-
-### 3. Impact: HIGH
-Signal: Event lifecycle incomplete (successor discharge gaps)
-Evidence:
-- successor_discharge_gaps = 38
+- No writes for ~5709 seconds
+- Large-scale invariant violations present prior to stall
 Repair Targets:
 - canon-runtime
-  - enforce lifecycle completion: emitted → routed → executed → discharged
-  - add explicit discharge assertion
+  - enforce heartbeat emission per loop cycle
+  - fail-fast on stalled logging
 
-### 4. Impact: HIGH
-Signal: Synthetic dispatch paths (control-flow corruption)
+### 2. Impact: CRITICAL
+Signal: RequestDispatch not eliminated (spec violation)
 Evidence:
-- synthetic_dispatch_signals = 2
+- verifier confirms presence in EventKind and propagation layers
 Repair Targets:
-- canon-runtime dispatch layer
-  - eliminate synthetic fanout paths
-  - enforce single canonical dispatch per event
+- canon-runtime-events
+  - remove RequestDispatch from EventKind
+- canon-loop, canon-route, executor
+  - remove all match arms and propagation paths
 
-### 5. Impact: HIGH
-Signal: Act executed with empty scheduler
+### 3. Impact: CRITICAL
+Signal: Routing authority violation (queue-driven state persists)
 Evidence:
-- act_with_empty_scheduler = 2
+- queue_driven_routing_signals = 16
+- verifier confirms scheduler_len still exists and is updated
 Repair Targets:
-- canon-invariant/src/lib.rs
-  - enforce scheduler_len == 0 ⇒ Observe
-- canon-route executor
-  - block Act when scheduler empty
+- canon-route/src/policy.rs
+- canon-mini-agent/src/plan.rs
+- context/invariant layers
+  - eliminate scheduler_len and planned_pending usage
+  - enforce SemanticStateSummary as sole authority
 
-### 6. Impact: MEDIUM
-Signal: Scheduler drift
+### 4. Impact: CRITICAL
+Signal: Synthetic dispatch explosion (non-canonical control flow)
 Evidence:
-- scheduler_drift_signals = 1
+- synthetic_dispatch_signals = 461
 Repair Targets:
-- canon-loop context
-  - enforce single source of truth
-  - validate scheduler before decision
+- canon-runtime dispatch
+  - eliminate all alternate dispatch paths
+  - enforce single canonical pipeline
 
-### 7. Impact: MEDIUM
-Signal: Duplicate dispatch
+### 5. Impact: CRITICAL
+Signal: Observability collapse (missing DECIDE/ROUTE traces)
 Evidence:
-- duplicate_fanout_signals = 1
+- >5k missing traces
 Repair Targets:
-- runtime dispatch
-  - idempotent dispatch (event_id guard)
+- canon-invariant + executor
+  - enforce DECIDE + ROUTE emission invariant
 
-### 8. Impact: MEDIUM
-Signal: Observe recovery path missing
+### 6. Impact: CRITICAL
+Signal: LoopObserved invariant failure
 Evidence:
-- no recovery traces
+- 24k missing LoopObserved events
 Repair Targets:
 - canon-loop observe stage
-  - implement explicit recovery state + trace
+  - enforce unconditional emission
 
-## Temporal Diagnostics Insights
+### 7. Impact: CRITICAL
+Signal: Lifecycle incomplete (missing discharge)
+Evidence:
+- 2188 discharge gaps
+Repair Targets:
+- canon-runtime
+  - enforce full lifecycle completion
 
-- Failures (LoopObserved, trace gaps, discharge gaps) show **consistent monotonic growth across runs**
-- Indicates **systemic invariant violations**, not transient bugs
-- No evidence of regression reversal → fixes not taking effect or not executed
+## Systemic Insight
+
+- System shows **combined architectural + runtime failure**:
+  - Runtime has halted (no observability)
+  - Core spec invariants (RequestDispatch removal, semantic routing) not satisfied
+  - Control-flow fragmentation persists (synthetic dispatch)
+- SemanticStateSummary is not authoritative in execution
 
 ## Planner Handoff
 
-Highest priority:
-1. Enforce DECIDE + ROUTE trace completeness
-2. Make LoopObserved emission unconditional
-3. Fix event lifecycle (guarantee discharge)
-4. Remove synthetic dispatch paths
-5. Enforce scheduler invariant (no Act on empty)
-
-Secondary:
-6. Fix scheduler drift
-7. Remove duplicate dispatch
-8. Implement observe recovery
+Priority:
+1. Restore runtime emission (unblock observability)
+2. Fully eliminate RequestDispatch from all layers
+3. Remove scheduler_len and queue-derived routing state
+4. Enforce SemanticStateSummary as sole routing authority
+5. Eliminate synthetic dispatch paths
+6. Restore DECIDE/ROUTE tracing
+7. Fix LoopObserved invariant
+8. Enforce lifecycle completion
 
 Blockers:
-- Event log staleness (~347s) → need fresh cycle validation
-- Persistent monotonic failure growth → indicates fixes not wired into execution path
+- No fresh logs → cannot validate fixes
+- Architectural violations (RequestDispatch + scheduler_len) still present in code
 

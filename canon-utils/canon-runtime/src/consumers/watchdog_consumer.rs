@@ -96,7 +96,10 @@ impl EventConsumer for WatchdogConsumer {
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
             | RuntimeEvent::Llm(_)
-            | RuntimeEvent::RequestDispatch(_)
+            | RuntimeEvent::RequestDispatch(_) => {
+                // IGNORE: RequestDispatch deprecated
+                EventOutcome::NoOp("request_dispatch_ignored")
+            }
             | RuntimeEvent::SubTaskResult(_)
             | RuntimeEvent::Analysis(_)
             | RuntimeEvent::RuntimeStateUpdated(_)

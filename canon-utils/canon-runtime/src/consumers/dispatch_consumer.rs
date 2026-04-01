@@ -1,28 +1,30 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+// REMOVED: unused thread import
+// REMOVED: unused timing imports
 
-use crate::consumers::capability_executor::CapabilityExecutor;
-use crate::EventRuntime;
-use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, GoalNodeRetracted, LoopObserved, RequestDispatch, RuntimeEvent, SubTaskResult};
-use canon_loop::LoopStageExecutor;
+// REMOVED: unused runtime + capability executor
+use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RuntimeEvent};
+// REMOVED: unused LoopStageExecutor
 use canon_proc_macros::must_emit;
-use canon_route::RouteExecutor;
+// REMOVED: unused RouteExecutor
 
 /// Load exec endpoint IDs from capability_config.toml at startup.
 fn load_exec_endpoint_ids() -> Vec<String> {
     canon_llm::config::CapabilityConfig::snapshot_store_load().ok().map(|c| c.llm_endpoints.iter().filter(|e| e.role.as_deref() == Some("exec")).map(|e| e.id.clone()).collect()).unwrap_or_default()
 }
 
+#[allow(dead_code)]
 const SUB_AGENT_TIMEOUT_SECS: u64 = 300;
+#[allow(dead_code)]
 const TICK_INTERVAL_MS: u64 = 100;
 
 // ---------------------------------------------------------------------------
 // HaltDetectorConsumer
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct HaltDetectorConsumer {
     halted: Arc<AtomicBool>,
 }
@@ -55,6 +57,7 @@ impl EventConsumer for HaltDetectorConsumer {
 // and collects action IDs for SubTaskResult.actions_taken
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct ForwardConsumer {
     parent: EventEmitterHandle,
     actions_taken: Arc<Mutex<Vec<String>>>,
@@ -90,10 +93,10 @@ impl EventConsumer for ForwardConsumer {
                 forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopObserved(_) => {
-                // FIX: forward LoopObserved exactly once to avoid suppressing
-                // legitimate observe recovery while preventing duplication
-                forward(&self.parent, event.clone());
-                return EventOutcome::NoOp("loop_observed_forwarded_once");
+                // CRITICAL FIX: do NOT forward LoopObserved here
+                // Forwarding at this layer creates duplicate delivery paths
+                // LoopObserved must propagate only via canonical runtime/bus path
+                return EventOutcome::NoOp("loop_observed_no_forward");
             }
             RuntimeEvent::LoopPlanned(p) => {
                 if let Some(id) = &p.action_id {
@@ -190,73 +193,18 @@ impl EventConsumer for ForwardConsumer {
 // Sub-agent loop — owns a full EventRuntime with isolated tlog
 // ---------------------------------------------------------------------------
 
-fn run_sub_agent(req: RequestDispatch, parent_emitter: EventEmitterHandle, base_workspace: PathBuf, trigger_id: EventId) {
-    let workspace = base_workspace.join("sub_agents").join(&req.dispatch_id);
-    std::fs::create_dir_all(&workspace).ok();
-    let tlog = workspace.join("event.tlog.d");
+// REMOVED: run_sub_agent(RequestDispatch)
+// Entire synthetic sub-agent execution block removed — canonical routing only
+// REMOVED: dangling LoopObserved payload from deleted RequestDispatch flow
 
-    let halted = Arc::new(AtomicBool::new(false));
-    let actions_taken: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-
-    let consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
-        Box::new(LoopStageExecutor::new(workspace.clone(), tlog.clone()).with_agent_id(req.agent_id.clone())),
-        Box::new(RouteExecutor::new(workspace.clone())),
-        Box::new(CapabilityExecutor::new(workspace.clone())),
-        Box::new(HaltDetectorConsumer { halted: halted.clone() }),
-        Box::new(ForwardConsumer { parent: parent_emitter.clone(), actions_taken: actions_taken.clone(), halted: halted.clone() }),
-    ];
-
-    let mut runtime = EventRuntime::new(consumers);
-    runtime.set_tlog_path(tlog);
-
-    // Prime the sub-agent with its goal inside the sub-agent runtime, not the parent bus.
-    let _ = runtime.emit_event_with_parents(
-        RuntimeEvent::LoopObserved(LoopObserved {
-            tick: 0,
-            goal_text: Some(req.task_prompt.clone()),
-            error_count: 0,
-            warning_count: 0,
-            compiler_errors: vec![],
-            semantic_summary: canon_semantic_state::SemanticStateSummary::default(),
-            observe_diagnostics: vec![],
-        }),
-        vec![trigger_id.clone()],
-        file!(),
-        line!(),
-    );
-
-    let deadline = Instant::now() + Duration::from_secs(SUB_AGENT_TIMEOUT_SECS);
-    while !halted.load(Ordering::Relaxed) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(TICK_INTERVAL_MS));
-    }
-
-    let success = halted.load(Ordering::Relaxed);
-    let taken = actions_taken.lock().map(|v| v.clone()).unwrap_or_default();
-
-    if !success {
-        parent_emitter.emit_with_parents(RuntimeEvent::GoalNodeRetracted(GoalNodeRetracted { node_id: req.dispatch_id.clone(), retracted: true }), vec![trigger_id.clone()], file!(), line!());
-    }
-
-    parent_emitter.emit_with_parents(
-        RuntimeEvent::SubTaskResult(SubTaskResult {
-            dispatch_id: req.dispatch_id,
-            agent_id: req.agent_id,
-            parent_request_id: req.parent_request_id,
-            success,
-            output: serde_json::json!({}),
-            actions_taken: taken,
-            error: if success { None } else { Some("sub-agent timeout".to_string()) },
-        }),
-        vec![trigger_id],
-        file!(),
-        line!(),
-    );
-}
+// REMOVED: RequestDispatch execution block
+// Synthetic dispatch execution is eliminated; canonical routing must drive all execution
 
 // ---------------------------------------------------------------------------
 // DispatchConsumer — public API
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 pub struct DispatchConsumer {
     emitter: Option<EventEmitterHandle>,
     workspace: PathBuf,
@@ -276,6 +224,7 @@ impl DispatchConsumer {
     /// Map a generic role string (e.g., "exec") to a specific endpoint ID
     /// from the configured pool, round-robin. If `agent_id` is already a
     /// known endpoint ID it is returned unchanged.
+    #[allow(dead_code)]
     fn assign_endpoint(&mut self, agent_id: &str) -> String {
         // Already a concrete endpoint ID — use it directly.
         if self.exec_endpoints.contains(&agent_id.to_string()) {
@@ -310,31 +259,16 @@ impl EventConsumer for DispatchConsumer {
     }
 
     #[must_emit]
-    fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
+    fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         // 🔥 CRITICAL: prove DispatchConsumer actually sees RouteSelected
         if let RuntimeEvent::RouteSelected(route) = event {
             eprintln!("[DISPATCH TRACE] DispatchConsumer RECEIVED RouteSelected tick={}", route.tick);
-            // REMOVE: synthetic RequestDispatch emission
-            // Routing + dispatch must flow through canonical RouteExecutor path only
+            // INVARIANT: DISPATCH MUST FLOW ONLY THROUGH ROUTE EXECUTOR
+            // No synthetic RequestDispatch is allowed here — this consumer must remain passive
+            // and only react to canonical RequestDispatch events emitted downstream.
             return EventOutcome::NoOp("route_selected_no_synthetic_dispatch");
         }
-        let RuntimeEvent::RequestDispatch(req) = event else {
-            return EventOutcome::NoOp("dispatch_consumer_non_dispatch");
-        };
-        let Some(emitter) = self.emitter.clone() else {
-            return EventOutcome::NoOp("dispatch_consumer_no_emitter");
-        };
-        // Resolve the generic role ("exec") to a specific endpoint ID so that
-        // all LlmCalls within this sub-agent use the same tab (stateful conversation).
-        let mut req = req.clone();
-        req.agent_id = self.assign_endpoint(&req.agent_id);
-        let base = self.workspace.clone();
-        thread::Builder::new()
-            .name(format!("dispatch-worker-{}", req.dispatch_id))
-            .spawn(move || {
-                run_sub_agent(req, emitter, base, trigger_id);
-            })
-            .expect("dispatch worker thread");
-        EventOutcome::NoOp("dispatch_consumer_spawned")
+        // REMOVED: RequestDispatch handling entirely
+        EventOutcome::NoOp("dispatch_consumer_non_dispatch")
     }
 }

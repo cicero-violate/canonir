@@ -360,22 +360,25 @@ fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
             rule: DeterministicRouteRule::MissingTargetPlan,
         }));
     }
-    if ctx.scheduler_len == 0 && workspace_state_drift_detected(&ctx.semantic_summary) && !(latest_no_semantic_progress(&ctx.recent_execution_results) && !has_actionable_failure(ctx)) {
+    // FIX: remove planned_pending dependency — derive from semantic state only
+    if workspace_state_drift_detected(&ctx.semantic_summary) && !(latest_no_semantic_progress(&ctx.recent_execution_results) && !has_actionable_failure(ctx)) {
         return Some(RouteProposal::StateDriftObserve);
     }
-    if has_explicit_missing_target(ctx) && ctx.scheduler_len == 0 {
+    // FIX: semantic-only routing (no planned_pending)
+    if has_explicit_missing_target(ctx) {
         return Some(RouteProposal::MissingTargetPlan);
     }
-    if ctx.scheduler_len == 0 && ctx.validation_blocked_state() {
+    // FIX: semantic-only routing (no planned_pending)
+    if ctx.validation_blocked_state() {
         return Some(RouteProposal::BlockedValidationPlan);
     }
-    if ctx.scheduler_len == 0
-        && ctx.semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure")
+    // FIX: remove planned_pending dependency — rely on semantic signals only
+    if ctx.semantic_summary.primary_failure_class().as_deref() == Some("no_actionable_failure")
         && !ctx.finish_ready
         && latest_no_semantic_progress(&ctx.recent_execution_results)
     {
         eprintln!(
-            "[policy][no_actionable_failure] firing NoSemanticProgressPlan: failure_class={:?} complete={} path_exists={} cargo_project={} module_gaps={} compiler_hints={} compiler_repair_required={:?} validation_blocked={:?} planning_preconditions={} finish_ready={} planned_pending={} consecutive_invalid={}",
+            "[policy][no_actionable_failure] firing NoSemanticProgressPlan: failure_class={:?} complete={} path_exists={} cargo_project={} module_gaps={} compiler_hints={} compiler_repair_required={:?} validation_blocked={:?} planning_preconditions={} finish_ready={} consecutive_invalid={}",
             ctx.semantic_summary.failure_class,
             ctx.semantic_summary.complete,
             ctx.semantic_summary.path_exists,
@@ -386,12 +389,16 @@ fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
             ctx.semantic_summary.validation_blocked_by_preconditions,
             ctx.semantic_summary.planning_preconditions.len(),
             ctx.finish_ready,
-            ctx.scheduler_len,
             ctx.consecutive_invalid_plan_batches,
         );
         return Some(RouteProposal::NoSemanticProgressPlan);
     }
-    if ctx.context_ready && ctx.scheduler_len == 0 && ctx.consecutive_invalid_plan_batches > 0 {
+    // FIX: semantic-only routing (no planned_pending)
+    if ctx.consecutive_invalid_plan_batches > 0
+        && ctx.semantic_summary.validation_blocked_by_preconditions == false
+        && latest_no_semantic_progress(&ctx.recent_execution_results)
+    {
+        // Routing MUST derive from SemanticStateSummary (not context_ready)
         return Some(RouteProposal::InvalidPlanReplan);
     }
     None
@@ -399,9 +406,11 @@ fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
 
 fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<RouteProposal> {
     match event {
-        RuntimeEvent::LoopActed(a) if ctx.scheduler_len == 0 && ctx.pending_tool_result_ids.is_empty() && is_planner_discovery_action(&a.action_kind) => Some(RouteProposal::PlannerDiscoveryReplan),
+        // FIX: remove planned_pending dependency — semantic-only routing
+        RuntimeEvent::LoopActed(a) if is_planner_discovery_action(&a.action_kind) => Some(RouteProposal::PlannerDiscoveryReplan),
         RuntimeEvent::LoopActed(_)
-            if ctx.scheduler_len == 0 && ctx.pending_tool_result_ids.is_empty() && latest_no_semantic_progress(&ctx.recent_execution_results) && !ctx.finish_ready && !has_actionable_failure(ctx) =>
+            // FIX: semantic-only routing
+            if latest_no_semantic_progress(&ctx.recent_execution_results) && !ctx.finish_ready && !has_actionable_failure(ctx) =>
         {
             if has_explicit_missing_target(ctx) {
                 return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
@@ -416,23 +425,30 @@ fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<Rout
             return Some(RouteProposal::NoSemanticProgressPlan);
         }
         RuntimeEvent::LoopActed(_a) if ctx.bootstrap_refresh_required => Some(RouteProposal::BootstrapRefreshObserve),
-        RuntimeEvent::LoopActed(_) if ctx.scheduler_len == 0 && ctx.pending_tool_result_ids.is_empty() && workspace_state_drift_detected(&ctx.semantic_summary) => {
+        // FIX: semantic-only routing
+        RuntimeEvent::LoopActed(_) if workspace_state_drift_detected(&ctx.semantic_summary) => {
             Some(RouteProposal::StateDriftObserve)
         }
-        RuntimeEvent::LoopActed(a) if a.action_kind == "done" && ctx.scheduler_len == 0 => Some(RouteProposal::DoneVerify),
+        // FIX: semantic-only routing
+        RuntimeEvent::LoopActed(a) if a.action_kind == "done" => Some(RouteProposal::DoneVerify),
+        // FIX: semantic-only routing
         RuntimeEvent::LoopActed(_)
-            if ctx.scheduler_len == 0 && ctx.pending_tool_result_ids.is_empty() && latest_semantic_progress(&ctx.recent_execution_results) && !ctx.validation_blocked_state() =>
+            if latest_semantic_progress(&ctx.recent_execution_results) && !ctx.validation_blocked_state() =>
         {
             Some(RouteProposal::SemanticProgressVerify)
         }
+        // FIX: semantic-only routing
         RuntimeEvent::LoopActed(_)
-            if ctx.scheduler_len == 0 && ctx.pending_tool_result_ids.is_empty() && latest_no_semantic_progress(&ctx.recent_execution_results) && has_actionable_failure(ctx) && !ctx.finish_ready =>
+            if latest_no_semantic_progress(&ctx.recent_execution_results) && has_actionable_failure(ctx) && !ctx.finish_ready =>
         {
             Some(RouteProposal::NoSemanticProgressPlan)
         }
-        RuntimeEvent::LoopActed(_) if ctx.scheduler_len > 0 && ctx.pending_tool_result_ids.is_empty() => Some(RouteProposal::ContinueAct),
+        // FIX: semantic-only routing — act continuation should depend on semantic readiness, not queue size
+        RuntimeEvent::LoopActed(_) if latest_semantic_progress(&ctx.recent_execution_results) => Some(RouteProposal::ContinueAct),
         // HARD invariant (refined): PlanningCompleted → Act ONLY if work exists
-        RuntimeEvent::PlanningCompleted(_) if ctx.pending_tool_result_ids.is_empty() && ctx.planned_pending > 0 => Some(RouteProposal::PlannedToAct),
+        // FIX: semantic-only routing — act only when semantic state indicates actionable work
+        // FIX: semantic-only routing — approximate actionable work via semantic progress
+        RuntimeEvent::PlanningCompleted(_) if !latest_no_semantic_progress(&ctx.recent_execution_results) => Some(RouteProposal::PlannedToAct),
         _ => None,
     }
 }
@@ -451,12 +467,15 @@ pub fn evaluate_route_dispatch(ctx: &RouteContext, _policy_state: RoutePolicySta
             deterministic: None,
         };
     }
-    if !ctx.context_ready {
+    // FIX: remove context_ready dependency — derive suppression from semantic state only
+    if ctx.semantic_summary.complete == false
+        && ctx.semantic_summary.validation_blocked_by_preconditions == false
+    {
         return RouteDispatchEvaluation {
             suppression: Some(RouteSuppressionDecision {
-                reason: "context not ready",
+                reason: "semantic context not ready",
                 classification: "recoverable",
-                recovery: "await_context",
+                recovery: "await_semantic_progress",
                 extra: serde_json::json!({}),
                 emit_stall: false,
                 rule: RouteDispatchRule::SuppressContextNotReady,
@@ -532,7 +551,8 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                 rule: DeterministicRouteRule::BootstrapRefreshObserve,
             });
         }
-        if ctx.planned_pending == 0 && ctx.pending_tool_result_ids.is_empty() && workspace_state_drift_detected(&ctx.semantic_summary) {
+        // FIX: semantic-only routing (no planned_pending)
+        if workspace_state_drift_detected(&ctx.semantic_summary) {
             return Some(DeterministicRouteDecision {
                 route: RouteKind::Observe,
                 rationale: "semantic workspace facts disagree with the filesystem; refresh observation before planning or verification".to_string(),
@@ -542,7 +562,8 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                 rule: DeterministicRouteRule::StateDriftObserve,
             });
         }
-        if ctx.planned_pending == 0 && ctx.pending_tool_result_ids.is_empty() && is_planner_discovery_action(&acted.action_kind) {
+        // FIX: semantic-only routing (no planned_pending)
+        if is_planner_discovery_action(&acted.action_kind) {
             return Some(DeterministicRouteDecision {
                 route: RouteKind::Plan,
                 rationale: "planner discovery action completed; continue the planner session with the latest tool result".to_string(),
@@ -656,18 +677,20 @@ pub fn evaluate_route_cache(state: RouteCacheState<'_>) -> RouteCacheEvaluation 
     RouteCacheEvaluation { rule: RouteCacheRule::SuppressDuplicatePrompt }
 }
 
-pub fn evaluate_route_event_dispatch(event: &RuntimeEvent, planned_pending: usize, pending_tool_results_empty: bool) -> RouteEventDispatchEvaluation {
+// FIX: semantic-only dispatch (planned_pending removed)
+pub fn evaluate_route_event_dispatch(event: &RuntimeEvent, pending_tool_results_empty: bool) -> RouteEventDispatchEvaluation {
     if matches!(event, RuntimeEvent::ToolBatchSettled(_)) {
         return RouteEventDispatchEvaluation { rule: RouteEventDispatchRule::BatchSettled, should_dispatch: true };
     }
 
-    let idle = planned_pending == 0 && pending_tool_results_empty;
+    // semantic-only: idle derived from lack of pending tool results (queue-free)
+    let idle = pending_tool_results_empty;
     if idle && matches!(event, RuntimeEvent::LoopObserved(_) | RuntimeEvent::LoopActed(_) | RuntimeEvent::VerifierPolicyUpdated(_)) {
         return RouteEventDispatchEvaluation { rule: RouteEventDispatchRule::IdleDispatch, should_dispatch: true };
     }
 
     if let RuntimeEvent::PlanningCompleted(pc) = event {
-        let recoverable_empty_plan = planned_pending == 0
+        let recoverable_empty_plan = pending_tool_results_empty
             && matches!(pc.status.as_str(), "invalid_plan" | "llm_failed" | "llm_timeout" | "missing_semantic_context")
             && pending_tool_results_empty;
         if recoverable_empty_plan {

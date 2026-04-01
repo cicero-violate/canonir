@@ -1,2 +1,0 @@
-bash: ./watch_log.py: No such file or directory
-bash: ./watch_log.py: No such file or directory

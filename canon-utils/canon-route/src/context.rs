@@ -1,6 +1,6 @@
 use crate::causal::update_causal_graph;
 use canon_decision::JournalLine;
-use canon_event::{LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, RuntimeEvent, SubTaskResult, ToolCall, ToolResult};
+use canon_event::{LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, RuntimeEvent, SubTaskResult, ToolCall, ToolResult, EventOutcome};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_judgment::{LlmSignals, RuntimeSignals};
 use canon_semantic_state::{
@@ -45,6 +45,7 @@ pub struct RouteContext {
     pub mission_goal_spec: Option<GoalSpec>,
     pub context_ready: bool,
     pub workspace_dirty_tracker: WorkspaceDirtyTracker,
+    // DEPRECATED: planned_pending removed from routing authority (semantic-state-only)
     pub planned_pending: usize,
     pub acted_unverified: bool,
     pub pending_tool_result_ids: HashSet<String>,
@@ -89,10 +90,9 @@ impl RouteContext {
     }
 
     pub fn record_planning_completion(&mut self, status: &str, planned_count: Option<usize>) {
-        if let Some(n) = planned_count {
-            self.planned_pending = n;
-            // DO NOT mutate scheduler_len here — it must reflect actual executable work,
-            // not planned_count. planned_pending is the source of truth for planning output.
+        if let Some(_n) = planned_count {
+            // semantic-only routing: do not propagate planned_count into routing state
+            // planned_pending is no longer authoritative for decision-making
         }
         match status {
             "llm_failed" | "llm_timeout" => {
@@ -114,7 +114,8 @@ impl RouteContext {
     pub fn signals(&self) -> RuntimeSignals {
         RuntimeSignals {
             context_ready: self.context_ready,
-            has_queued_plan: self.planned_pending > 0,
+            // semantic-only: do not expose planned_pending as authoritative
+            has_queued_plan: false,
             performed_recently: self.acted_unverified,
             repair_stalled: semantic_no_progress_streak(&self.recent_execution_results) > 0,
             repair_pressure_score: self.objective_state().repair_pressure_score(),
@@ -395,7 +396,8 @@ impl RouteContext {
                 update_causal_graph(&mut self.causal_graph, event);
             }
             RuntimeEvent::RequestDispatch(_) => {
-                update_causal_graph(&mut self.causal_graph, event);
+                // IGNORE: RequestDispatch deprecated
+                EventOutcome::NoOp("request_dispatch_ignored");
             }
             RuntimeEvent::ErrorOccurred(err) if err.kind == "invalid_plan_batch" => {
                 self.consecutive_invalid_plan_batches = self.consecutive_invalid_plan_batches.saturating_add(1);
@@ -417,13 +419,9 @@ impl RouteContext {
                 self.consecutive_invalid_plan_batches = 0;
                 self.last_invalid_plan_reason = None;
                 self.last_invalid_plan_planned_count = None;
-                // CRITICAL FIX: ensure scheduler_len reflects planned work
-                if pc.planned_count > 0 {
-                    self.scheduler_len = pc.planned_count;
-                    eprintln!("[CONTEXT FIX] scheduler_len updated → {}", self.scheduler_len);
-                } else {
-                    eprintln!("[CONTEXT WARNING] PlanningCompleted produced zero tasks");
-                }
+                // INVARIANT: scheduler_len must mirror planned_count exactly (derived, not authoritative)
+                self.scheduler_len = pc.planned_count;
+                eprintln!("[CONTEXT FIX] scheduler_len updated → {}", self.scheduler_len);
             }
             RuntimeEvent::PlanningCompleted(pc) => {
                 self.objective_trend_state.record_planning_completion(&pc.status);
@@ -444,7 +442,8 @@ impl RouteContext {
             }
             RuntimeEvent::ToolCall(ToolCall { tool_call_id, kind, .. }) => {
                 // Opening a new call: if set was empty this starts a new batch.
-                if self.pending_tool_result_ids.is_empty() {
+                // semantic-only: remove pending_tool_result_ids gating
+                if true {
                     self.batch_result_count = 0;
                     self.batch_any_failed = false;
                     self.batch_settled = None;
@@ -485,7 +484,9 @@ impl RouteContext {
                 // If all pending calls have now resolved, mark the batch as settled.
                 // Skip for plan-only batches — routing is deferred to LoopPlanned so that
                 // planned_pending is already updated when the route is selected.
-                if self.pending_tool_result_ids.is_empty() && self.planned_pending == 0 && !self.batch_is_plan_only {
+                // semantic-only: remove planned_pending gating
+                // semantic-only: remove pending_tool_result_ids gating
+                if !self.batch_is_plan_only {
                     self.batch_settled = Some((self.batch_result_count, self.batch_any_failed));
                 }
                 self.push_journal("tool", format!("tool_result kind={kind} success={success} tool_call_id={tool_call_id} tool_result_id={tool_result_id} output={output_text}"));

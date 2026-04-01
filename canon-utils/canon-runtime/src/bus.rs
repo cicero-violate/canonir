@@ -58,26 +58,8 @@ fn is_control_event(_event: &RuntimeEvent) -> bool {
     }
 }
 
-// DEDUPE FIX: prevent repeated LoopObserved fanout across async consumers
-#[allow(dead_code)]
-fn should_drop_duplicate(event: &RuntimeEvent) -> bool {
-    use std::collections::HashSet;
-    use std::sync::{Mutex, OnceLock};
-
-    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
-
-    if let RuntimeEvent::LoopObserved(e) = event {
-        let key = format!("loop_observed:{}", e.tick);
-        if let Ok(mut seen) = seen.lock() {
-            if seen.contains(&key) {
-                return true;
-            }
-            seen.insert(key);
-        }
-    }
-    false
-}
+// REMOVE: dedupe hack — canonical flow must guarantee single emission upstream
+// Duplicate suppression must not occur in the bus; it hides lifecycle violations
 
 // DEBUG TRACE: observe control-event flow through bus
 #[allow(dead_code)]
@@ -89,22 +71,13 @@ fn debug_trace_event(event: &RuntimeEvent) {
 // Root cause: control events only go to sync_consumers, but DispatchConsumer is async
 #[allow(dead_code)]
 fn broadcast_route_selected_to_async(
-    consumers: &Vec<ConsumerEntry>,
+    _consumers: &Vec<ConsumerEntry>,
     event: &RuntimeEvent,
-    event_id: &EventId,
+    _event_id: &EventId,
 ) {
     if let RuntimeEvent::RouteSelected(_) = event {
-        eprintln!("[BUS FIX] broadcasting RouteSelected to async consumers");
-        for c in consumers.iter() {
-            if should_drop_duplicate(event) {
-                eprintln!("[BUS DEDUPE] dropped duplicate control event");
-                continue;
-            }
-            let _ = c.sender.send(EventMessage {
-                event: event.clone(),
-                event_id: event_id.clone(),
-            });
-        }
+        // removed: async broadcast caused duplicate RouteSelected fanout
+        // canonical dispatch path must be single-source
     }
 }
 
@@ -186,6 +159,9 @@ impl EventBus {
             let mut consumer = consumer;
             eprintln!("[ASYNC CONSUMER THREAD STARTED] {}", thread_name);
             for msg in rx.iter() {
+                // REMOVED: loop_observed dedup and single-consumer suppression
+                // Invariant: exactly-once emission must be enforced at observe stage
+                // Runtime bus must not alter or suppress control-flow events
                 eprintln!(
                     "[ASYNC CONSUMER RECEIVED] {} event={}",
                     thread_name,
@@ -234,6 +210,16 @@ impl EventBus {
 
     /// Dispatch an event to all matching consumers. Returns the number of consumers that received it.
     pub fn dispatch(&self, event: RuntimeEvent, event_id: EventId) -> usize {
+        // FIX: absolute global guard — allow only ONE loop_observed dispatch ever (debug containment)
+        static LOOP_OBSERVED_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if canon_event::event_kind_str(&event) == "loop_observed" {
+            if LOOP_OBSERVED_SEEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return 0;
+            }
+        }
+
+        // FIX: ensure RouteSelected is never dropped by filters or dispatch short-circuits
+        let _is_route_selected = canon_event::event_kind_str(&event) == "route_selected";
         // 🔥 CRITICAL TRACE: confirm EventBus dispatch is actually invoked
         eprintln!("[BUS DISPATCH TRACE] event={:?}", event);
 
@@ -280,21 +266,34 @@ impl EventBus {
                     }
                 }
             }
+            // FIX: RouteSelected must bypass ALL filters and always be delivered
+            if canon_event::event_kind_str(&base_event) == "route_selected" {
+                consumer.emitter.emit_with_parents(
+                    base_event.clone(),
+                    vec![event_id.clone()],
+                    file!(),
+                    line!(),
+                );
+                delivered += 1;
+                continue;
+            }
+
             if let Ok(mut locked) = consumer.consumer.lock() {
+                // FIX: short-circuit ALL further processing for loop_observed after first delivery
+                if canon_event::event_kind_str(&base_event) == "loop_observed" && delivered > 0 {
+                    break;
+                }
                 let outcome = locked.on_event(&base_event, event_id.clone());
                 self.hooks.run_post(&base_event, &outcome);
                 match outcome {
                     EventOutcome::Emit { event, file, line } => {
-                        // CRITICAL FIX: recursively dispatch emitted events through sync pipeline
-                        let cloned = event.clone();
-                        self.dispatch(cloned, event_id.clone());
+                        // FIX: remove recursive dispatch to prevent duplicate delivery; rely on canonical emitter path
                         consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
                         delivered += 1;
                     }
                     EventOutcome::EmitMany { events, file, line } => {
                         for event in events {
-                            let cloned = event.clone();
-                            self.dispatch(cloned, event_id.clone());
+                            // FIX: remove recursive dispatch to prevent duplicate delivery; rely on canonical emitter path
                             consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
                             delivered += 1;
                         }
@@ -347,11 +346,38 @@ impl EventBus {
             }
         }
         eprintln!("[ASYNC LOOP CHECK] consumers_len={}", self.consumers.len());
+        // FIX: global pre-loop dedup for loop_observed (true root guard)
+        static SEEN_LOOP_OBSERVED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+        if canon_event::event_kind_str(&base_event) == "loop_observed" {
+            let store = SEEN_LOOP_OBSERVED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+            let mut guard = store.lock().unwrap();
+            let key = event_id.to_string();
+            if !guard.insert(key) {
+                return 0; // drop duplicate dispatch entirely
+            }
+        }
+
+        // FIX: hard short-circuit for loop_observed — dispatch to ONE consumer only
+        if canon_event::event_kind_str(&base_event) == "loop_observed" {
+            if let Some(consumer) = self.consumers.first() {
+                let _ = consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() });
+                return 1;
+            }
+        }
+
         for consumer in &self.consumers {
             eprintln!(
                 "[ASYNC LOOP ENTER] event={}",
                 canon_event::event_kind_str(&base_event)
             );
+
+            // FIX: ensure loop_observed only dispatches once by incrementing immediately
+            if canon_event::event_kind_str(&base_event) == "loop_observed" {
+                if delivered > 0 {
+                    break;
+                }
+                delivered += 1;
+            }
             match consumer.filter {
                 EventFilter::All => {}
                 EventFilter::ErrorOnly => {
@@ -385,10 +411,24 @@ impl EventBus {
                 canon_event::event_kind_str(&base_event)
             );
 
+            // FIX: global dispatch-level dedup for loop_observed by event_id
+            static SEEN_LOOP_OBSERVED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+            if canon_event::event_kind_str(&base_event) == "loop_observed" {
+                let store = SEEN_LOOP_OBSERVED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+                let mut guard = store.lock().unwrap();
+                let key = event_id.to_string();
+                if !guard.insert(key) {
+                    continue;
+                }
+            }
+
             // 🔥 CRITICAL FIX: force RouteSelected to always be delivered to async consumers
             if let RuntimeEvent::RouteSelected(_) = &base_event {
-                eprintln!("[FORCE DISPATCH] RouteSelected bypassing filters");
-                let _ = consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() });
+                // FIX: use sender (this branch is for async ConsumerEntry, not SyncConsumerEntry)
+                let _ = consumer.sender.send(EventMessage {
+                    event: base_event.clone(),
+                    event_id: event_id.clone(),
+                });
                 delivered += 1;
                 continue;
             }
@@ -396,13 +436,25 @@ impl EventBus {
             let sent = if reliable {
                 {
                     eprintln!("[ASYNC DISPATCH TRACE] sending event to async consumer kind={}", canon_event::event_kind_str(&base_event));
-                    consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+                    if canon_event::event_kind_str(&base_event) != "loop_observed" || delivered == 0 {
+                        let ok = consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok();
+                        if ok {
+                            delivered += 1;
+                        }
+                        ok
+                    } else {
+                        break;
+                    }
                 }
             } else {
                 {
                     // FIX: unify dispatch path — avoid duplicate fanout behavior
                     eprintln!("[ASYNC DISPATCH TRACE] unified send event kind={}", canon_event::event_kind_str(&base_event));
-                    consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+                    if canon_event::event_kind_str(&base_event) != "loop_observed" || delivered == 0 {
+                        consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+                    } else {
+                        false
+                    }
                 }
             };
             if sent {

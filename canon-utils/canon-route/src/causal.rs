@@ -10,7 +10,7 @@ pub enum CausalNodeKind {
     ToolResult { tool_result_id: String, success: bool },
     LoopActed { action_id: Option<String>, success: bool },
     LoopVerified { passed: bool },
-    RequestDispatch { dispatch_id: String, from_agent: String, to_agent: String },
+    // REMOVED: RequestDispatch node (synthetic dispatch eliminated)
     SubTaskResult { dispatch_id: String, agent_id: String, success: bool },
 }
 
@@ -71,8 +71,8 @@ impl CausalGraph {
         }
     }
 
-    pub fn record_dispatch(&mut self, dispatch_id: &str, from_agent: &str, to_agent: &str) {
-        self.upsert_node(dispatch_id, CausalNodeKind::RequestDispatch { dispatch_id: dispatch_id.to_string(), from_agent: from_agent.to_string(), to_agent: to_agent.to_string() });
+    pub fn record_dispatch(&mut self, _dispatch_id: &str, _from_agent: &str, _to_agent: &str) {
+        // REMOVED: RequestDispatch causal node creation
     }
 
     pub fn record_sub_result(&mut self, dispatch_id: &str, agent_id: &str, success: bool) {
@@ -88,7 +88,7 @@ pub fn update_causal_graph(cg: &mut CausalGraph, event: &RuntimeEvent) {
         RuntimeEvent::LoopActed(a) => cg.record_acted(a),
         RuntimeEvent::ToolCall(tc) => cg.record_tool_call(tc),
         RuntimeEvent::ToolResult(tr) => cg.record_tool_result(tr),
-        RuntimeEvent::RequestDispatch(d) => cg.record_dispatch(&d.dispatch_id, &d.parent_request_id, &d.agent_id),
+        // REMOVED: RequestDispatch handling (synthetic dispatch eliminated)
         RuntimeEvent::SubTaskResult(r) => cg.record_sub_result(&r.dispatch_id, &r.agent_id, r.success),
         _ => {}
     }

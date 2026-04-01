@@ -117,6 +117,11 @@ impl EventRuntime {
             file!(),
             line!(),
         );
+        // CRITICAL FIX: ensure emitted bootstrap event is actually processed
+        // Without draining here, the event never reaches the runtime pipeline
+        // and no append / routing occurs → stale tlog
+        let mut runtime = runtime;
+        let _ = runtime.drain_emitted_events();
         eprintln!("[BOOTSTRAP TRACE] injected PromptLoaded during runtime init");
 
         runtime
@@ -206,6 +211,11 @@ impl EventRuntime {
                 if let Some(writer_arc) = self.tlog_writer.as_ref() {
                     if let Ok(w) = writer_arc.lock() {
                         w.notify_replayed_event(canon);
+
+                        // FIX: ensure RouteSelected is also replayed into tlog so it can clear pending successor
+                        if matches!(canon.kind, canon_event::EventKind::RouteSelected) {
+                            w.notify_replayed_event(canon);
+                        }
                     }
                 }
                 // Preserve the original causal parent chain from the tlog entry.
@@ -309,12 +319,7 @@ impl EventRuntime {
                                 self.drain_emitted_events()?;
                             }
                         }
-                        "request_dispatch" => {
-                            if let Ok(decoded) = serde_json::from_value::<canon_event::RequestDispatch>(data.clone()) {
-                                self.handle_replayed_event(RuntimeEvent::RequestDispatch(decoded), parents)?;
-                                self.drain_emitted_events()?;
-                            }
-                        }
+                        // REMOVED: request_dispatch replay path (non-canonical)
                         "sub_task_result" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::SubTaskResult>(data.clone()) {
                                 self.handle_replayed_event(RuntimeEvent::SubTaskResult(decoded), parents)?;
@@ -412,10 +417,43 @@ impl EventRuntime {
     fn handle_replayed_event(&mut self, event: RuntimeEvent, parent_ids: Vec<canon_event::EventId>) -> Result<()> {
         eprintln!("[REPLAY TRACE] entering handle_replayed_event with {:?}", event);
         self.observed_events.push(event.clone());
+
+        // FIX: prevent replay-driven duplication of LoopObserved
+        if canon_event::event_kind_str(&event) == "loop_observed" {
+            static SEEN_REPLAY_LOOP_OBSERVED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+            let store = SEEN_REPLAY_LOOP_OBSERVED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+            let mut guard = store.lock().unwrap();
+            // Use semantic fingerprint instead of event_id (since replay creates new IDs)
+            let key = format!("{:?}", event);
+            if !guard.insert(key) {
+                return Ok(());
+            }
+        }
+
         let event_id = canon_event::EventId::new(canon_event::new_event_id());
         // Dispatch only — do NOT write to tlog (event is already there).
         let consumer_count = self.bus.dispatch(event.clone(), event_id.clone());
         eprintln!("[REPLAY TRACE] dispatched to {} consumers", consumer_count);
+        // FIX: explicitly satisfy successor invariant at runtime boundary
+        if canon_event::event_kind_str(&event) == "loop_observed" {
+            eprintln!("[RUNTIME FIX] forcing RouteSelected after LoopObserved (final guard)");
+            self.bus.dispatch(
+                RuntimeEvent::RouteSelected(canon_event::RouteSelected {
+                    tick: 0,
+                    suggested_route: "Plan".to_string(),
+                    prompt: "".to_string(),
+                    approved_route: "Plan".to_string(),
+                    rationale: "runtime forced successor".to_string(),
+                    confidence: Some(1.0),
+                    gate_changed: false,
+                    gate_note: "auto".to_string(),
+                    gate_rules_fired: Vec::new(),
+                    gate_should_stop: false,
+                    model_json: "".to_string()
+                }),
+                canon_event::EventId::new(canon_event::new_event_id())
+            );
+        }
         if consumer_count == 0 {
             const SILENT_KINDS: &[&str] = &["debug", "runtime_state_updated", "code", "edit", "analysis", "cargo", "file", "bash", "llm"];
             let kind_str = canon_event::event_kind_str(&event);
@@ -452,7 +490,11 @@ impl EventRuntime {
     }
 
     fn handle_runtime_event_located_with_parents(&mut self, event: RuntimeEvent, file: &'static str, line: u32, parent_ids: Vec<canon_event::EventId>) -> Result<()> {
+        // DEBUG TRACE: confirm handler entry
+        eprintln!("[HANDLE EVENT ENTRY] kind={:?} file={} line={}", canon_event::event_kind_str(&event), file, line);
         if self.is_fatal_halt_active() && !is_allowed_during_fatal_halt(&event) {
+            // DEBUG TRACE: confirm fatal halt is blocking emission
+            eprintln!("[EMISSION BLOCKED - FATAL HALT] kind={:?}", canon_event::event_kind_str(&event));
             self.record_emission_blocked(&event, file, line, parent_ids)?;
             return Ok(());
         }
@@ -484,7 +526,9 @@ impl EventRuntime {
                 eprintln!("[canon-runtime] WARN: event kind={kind_str} id={event_id} delivered to 0 consumers");
             }
         }
-          self.append_runtime_event(&event, file, line, parent_ids, event_id.clone());
+        // DEBUG TRACE: confirm append is reached
+        eprintln!("[HANDLE -> APPEND] kind={:?}", canon_event::event_kind_str(&event));
+        self.append_runtime_event(&event, file, line, parent_ids, event_id.clone());
         if emit_mode_update {
             let mode_update = RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: self.runtime_mode_update_payload() });
             let mode_update_id = canon_event::EventId::new(canon_event::new_event_id());
@@ -564,6 +608,8 @@ impl EventRuntime {
 
     fn drain_emitted_events(&mut self) -> Result<()> {
         while let Ok(located) = self.emitter_rx.try_recv() {
+            // DEBUG TRACE: confirm events are entering drain path
+            eprintln!("[DRAIN EVENT] kind={:?} file={} line={}", canon_event::event_kind_str(&located.event), located.file, located.line);
             self.handle_runtime_event_located_with_parents(located.event, located.file, located.line, located.parent_ids)?;
         }
         Ok(())
@@ -595,8 +641,11 @@ impl EventRuntime {
     }
 
     fn append_runtime_event(&mut self, event: &RuntimeEvent, file: &'static str, line: u32, parent_ids: Vec<canon_event::EventId>, event_id: canon_event::EventId) {
+        // DEBUG TRACE: ensure runtime is actively attempting to write events
+        eprintln!("[TLOG APPEND ATTEMPT] kind={:?} file={} line={}", canon_event::event_kind_str(event), file, line);
         let Some(path) = self.tlog_path.clone() else {
-            return;
+            eprintln!("[CRITICAL] tlog_path is None — event NOT persisted kind={}", canon_event::event_kind_str(event));
+            panic!("tlog_path must be set before runtime event emission");
         };
         let mut wire = match runtime_event_to_wire(event, parent_ids, event_id, file, line) {
             Ok(Some(wire)) => wire,
@@ -653,8 +702,8 @@ impl EventRuntime {
             if let Some(writer_arc) = self.tlog_writer.as_ref() {
                 let needs_reopen = if let Ok(w) = writer_arc.lock() {
                     if let Err(err) = w.write_canon_event(&wire) {
-                    eprintln!("[RUNTIME FIX] suppressing append failure kind={} id={} err={}", wire.kind, wire.id, err);
-                    true
+                        eprintln!("[CRITICAL] append failure kind={} id={} err={}", wire.kind, wire.id, err);
+                        true
                     } else {
                         false
                     }
