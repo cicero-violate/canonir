@@ -1259,7 +1259,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
                     &workspace,
                     &config,
                     &tabs_exec_a,
-                    true,
+                    false,
                     false,
                 )
                 .await?;
@@ -1296,7 +1296,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
                     &workspace,
                     &config,
                     &tabs_exec_b,
-                    true,
+                    false,
                     false,
                 )
                 .await?;

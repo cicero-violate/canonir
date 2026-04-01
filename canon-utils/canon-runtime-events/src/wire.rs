@@ -58,7 +58,6 @@ pub enum EventKind {
     ToolBatchSettled,
     // Agent & dispatch
     AgentRegistered,
-    RequestDispatch,
     SubTaskResult,
     // Capability sub-events (matched to RuntimeEvent variants)
     Cargo,
@@ -127,7 +126,6 @@ impl EventKind {
             EventKind::ToolResult => "tool_result",
             EventKind::ToolBatchSettled => "tool_batch_settled",
             EventKind::AgentRegistered => "agent_registered",
-            EventKind::RequestDispatch => "request_dispatch",
             EventKind::SubTaskResult => "sub_task_result",
             EventKind::Cargo => "cargo",
             EventKind::File => "file",
@@ -220,7 +218,6 @@ impl std::str::FromStr for EventKind {
             "tool_result" => Ok(EventKind::ToolResult),
             "tool_batch_settled" => Ok(EventKind::ToolBatchSettled),
             "agent_registered" => Ok(EventKind::AgentRegistered),
-            "request_dispatch" => Ok(EventKind::RequestDispatch),
             "sub_task_result" => Ok(EventKind::SubTaskResult),
             "cargo" => Ok(EventKind::Cargo),
             "file" => Ok(EventKind::File),

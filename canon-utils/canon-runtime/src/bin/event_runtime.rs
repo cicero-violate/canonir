@@ -654,7 +654,7 @@ fn main() -> Result<()> {
         let _ = runtime.emit_tick();
         // Step 1: drain any events emitted by consumer threads (e.g. CapabilityCompleted).
         // These sit in emitter_rx until W processes them; they do NOT arrive via P2/q_event_rx.
-        runtime.flush_emitted_events()?;
+        runtime.drain_emitted_events()?;
 
         // Step 2: drain q_event_rx (tlog-sourced events from P2).
         let mut handled = 0usize;

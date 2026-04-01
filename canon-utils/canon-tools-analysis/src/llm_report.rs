@@ -40,13 +40,6 @@ pub fn write_llm_reports_from_tlog(tlog_path: &Path, reports_root: &Path) -> any
         let kind = canon.kind;
         let payload = &canon.payload.data;
         match kind {
-            EventKind::RequestDispatch if canon.actor == "llm_executor" => {
-                if let Some(id) = payload.get("request_id").and_then(|v| v.as_str()) {
-                    let entry = by_id.entry(id.to_string()).or_insert_with(|| LlmRecord { request_id: id.to_string(), ..Default::default() });
-                    entry.endpoint = payload.get("endpoint").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    entry.url = payload.get("url").and_then(|v| v.as_str()).map(|s| s.to_string());
-                }
-            }
             EventKind::CapabilityCompleted => {
                 if let Ok(done) = serde_json::from_value::<CapabilityCompletedOwned>(payload.clone()) {
                     if done.capability == "llm.call" {

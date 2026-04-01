@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
-static WORKERS: Lazy<Mutex<HashMap<(String, bool), mpsc::Sender<LlmWorkItem>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static WORKERS: Lazy<Mutex<HashMap<(String, bool, usize), mpsc::Sender<LlmWorkItem>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
 pub fn llm_worker_new_tabs() -> TabManagerHandle {
     std::sync::Arc::new(tokio::sync::Mutex::new(super::tab_management::TabSlotTable::new()))
@@ -211,7 +211,7 @@ pub async fn llm_worker_send_request_with_req_id(
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
     let mut workers = WORKERS.lock().await;
-    let worker_key = (endpoint_id.to_string(), stateful);
+    let worker_key = (endpoint_id.to_string(), stateful, std::sync::Arc::as_ptr(tabs) as usize);
     let sender = if let Some(sender) = workers.get(&worker_key) {
         sender.clone()
     } else {
@@ -250,7 +250,7 @@ pub async fn llm_worker_send_request_with_req_id(
 pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfig, tabs: &TabManagerHandle) {
     let mut workers = WORKERS.lock().await;
     for endpoint in &config.llm_endpoints {
-        let worker_key = (endpoint.id.clone(), endpoint.stateful);
+        let worker_key = (endpoint.id.clone(), endpoint.stateful, std::sync::Arc::as_ptr(tabs) as usize);
         if workers.contains_key(&worker_key) {
             continue;
         }

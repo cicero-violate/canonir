@@ -460,6 +460,30 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             }
         }
 
+        "SUBMIT_ACK" => {
+            let tab_id = match msg.get("tabId").and_then(|v| v.as_u64()) {
+                Some(id) => id as u32,
+                None => return,
+            };
+            let ack_turn_id = msg.get("turnId").and_then(|v| v.as_u64());
+
+            let mut st = state.lock().await;
+            // Ignore submit acks for normal send_turn flows.
+            if !st.pending_submit.contains_key(&tab_id) {
+                return;
+            }
+            let expected = st.pending_turn_id.get(&tab_id).copied();
+            if let Some(turn_id) = ack_turn_id {
+                if expected != Some(turn_id) {
+                    return;
+                }
+            }
+            if let Some(tx) = st.pending_submit.remove(&tab_id) {
+                let _ = tx.send(());
+                st.pending_turn_id.remove(&tab_id);
+            }
+        }
+
         "INBOUND_MESSAGE" => {
             let tab_id = match msg.get("tabId").and_then(|v| v.as_u64()) {
                 Some(id) => id as u32,
