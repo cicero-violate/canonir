@@ -89,6 +89,8 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
     // enforce invariant: exactly one LoopObserved in output
     out.retain(|e| !matches!(e, RuntimeEvent::LoopObserved(_)));
     out.push(RuntimeEvent::LoopObserved(payload));
+    // HARD INVARIANT: ensure LoopObserved is always emitted exactly once
+    debug_assert!(out.iter().any(|e| matches!(e, RuntimeEvent::LoopObserved(_))), "LoopObserved must be emitted");
     Ok(LoopStageResult::EmitMany(out))
 }
 

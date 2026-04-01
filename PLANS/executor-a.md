@@ -2,33 +2,31 @@
 
 ## READY NOW (MAX 5)
 
-1. Restore runtime emission (HARD BLOCKER — NO VALIDATION WITHOUT THIS)
-   1. Trace runtime loop in canon-runtime/src/lib.rs
-   2. Identify event log append path
-   3. Insert trace at write boundary
-   4. Run runtime and verify log growth
-   5. If no growth → STOP and fix immediately
+1. Guarantee LoopObserved emission (TOP PRIORITY)
+   1. Open canon-loop/src/stage/observe.rs
+   2. Collapse ALL control paths into a single exit
+   3. Ensure LoopObserved is emitted unconditionally
+   4. Add assertion: no return without emission
 
-2. Enforce heartbeat + fail-fast (OBSERVABILITY GUARANTEE)
-   1. Emit ≥1 event per loop cycle
-   2. Add invariant: no write within threshold ⇒ fail-fast
-   3. Ensure supervisor cannot silently stall
+2. Remove control-flow bypass paths (ROOT CAUSE)
+   1. Eliminate early returns and implicit fallthrough
+   2. Enforce invariant checkpoints before exit
+   3. Ensure emission cannot be skipped
 
-3. Eliminate synthetic dispatch paths (PRIMARY CONTROL-FLOW BREAK)
-   1. Run rg -n "dispatch|synthetic" canon-utils
-   2. Enumerate ALL dispatch entrypoints
-   3. Remove non-canonical paths
-   4. Enforce exactly-one dispatch per event_id
+3. Eliminate synthetic dispatch (STRUCTURAL FAILURE)
+   1. Run rg -n "RequestDispatch" canon-utils
+   2. Remove RequestDispatch from all layers
+   3. Ensure RouteSelected is sole dispatch path
 
-4. Enforce canonical dispatch pipeline (SINGLE PATH)
-   1. Trace emit → route → execute path
-   2. Remove parallel/bypass flows
-   3. Add invariant: single pipeline per event_id
+4. Normalize dispatch pipeline (SINGLE PATH)
+   1. Trace emit → route → execute
+   2. Remove duplicate replay / fanout paths
+   3. Enforce one dispatch per event_id
 
-5. Enforce lifecycle completion (CLOSURE INVARIANT)
+5. Enforce lifecycle completion (EVENT INTEGRITY)
    1. Trace event lifecycle
    2. Ensure emitted → routed → executed → discharged
-   3. Add assertion per event_id
+   3. Add fail-fast on discharge gaps
 
 ## BLOCKED
-- Semantic + trace validation (requires emission + dispatch normalization)
+- Semantic convergence + trace validation (requires invariant restoration)

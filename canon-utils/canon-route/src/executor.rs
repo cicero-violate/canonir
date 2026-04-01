@@ -76,6 +76,8 @@ impl RouteExecutor {
                 module_path!(),
                 
             );
+            // HARD INVARIANT: a decision must always lead to a route emission or explicit recovery
+            debug_assert!(false, "decision path exited without RouteSelected emission (dispatch_in_progress)");
             // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
             eprintln!("[EXIT] {}:{} {} - executor::try_dispatch_route (early return: dispatch_in_progress)", file!(), line!(), module_path!());
             return;
@@ -100,8 +102,8 @@ impl RouteExecutor {
         // FIX: allow invariant to decide naturally so Observe can occur after Act
         let decision = decision;
 
-        // FIX: remove scheduler_len from routing traces (non-authoritative)
-        eprintln!("[ROUTE TRACE DEEP] ctx.planned_pending={} dispatch_in_progress={}", self.ctx.planned_pending, self.dispatch_in_progress);
+        // FIX: semantic-only routing trace (remove queue-derived signals)
+        eprintln!("[ROUTE TRACE DEEP] dispatch_in_progress={}", self.dispatch_in_progress);
 
         // FIX: remove scheduler_len from routing traces
         eprintln!("[ROUTE TRACE] decision={:?} last_decision={:?}", decision, self.last_decision);
@@ -134,6 +136,8 @@ impl RouteExecutor {
                 module_path!(),
                 decision
             );
+            // HARD INVARIANT: dedup must not suppress required RouteSelected emission
+            debug_assert!(false, "decision dedup suppressed RouteSelected emission");
             return;
         }
 

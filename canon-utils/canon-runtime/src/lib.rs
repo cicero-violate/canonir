@@ -648,7 +648,7 @@ impl EventRuntime {
         // DEBUG TRACE: ensure runtime is actively attempting to write events
         eprintln!("[TLOG APPEND ATTEMPT] kind={:?} file={} line={}", canon_event::event_kind_str(event), file, line);
         let Some(path) = self.tlog_path.clone() else {
-            eprintln!("[WARN] tlog_path is None — skipping persistence kind={}", canon_event::event_kind_str(event));
+            eprintln!("[INIT GUARD] tlog_path is None during early init — dropping event kind={}", canon_event::event_kind_str(event));
             return;
         };
         let mut wire = match runtime_event_to_wire(event, parent_ids, event_id, file, line) {

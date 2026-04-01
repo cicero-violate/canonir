@@ -210,12 +210,10 @@ pub async fn llm_worker_send_request_with_req_id(
 ) -> Result<(u64, String)> {
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
-    let mut workers = WORKERS.lock().await;
-    let worker_key = (endpoint_id.to_string(), stateful, std::sync::Arc::as_ptr(tabs) as usize);
-    let sender = if let Some(sender) = workers.get(&worker_key) {
-        sender.clone()
-    } else {
-        let (tx_worker, rx_worker) = mpsc::channel(64);
+    let sender = if !stateful {
+        // Non-stateful endpoints do not need serialized worker reuse.
+        // Spawn a fresh worker per request so tabs can make progress concurrently.
+        let (tx_worker, rx_worker) = mpsc::channel(1);
         let worker = LlmWorker {
             endpoint_id: endpoint_id.to_string(),
             url: url.to_string(),
@@ -228,8 +226,29 @@ pub async fn llm_worker_send_request_with_req_id(
             tabs_with_role_sent: HashSet::new(),
         };
         tokio::spawn(llm_worker_run_worker(worker, rx_worker));
-        workers.insert(worker_key, tx_worker.clone());
         tx_worker
+    } else {
+        let mut workers = WORKERS.lock().await;
+        let worker_key = (endpoint_id.to_string(), stateful, std::sync::Arc::as_ptr(tabs) as usize);
+        if let Some(sender) = workers.get(&worker_key) {
+            sender.clone()
+        } else {
+            let (tx_worker, rx_worker) = mpsc::channel(64);
+            let worker = LlmWorker {
+                endpoint_id: endpoint_id.to_string(),
+                url: url.to_string(),
+                max_tabs,
+                stateful,
+                bridge: bridge.clone(),
+                tabs: tabs.clone(),
+                seen_hashes: HashSet::new(),
+                cache: HashMap::new(),
+                tabs_with_role_sent: HashSet::new(),
+            };
+            tokio::spawn(llm_worker_run_worker(worker, rx_worker));
+            workers.insert(worker_key, tx_worker.clone());
+            tx_worker
+        }
     };
     let req = LlmWorkItem {
         req_id,
@@ -250,6 +269,9 @@ pub async fn llm_worker_send_request_with_req_id(
 pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfig, tabs: &TabManagerHandle) {
     let mut workers = WORKERS.lock().await;
     for endpoint in &config.llm_endpoints {
+        if !endpoint.stateful {
+            continue;
+        }
         let worker_key = (endpoint.id.clone(), endpoint.stateful, std::sync::Arc::as_ptr(tabs) as usize);
         if workers.contains_key(&worker_key) {
             continue;

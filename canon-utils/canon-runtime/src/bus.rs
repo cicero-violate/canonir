@@ -172,11 +172,21 @@ impl EventBus {
                 hooks.run_post(&msg.event, &outcome);
                 match outcome {
                     EventOutcome::Emit { event, file, line } => {
-                        emitter_for_loop.emit_with_parents(event, vec![parent_id], file, line);
+                        std::thread::spawn({
+                            let emitter = emitter_for_loop.clone();
+                            let parent = parent_id.clone();
+                            move || {
+                                emitter.emit_with_parents(event, vec![parent], file, line);
+                            }
+                        });
                     }
                     EventOutcome::EmitMany { events, file, line } => {
                         for event in events {
-                            emitter_for_loop.emit_with_parents(event, vec![parent_id.clone()], file, line);
+                            let emitter = emitter_for_loop.clone();
+                            let parent = parent_id.clone();
+                            std::thread::spawn(move || {
+                                emitter.emit_with_parents(event, vec![parent], file, line);
+                            });
                         }
                     }
                     EventOutcome::NoOp(reason) => {

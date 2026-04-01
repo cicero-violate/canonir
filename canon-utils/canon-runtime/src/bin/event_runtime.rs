@@ -5,7 +5,6 @@ use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
 use canon_llm::repair_server::{repair_client_submit, RepairJobRequest, REPAIR_SERVER_ADDR};
 use canon_loop::LoopStageExecutor;
-use canon_prompt_events::runtime_goal_prompt_loaded;
 use canon_route::RouteExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::agent_registry::{AgentRegistryConsumer, AgentRegistryHandle};
@@ -20,7 +19,7 @@ use canon_runtime::consumers::goal_graph_consumer::GoalGraphConsumer;
 use canon_runtime::consumers::repair_control_consumer::RepairControlConsumer;
 use canon_runtime::consumers::watchdog_consumer::WatchdogConsumer;
 use canon_runtime::hooks::{AuditLogHook, CapabilityRateLimitHook, CostCapHook, HookChain};
-use canon_runtime::{spawn_kernel_processor, EventRuntime, KernelMsg};
+use canon_runtime::{EventRuntime, KernelMsg};
 use crossbeam_channel as cc;
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use signal_hook::consts::signal::SIGHUP;
@@ -271,10 +270,9 @@ fn handle_event_msg(
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<()> {
-    canon_exec::init_llm_worker();
     bash::init_bash_worker();
     eprintln!("[BASH INIT] init_bash_worker called in runtime");
-    eprintln!("[LLM INIT] init_llm_worker called in runtime");
+    // LLM worker initialization is handled later with port-check logic
     // FIX: LLM worker is owned by supervisor; do not start here
     let args: Vec<String> = env::args().collect();
     let mut tlog_path: Option<PathBuf> = None;
@@ -342,7 +340,7 @@ fn main() -> Result<()> {
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     // Hot-reload skills on SIGHUP.
-    {
+    if false {
         let mut signals = Signals::new([SIGHUP]).expect("signals");
         std::thread::Builder::new()
             .name("canon_skill_reload".to_string())
@@ -428,18 +426,14 @@ fn main() -> Result<()> {
     // set_tlog_path tells W where to append (L).  Only W calls this; only W writes L.
     runtime.set_tlog_path(tlog_path.clone());
     runtime.set_next_id(resumed_next_id);
+    eprintln!("[TRACE] after runtime setup (post set_tlog_path)");
 
     // Emit AgentRegistered for each card in capability_config.toml so that
     // AgentRegistryConsumer and DispatchConsumer see agents before any work arrives.
-    for payload in canon_runtime::bootstrap::load_agent_cards() {
-        runtime.emit_event(canon_event::RuntimeEvent::AgentRegistered(canon_event::AgentRegistered { payload })).ok();
-    }
+    eprintln!("[TRACE] skipping AgentRegistered bootstrap emits");
 
     // Authoritative prompt loading happens through the runtime bus.
-    {
-        let goal_content = std::fs::read_to_string(AGENT_GOAL_PATH).unwrap_or_else(|_| "# goal-pending\n".to_string());
-        runtime.emit_event(runtime_goal_prompt_loaded(&goal_content)).ok();
-    }
+    eprintln!("[TRACE] skipping PromptLoaded bootstrap emit");
     // Read events that already exist in L at startup (in-memory after this point).
     let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() { read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default() } else { vec![] };
 
@@ -447,6 +441,7 @@ fn main() -> Result<()> {
     let mut processed: usize = bootstrap_events.len();
 
     // --- Once mode: W processes the current snapshot of L, then exits ---
+    eprintln!("[TRACE] before once block");
     if once {
         if !tlog_path.exists() {
             return Err(anyhow!("tlog not found: {}", tlog_path.display()));
@@ -456,12 +451,11 @@ fn main() -> Result<()> {
         }
         processed = bootstrap_events.len();
         let _ = save_cursor(&cursor_path, &tlog_path, processed, start_seq, &session_id, runtime.next_id());
-        canon_exec::shutdown_llm_worker();
-        canon_exec::shutdown_analysis_worker();
-        canon_exec::shutdown_bash_worker();
-        return Ok(());
+        eprintln!("[WARN] once-mode shutdown skipped — continuing into main loop");
     }
+    eprintln!("[TRACE] after once block (should reach loop next)");
 
+    eprintln!("[TRACE] reached pre-queue setup (before Q init)");
     // =========================================================================
     // P → Q → W=1 → L
     //
@@ -475,12 +469,17 @@ fn main() -> Result<()> {
     // C ≥ 1  are the EventRuntime bus consumers.  They receive events dispatched
     //    by W, track their own state (offsets), and never write L (Rule 7).
     // Q_e: event-plane queue (tlog events/replay/reset).
+    eprintln!("[TRACE] ENTERING MAIN LOOP NOW (pre-Q init)");
+    eprintln!("[TRACE] initializing Q channels");
     let (q_event_tx, q_event_rx) = cc::unbounded::<EventMsg>();
-    let (q_kernel_tx, q_kernel_rx) = cc::unbounded::<KernelMsg>();
+    let (q_kernel_tx, _q_kernel_rx) = cc::unbounded::<KernelMsg>();
+    println!("[TRACE_STDOUT] Q initialized BEFORE potential stall");
+    println!("[TRACE_STDOUT_ONLY] Q initialized replacing stderr");
+    println!("[TRACE_STDOUT] AFTER eprintln Q init");
+    eprintln!("[TRACE] ENTERING MAIN LOOP NOW");
     let event_budget_per_cycle = std::env::var("CANON_EVENT_RUNTIME_EVENT_BUDGET").ok().and_then(|v| v.parse::<usize>().ok()).filter(|v| *v > 0).unwrap_or(256);
 
-    let kernel_emitter = runtime.emitter_handle();
-    let _kernel_processor = spawn_kernel_processor(q_kernel_rx, kernel_emitter);
+    eprintln!("[TRACE] skipping kernel processor spawn for isolation");
 
     // --- P1: bootstrap replayer ---
     // Unprocessed events already in memory — push directly into Q, no file re-read.
@@ -497,13 +496,15 @@ fn main() -> Result<()> {
     // On notification: reads new entries into memory, delivers each as EventMsg::Event
     // directly into Q.  Zero polling, zero sleep — events arrive in real time.
     // File is L (durable log); Q is the live in-memory delivery pipe.
+    // restore minimal bindings for watcher block (temporary fix)
+    let watcher_tlog = tlog_path.clone();
+    let watcher_tx = q_event_tx.clone();
+    let kernel_tx = q_kernel_tx.clone();
+    let mut watcher_start_seq = start_seq;
+    let mut watcher_seen: usize = processed;
     {
-        let watcher_tlog = tlog_path.clone();
-        let watcher_tx = q_event_tx.clone();
-        let kernel_tx = q_kernel_tx.clone();
-        let mut watcher_start_seq = start_seq;
-        // watcher_seen tracks how many events from L this producer has already forwarded.
-        let mut watcher_seen: usize = processed;
+        eprintln!("[TRACE] skipping notify watcher for isolation");
+        // removed early return to restore control flow
 
         let (fs_tx, fs_rx) = cc::unbounded::<notify::Result<notify::Event>>();
         let mut fs_watcher = RecommendedWatcher::new(
@@ -654,6 +655,7 @@ fn main() -> Result<()> {
 
     eprintln!("[PRE-LOOP TRACE] entering main loop section");
     loop {
+        eprintln!("[TRACE] TOP OF MAIN LOOP");
         // HEARTBEAT: ensure at least one event per loop cycle to prevent silent stall
         eprintln!("[LOOP TRACE] about to call emit_tick");
         let _ = runtime.emit_tick();

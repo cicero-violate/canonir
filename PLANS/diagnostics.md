@@ -1,72 +1,92 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- event log segments in state/event_log/event.tlog.d (1 file, ~30.4MB)
-- latest analysis:
-  - seconds_since_last_write ≈ 10773s (CRITICAL staleness)
-  - loop_observed_missing=24172
-  - missing_decision_traces=5167
-  - missing_route_traces=5166
-  - successor_discharge_gaps=2188
-  - synthetic_dispatch_signals=461
-  - queue_driven_routing_signals=16
+- event log segments (state/event_log/event.tlog.d)
+- latest structured python analysis (current cycle)
+- prior inspection of canon-loop, canon-route, canon-runtime
 
 ## Ranked Failures
 
-1. Impact: critical
-   Signal: Runtime observability halted
-   Evidence: No log writes for ~10773 seconds
-   Repair Targets:
-   - canon-runtime logging loop
-   - enforce heartbeat + fail-fast on stalled emission
+### 1. Impact: CRITICAL
+Signal: LoopObserved invariant failure breaks routing entrypoint
+Evidence:
+- 24,254 missing LoopObserved events (stable across cycles)
+- LoopObserved → RouteSelected is required control-flow edge
+Repair Targets:
+- canon-loop/src/stage/observe.rs
+  - enforce single-exit structure with guaranteed LoopObserved emission
+  - add runtime assertion ensuring emission occurred
+  - eliminate implicit fallthrough reliance
 
-2. Impact: critical
-   Signal: Synthetic dispatch still present
-   Evidence: 461 synthetic dispatch signals
-   Repair Targets:
-   - canon-runtime dispatch layer
-   - fully eliminate RequestDispatch and synthetic paths
+### 2. Impact: CRITICAL
+Signal: Decision→Route invariant collapse
+Evidence:
+- 5,167 missing decision traces
+- 5,166 missing route traces
+Repair Targets:
+- canon-route/src/executor.rs
+  - replace debug_assert!(true, ...) with enforced invariant
+  - block route emission without decision trace
 
-3. Impact: critical
-   Signal: Queue-driven routing persists
-   Evidence: 16 queue-driven routing signals
-   Repair Targets:
-   - canon-route policy + plan.rs
-   - remove scheduler_len / planned_pending usage
-   - enforce SemanticStateSummary-only routing
+### 3. Impact: CRITICAL
+Signal: Routing authority still influenced by non-semantic state
+Evidence:
+- 16 queue-driven routing signals
+- presence of tick/hash gating in LoopContext
+Repair Targets:
+- canon-route + canon-loop context
+  - remove scheduler_len / planned_pending / tick/hash gating
+  - derive routing exclusively from SemanticStateSummary
 
-4. Impact: critical
-   Signal: Missing DECIDE/ROUTE traces
-   Evidence: >5k missing traces
-   Repair Targets:
-   - executor + invariant enforcement
-   - guarantee DECIDE + ROUTE emission
+### 4. Impact: CRITICAL
+Signal: Synthetic dispatch bypass persists
+Evidence:
+- 461 synthetic dispatch signals
+Repair Targets:
+- canon-runtime
+  - remove RequestDispatch entirely
+  - eliminate replay duplication paths
 
-5. Impact: critical
-   Signal: LoopObserved invariant failure
-   Evidence: 24172 missing events
-   Repair Targets:
-   - canon-loop observe stage
-   - enforce unconditional emission
+### 5. Impact: CRITICAL
+Signal: Invariants detected but not enforced
+Evidence:
+- 1,278 invariant/error lines
+- runtime continues execution under violation
+Repair Targets:
+- canon-invariant
+  - convert invariant violations into fail-fast behavior
+  - halt execution on violation
 
-6. Impact: high
-   Signal: Successor lifecycle incomplete
-   Evidence: 2188 discharge gaps
-   Repair Targets:
-   - runtime lifecycle completion logic
+### 6. Impact: HIGH
+Signal: Successor lifecycle incomplete
+Evidence:
+- 2,188 successor_discharge_gaps
+Repair Targets:
+- canon-runtime lifecycle
+  - enforce exactly-once successor discharge
+
+### 7. Impact: HIGH
+Signal: Persistent missing/duplicate patterns
+Evidence:
+- "missing": 500 occurrences
+- "duplicate": 2 occurrences
+Repair Targets:
+- runtime control flow
+  - eliminate bypass paths (early exits / fallthrough)
+  - enforce invariant checkpoints on all exits
 
 ## Planner Handoff
 
 Priority order:
-1. Restore event-log emission
-2. Eliminate synthetic dispatch
-3. Remove scheduler-derived routing inputs
-4. Enforce SemanticStateSummary-only routing
-5. Restore tracing invariants
-6. Fix LoopObserved guarantees
-7. Close lifecycle gaps
+1. Guarantee LoopObserved emission
+2. Enforce decision→route invariant
+3. Remove queue-derived routing inputs
+4. Eliminate synthetic dispatch
+5. Enforce fail-fast invariant behavior
+6. Fix successor lifecycle
 
 Blockers:
-- No fresh logs → cannot validate fixes
-- Control flow bypasses semantic state authority
+- System is active but not converging (metrics unchanged)
+- Routing/control flow still partially derived from non-semantic state
+- Invariants are informational only and not enforced
 
