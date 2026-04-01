@@ -818,13 +818,6 @@ fn truncate(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
-fn verifier_confirmed(reason: &str) -> bool {
-    match serde_json::from_str::<Value>(reason) {
-        Ok(v) => v.get("verified").and_then(|x| x.as_bool()).unwrap_or(false),
-        Err(_) => false,
-    }
-}
-
 fn diagnostics_python_reads_event_logs(action: &Value) -> bool {
     if action.get("action").and_then(|v| v.as_str()) != Some("python") {
         return false;
@@ -1201,153 +1194,302 @@ async fn main() -> Result<()> {
     let tabs_exec_b = llm_worker_new_tabs();
 
     if orchestrate {
-        const MAX_CYCLES: usize = 10;
-        eprintln!("[orchestrate] start_role={start_role}");
-        let mut last_verifier_summary = String::new();
-        for cycle in 0..MAX_CYCLES {
-            eprintln!("[orchestrate] ── cycle {} ──────────────────────────────", cycle + 1);
+        const DIAGNOSTICS_LOOP_SECS: u64 = 20;
+        const PLANNER_LOOP_SECS: u64 = 12;
+        const EXECUTOR_LOOP_IDLE_SECS: u64 = 2;
 
-            {
-                let ep = find_endpoint(&config, "diagnostics")?.clone();
-                let prompt = format!(
-                    "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\n\
+        eprintln!("[orchestrate] start_role={start_role}");
+
+        let diagnostics_ep = find_endpoint(&config, "diagnostics")?.clone();
+        let planner_ep = find_endpoint(&config, "mini_planner")?.clone();
+        let exec_a_ep = find_endpoint(&config, "mini_agent")?.clone();
+        let exec_b_ep = find_endpoint(&config, "executor_b")?.clone();
+        let verifier_ep_a = find_endpoint(&config, "verifier")?.clone();
+        let verifier_ep_b = find_endpoint(&config, "verifier")?.clone();
+
+        let tabs_diagnostics = llm_worker_new_tabs();
+        let tabs_planner = llm_worker_new_tabs();
+        let tabs_verify_a = llm_worker_new_tabs();
+        let tabs_verify_b = llm_worker_new_tabs();
+
+        let verifier_summary = Arc::new(tokio::sync::Mutex::new((
+            "(none yet)".to_string(),
+            "(none yet)".to_string(),
+        )));
+
+        {
+            let bridge = bridge.clone();
+            let workspace = workspace.clone();
+            let config = config.clone();
+            let tabs_diagnostics = tabs_diagnostics.clone();
+            let diagnostics_ep = diagnostics_ep.clone();
+            let verifier_summary = verifier_summary.clone();
+            tokio::spawn(async move {
+                loop {
+                    let summary_text = {
+                        let guard = verifier_summary.lock().await;
+                        format!("lane_a={}\nlane_b={}", guard.0, guard.1)
+                    };
+                    let prompt = format!(
+                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\n\
 Always inspect state/event_log/event.tlog.d and the relevant canon system files.\n\
 Prioritize canon-route, canon-loop, canon-runtime, and canon-mini-agent when control flow or prompt contracts are implicated.\n\n\
-Latest verifier summary:\n{}\n\n\
+Latest verifier summary:\n{summary_text}\n\n\
 Use {SPEC_FILE} as the canonical contract, not lane plans.\n\
 Infer failures from code, logs, runtime state, and verifier findings.\n\
 Focus on route/control-flow correctness, event successor discharge, duplicate fanout, scheduler-state drift, and prompt-shell mismatches.\n\n\
-Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin.",
-                    if last_verifier_summary.is_empty() { "(none yet)" } else { &last_verifier_summary }
-                );
-                eprintln!("[orchestrate] cycle={} starting diagnostics", cycle + 1);
-            let _ = run_agent("diagnostics", SYSTEM_INSTRUCTIONS_DIAGNOSTICS, prompt, &ep, &bridge, &workspace, &config, &tabs, false, false).await?;
-            }
-
-            let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
-            let spec = std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
-            let planner_ep = find_endpoint(&config, "mini_planner")?.clone();
-            eprintln!("[orchestrate] starting planner");
-            let planner_prompt = format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n- Derive lane plans from the spec; do not change spec truth.\n\nCreate or refresh {EXECUTOR_A_PLAN_FILE} and {EXECUTOR_B_PLAN_FILE}. Emit exactly one action to begin."
-            );
-            let _plan_result = run_agent("planner", SYSTEM_INSTRUCTIONS_PLANNER, planner_prompt, &planner_ep, &bridge, &workspace, &config, &tabs, false, false).await?;
-
-            let exec_a_plan = std::fs::read_to_string(&exec_a_plan_path).with_context(|| format!("failed to read {EXECUTOR_A_PLAN_FILE}"))?;
-            let exec_a_ep = find_endpoint(&config, "mini_agent")?.clone();
-            let exec_a_prompt = format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_A_PLAN_FILE}):\n{exec_a_plan}\n\nYou are executor A. Work only on the highest-priority READY items from your lane plan. Do not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
-            );
-
-            let exec_b_plan = std::fs::read_to_string(&exec_b_plan_path).with_context(|| format!("failed to read {EXECUTOR_B_PLAN_FILE}"))?;
-            let exec_b_ep = find_endpoint(&config, "executor_b")?.clone();
-            let exec_b_prompt = format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_B_PLAN_FILE}):\n{exec_b_plan}\n\nYou are executor B. Work only on the highest-priority READY items from your lane plan and avoid duplicating executor A's lane. Do not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
-            );
-
-            let verifier_ep_a = find_endpoint(&config, "verifier")?.clone();
-            let verifier_ep_b = find_endpoint(&config, "verifier")?.clone();
-
-            eprintln!("[orchestrate] starting executor/verifier lanes concurrently");
-            let lane_a = async {
-                let exec_a_result = run_agent(
-                    "executor_a",
-                    SYSTEM_INSTRUCTIONS_EXECUTOR,
-                    exec_a_prompt,
-                    &exec_a_ep,
-                    &bridge,
-                    &workspace,
-                    &config,
-                    &tabs_exec_a,
-                    false,
-                    false,
-                )
-                .await?;
-
-                let verify_spec_a =
-                    std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
-                let verifier_prompt_a = format!(
-                    "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nExecutor lane: A\nExecutor result summary:\n{exec_a_result}\n\nCanonical spec (from {SPEC_FILE}):\n{verify_spec_a}\n\nVerify whether the current code satisfies the spec. Executor evidence is only a hint. Emit exactly one action to begin."
-                );
-                let verify_a_result = run_agent(
-                    "verifier_a",
-                    SYSTEM_INSTRUCTIONS_VERIFIER,
-                    verifier_prompt_a,
-                    &verifier_ep_a,
-                    &bridge,
-                    &workspace,
-                    &config,
-                    &tabs,
-                    false,
-                    false,
-                )
-                .await?;
-
-                Ok::<String, anyhow::Error>(verify_a_result)
-            };
-
-            let lane_b = async {
-                let exec_b_result = run_agent(
-                    "executor_b",
-                    SYSTEM_INSTRUCTIONS_EXECUTOR,
-                    exec_b_prompt,
-                    &exec_b_ep,
-                    &bridge,
-                    &workspace,
-                    &config,
-                    &tabs_exec_b,
-                    false,
-                    false,
-                )
-                .await?;
-
-                let verify_spec_b =
-                    std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
-                let verifier_prompt_b = format!(
-                    "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nExecutor lane: B\nExecutor result summary:\n{exec_b_result}\n\nCanonical spec (from {SPEC_FILE}):\n{verify_spec_b}\n\nVerify whether the current code satisfies the spec. Executor evidence is only a hint. Emit exactly one action to begin."
-                );
-                let verify_b_result = run_agent(
-                    "verifier_b",
-                    SYSTEM_INSTRUCTIONS_VERIFIER,
-                    verifier_prompt_b,
-                    &verifier_ep_b,
-                    &bridge,
-                    &workspace,
-                    &config,
-                    &tabs,
-                    false,
-                    false,
-                )
-                .await?;
-
-                Ok::<String, anyhow::Error>(verify_b_result)
-            };
-
-            let (verify_a_result, verify_b_result) = tokio::join!(lane_a, lane_b);
-            let verify_a_result = verify_a_result?;
-            let verify_b_result = verify_b_result?;
-            last_verifier_summary =
-                format!("lane_a={verify_a_result}\nlane_b={verify_b_result}");
-
-            let verify_result = if verifier_confirmed(&verify_a_result) && verifier_confirmed(&verify_b_result) {
-                "{\"verified\":true,\"summary\":\"both verifier lanes confirmed completion\"}".to_string()
-            } else {
-                format!(
-                    "{{\"verified\":false,\"summary\":\"lane_a={} | lane_b={}\"}}",
-                    verify_a_result.replace('"', "'"),
-                    verify_b_result.replace('"', "'")
-                )
-            };
-
-            if verifier_confirmed(&verify_result) {
-                eprintln!("[orchestrate] verifier confirms completion — done after {} cycle(s)", cycle + 1);
-                println!("orchestrate: converged after {} cycle(s)", cycle + 1);
-                return Ok(());
-            }
-
-            eprintln!("[orchestrate] verifier detected incomplete work — continuing");
+Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin."
+                    );
+                    match run_agent(
+                        "diagnostics",
+                        SYSTEM_INSTRUCTIONS_DIAGNOSTICS,
+                        prompt,
+                        &diagnostics_ep,
+                        &bridge,
+                        &workspace,
+                        &config,
+                        &tabs_diagnostics,
+                        false,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(result) => eprintln!("[orchestrate] diagnostics loop ok bytes={}", result.len()),
+                        Err(err) => eprintln!("[orchestrate] diagnostics loop error: {err:#}"),
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(DIAGNOSTICS_LOOP_SECS)).await;
+                }
+            });
         }
-        bail!("orchestrate: did not converge after {MAX_CYCLES} cycles");
+
+        {
+            let bridge = bridge.clone();
+            let workspace = workspace.clone();
+            let config = config.clone();
+            let tabs_planner = tabs_planner.clone();
+            let planner_ep = planner_ep.clone();
+            let spec_path = spec_path.clone();
+            let verifier_summary = verifier_summary.clone();
+            tokio::spawn(async move {
+                loop {
+                    let spec = match std::fs::read_to_string(&spec_path) {
+                        Ok(spec) => spec,
+                        Err(err) => {
+                            eprintln!("[orchestrate] planner loop spec read error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(PLANNER_LOOP_SECS)).await;
+                            continue;
+                        }
+                    };
+                    let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
+                    let summary_text = {
+                        let guard = verifier_summary.lock().await;
+                        format!("lane_a={}\nlane_b={}", guard.0, guard.1)
+                    };
+                    let planner_prompt = format!(
+                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nLatest verifier summary:\n{summary_text}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n- Derive lane plans from the spec; do not change spec truth.\n\nCreate or refresh {EXECUTOR_A_PLAN_FILE} and {EXECUTOR_B_PLAN_FILE}. Emit exactly one action to begin."
+                    );
+                    match run_agent(
+                        "planner",
+                        SYSTEM_INSTRUCTIONS_PLANNER,
+                        planner_prompt,
+                        &planner_ep,
+                        &bridge,
+                        &workspace,
+                        &config,
+                        &tabs_planner,
+                        false,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(result) => eprintln!("[orchestrate] planner loop ok bytes={}", result.len()),
+                        Err(err) => eprintln!("[orchestrate] planner loop error: {err:#}"),
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(PLANNER_LOOP_SECS)).await;
+                }
+            });
+        }
+
+        {
+            let bridge = bridge.clone();
+            let workspace = workspace.clone();
+            let config = config.clone();
+            let tabs_exec_a = tabs_exec_a.clone();
+            let tabs_verify_a = tabs_verify_a.clone();
+            let exec_a_ep = exec_a_ep.clone();
+            let verifier_ep_a = verifier_ep_a.clone();
+            let spec_path = spec_path.clone();
+            let exec_a_plan_path = exec_a_plan_path.clone();
+            let verifier_summary = verifier_summary.clone();
+            tokio::spawn(async move {
+                let mut latest_verify_a =
+                    "{\"verified\":false,\"summary\":\"lane_a not yet verified\"}".to_string();
+                loop {
+                    let spec = match std::fs::read_to_string(&spec_path) {
+                        Ok(spec) => spec,
+                        Err(err) => {
+                            eprintln!("[orchestrate] lane_a spec read error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                            continue;
+                        }
+                    };
+                    let exec_a_plan = match std::fs::read_to_string(&exec_a_plan_path) {
+                        Ok(plan) => plan,
+                        Err(err) => {
+                            eprintln!("[orchestrate] lane_a plan read error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                            continue;
+                        }
+                    };
+                    let exec_a_prompt = format!(
+                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_A_PLAN_FILE}):\n{exec_a_plan}\n\nLatest verifier result for lane A:\n{latest_verify_a}\n\nYou are executor A. Work only on the highest-priority READY items from your lane plan. Address verifier findings first. Do not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
+                    );
+                    let exec_a_result = match run_agent(
+                        "executor_a",
+                        SYSTEM_INSTRUCTIONS_EXECUTOR,
+                        exec_a_prompt,
+                        &exec_a_ep,
+                        &bridge,
+                        &workspace,
+                        &config,
+                        &tabs_exec_a,
+                        false,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(err) => {
+                            eprintln!("[orchestrate] lane_a executor error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                            continue;
+                        }
+                    };
+                    let verifier_prompt_a = format!(
+                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nExecutor lane: A\nExecutor result summary:\n{exec_a_result}\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nVerify whether the current code satisfies the spec. Executor evidence is only a hint. Emit exactly one action to begin."
+                    );
+                    match run_agent(
+                        "verifier_a",
+                        SYSTEM_INSTRUCTIONS_VERIFIER,
+                        verifier_prompt_a,
+                        &verifier_ep_a,
+                        &bridge,
+                        &workspace,
+                        &config,
+                        &tabs_verify_a,
+                        false,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(verify_a_result) => {
+                            latest_verify_a = verify_a_result.clone();
+                            {
+                                let mut guard = verifier_summary.lock().await;
+                                guard.0 = verify_a_result;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                        }
+                        Err(err) => {
+                            eprintln!("[orchestrate] lane_a verifier error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                        }
+                    }
+                }
+            });
+        }
+
+        {
+            let bridge = bridge.clone();
+            let workspace = workspace.clone();
+            let config = config.clone();
+            let tabs_exec_b = tabs_exec_b.clone();
+            let tabs_verify_b = tabs_verify_b.clone();
+            let exec_b_ep = exec_b_ep.clone();
+            let verifier_ep_b = verifier_ep_b.clone();
+            let spec_path = spec_path.clone();
+            let exec_b_plan_path = exec_b_plan_path.clone();
+            let verifier_summary = verifier_summary.clone();
+            tokio::spawn(async move {
+                let mut latest_verify_b =
+                    "{\"verified\":false,\"summary\":\"lane_b not yet verified\"}".to_string();
+                loop {
+                    let spec = match std::fs::read_to_string(&spec_path) {
+                        Ok(spec) => spec,
+                        Err(err) => {
+                            eprintln!("[orchestrate] lane_b spec read error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                            continue;
+                        }
+                    };
+                    let exec_b_plan = match std::fs::read_to_string(&exec_b_plan_path) {
+                        Ok(plan) => plan,
+                        Err(err) => {
+                            eprintln!("[orchestrate] lane_b plan read error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                            continue;
+                        }
+                    };
+                    let exec_b_prompt = format!(
+                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_B_PLAN_FILE}):\n{exec_b_plan}\n\nLatest verifier result for lane B:\n{latest_verify_b}\n\nYou are executor B. Work only on the highest-priority READY items from your lane plan and avoid duplicating executor A's lane. Address verifier findings first. Do not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
+                    );
+                    let exec_b_result = match run_agent(
+                        "executor_b",
+                        SYSTEM_INSTRUCTIONS_EXECUTOR,
+                        exec_b_prompt,
+                        &exec_b_ep,
+                        &bridge,
+                        &workspace,
+                        &config,
+                        &tabs_exec_b,
+                        false,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(err) => {
+                            eprintln!("[orchestrate] lane_b executor error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                            continue;
+                        }
+                    };
+                    let verifier_prompt_b = format!(
+                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nExecutor lane: B\nExecutor result summary:\n{exec_b_result}\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nVerify whether the current code satisfies the spec. Executor evidence is only a hint. Emit exactly one action to begin."
+                    );
+                    match run_agent(
+                        "verifier_b",
+                        SYSTEM_INSTRUCTIONS_VERIFIER,
+                        verifier_prompt_b,
+                        &verifier_ep_b,
+                        &bridge,
+                        &workspace,
+                        &config,
+                        &tabs_verify_b,
+                        false,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(verify_b_result) => {
+                            latest_verify_b = verify_b_result.clone();
+                            {
+                                let mut guard = verifier_summary.lock().await;
+                                guard.1 = verify_b_result;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                        }
+                        Err(err) => {
+                            eprintln!("[orchestrate] lane_b verifier error: {err:#}");
+                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+                        }
+                    }
+                }
+            });
+        }
+
+        eprintln!("[orchestrate] service loops started: diagnostics, planner, lane_a, lane_b");
+        std::future::pending::<Result<()>>().await
     } else {
         // Single-role mode
         let (role, instructions) = if is_verifier {
