@@ -79,11 +79,7 @@ pub fn step_control_state(mut state: ControlState, event: ControlEvent) -> Contr
 
 use std::collections::HashMap;
 
-pub fn reachability_table(
-) -> (
-    HashMap<(ControlState, ControlEvent), ControlState>,
-    HashMap<(ControlState, ControlEvent), ControlDecision>,
-) {
+pub fn reachability_table() -> (HashMap<(ControlState, ControlEvent), ControlState>, HashMap<(ControlState, ControlEvent), ControlDecision>) {
     let mut state_table = HashMap::new();
     let mut decision_table = HashMap::new();
 

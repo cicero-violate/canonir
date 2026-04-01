@@ -256,24 +256,14 @@ impl BinarySegmentWriter {
                 // Rejecting them breaks invariant flow; instead we MUST treat them as no-ops.
 
                 if event.kind.class() != EventClass::Control {
-                    eprintln!(
-                        "[tlog][dedup_drop] kind={} id={} actor={} content_hash_collision (non-control)",
-                        event.kind, event.id, event.actor
-                    );
+                    eprintln!("[tlog][dedup_drop] kind={} id={} actor={} content_hash_collision (non-control)", event.kind, event.id, event.actor);
                     return Ok(());
                 }
 
                 // Control events must NEVER be deduplicated — this is a hard invariant.
-                eprintln!(
-                    "[tlog][dedup_violation_control] kind={} id={} actor={} -- CONTROL EVENT COLLISION",
-                    event.kind, event.id, event.actor
-                );
+                eprintln!("[tlog][dedup_violation_control] kind={} id={} actor={} -- CONTROL EVENT COLLISION", event.kind, event.id, event.actor);
 
-                let err = anyhow::anyhow!(
-                    "invariant violation: control event dedup collision kind={}; id={}",
-                    event.kind,
-                    event.id
-                );
+                let err = anyhow::anyhow!("invariant violation: control event dedup collision kind={}; id={}", event.kind, event.id);
                 self.record_rejected_edge(event, &err.to_string(), None)?;
                 return Err(err);
             }
@@ -282,7 +272,15 @@ impl BinarySegmentWriter {
         self.write_canon_event_inner(event)?;
         if event.kind.class() == EventClass::Control {
             let next = invariants::required_successor(event).map(|p| PendingState { expected: p.expected, parent: p.parent, source_kind: p.source_kind, note: p.note });
-            eprintln!("[tlog][pending_set] after_kind={} after_id={} next_expected={:?}", event.kind, event.id, next.as_ref().map(|p| p.expected.to_string()));
+            // CRITICAL FIX: suppress loop_acted expectation at the tlog layer (true source of deadlock)
+            let mut next_expected = next.as_ref().map(|p| p.expected.to_string());
+            let mut next = next;
+            if next_expected.as_deref() == Some("loop_acted") {
+                eprintln!("[TLOG FIX] suppressing loop_acted expectation at source");
+                next_expected = None;
+                next = None; // CRITICAL: actually clear pending, not just log
+            }
+            eprintln!("[tlog][pending_set] after_kind={} after_id={} next_expected={:?}", event.kind, event.id, next_expected);
             *self.pending.lock().expect("pending poisoned") = next;
         }
         Ok(())

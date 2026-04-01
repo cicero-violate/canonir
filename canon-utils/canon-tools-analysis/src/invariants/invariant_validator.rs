@@ -1,3 +1,5 @@
+use crate::invariants::bisimulation::{bisim_check, BisimResult};
+use crate::invariants::constraint_precedence::{resolve_conflict, ConstraintRef, ConstraintTier};
 use crate::invariants::invariant_discovery::{discover_invariants, mine_candidates, InvariantResult};
 use crate::invariants::invariant_generator::generate_candidates;
 use crate::invariants::invariant_sat::validate_candidates;
@@ -8,13 +10,11 @@ use crate::semantics::semantic_signature::compute_signatures;
 use anyhow::Result;
 use canon_graph::artifacts_loader::{load_code_graph, CodeGraph};
 use canon_graph::ingest::report_ingest::{ingest_reports, ReportFeatures};
+use canon_invariant::cross_product_harness::joint_reachability_table;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use crate::invariants::constraint_precedence::{resolve_conflict, ConstraintRef, ConstraintTier};
-use crate::invariants::bisimulation::{bisim_check, BisimResult};
-use canon_invariant::cross_product_harness::joint_reachability_table;
 
 #[derive(Debug, Serialize)]
 struct InvariantRecord {
@@ -58,16 +58,8 @@ pub fn run_invariant_pipeline(graph_dir: &Path, invariants_dir: &Path, meta_dir:
     for (i, inv_a) in invariants.iter().enumerate() {
         for inv_b in invariants.iter().skip(i + 1) {
             if inv_a.name == inv_b.name {
-                let a = ConstraintRef {
-                    fingerprint: i as u64,
-                    tier: ConstraintTier::Discovered,
-                    support: (inv_a.coverage * 1000.0) as usize,
-                };
-                let b = ConstraintRef {
-                    fingerprint: (i + 1) as u64,
-                    tier: ConstraintTier::Meta,
-                    support: (inv_b.coverage * 1000.0) as usize,
-                };
+                let a = ConstraintRef { fingerprint: i as u64, tier: ConstraintTier::Discovered, support: (inv_a.coverage * 1000.0) as usize };
+                let b = ConstraintRef { fingerprint: (i + 1) as u64, tier: ConstraintTier::Meta, support: (inv_b.coverage * 1000.0) as usize };
                 let (_winner, record) = resolve_conflict(&a, &b, &inv_a.name);
                 conflict_log.push(serde_json::to_value(&record)?);
             }
@@ -75,8 +67,7 @@ pub fn run_invariant_pipeline(graph_dir: &Path, invariants_dir: &Path, meta_dir:
     }
     {
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().create(true).append(true)
-            .open(invariants_dir.join("conflicts.jsonl"))?;
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(invariants_dir.join("conflicts.jsonl"))?;
         for entry in &conflict_log {
             writeln!(f, "{}", serde_json::to_string(entry)?)?;
         }

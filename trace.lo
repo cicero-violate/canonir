@@ -1,0 +1,2 @@
+[LLM INIT] init_llm_worker called in event_runtime main
+[event_runtime] another instance is running (lock: /workspace/ai_sandbox/canon/state/event_runtime.lock)

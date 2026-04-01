@@ -24,19 +24,27 @@ pub struct LoopStageExecutor {
 
 impl LoopStageExecutor {
     pub fn new(workspace: PathBuf, tlog_path: PathBuf) -> Self {
+        #[cfg(feature = "trace")]
+        eprintln!("[TRACE] {}:{} {} - enter LoopStageExecutor::new", file!(), line!(), module_path!());
         Self { ctx: LoopContext::new(workspace, tlog_path) }
     }
 
     pub fn with_agent_id(mut self, id: String) -> Self {
+        #[cfg(feature = "trace")]
+        eprintln!("[TRACE] {}:{} {} - enter LoopStageExecutor::with_agent_id", file!(), line!(), module_path!());
         self.ctx.agent_id = Some(id);
         self
     }
 
     pub fn evaluate_harness_repair(&self) -> HarnessRepairDecision {
+        #[cfg(feature = "trace")]
+        eprintln!("[TRACE] {}:{} {} - enter LoopStageExecutor::evaluate_harness_repair", file!(), line!(), module_path!());
         evaluate_harness_repair_loop(&self.ctx.harness_repair_state())
     }
 
     pub fn evaluate_harness_repair_for_target(&mut self, target: &crate::harness_repair::HarnessRepairTarget, failure_output: &str) -> crate::harness_repair::HarnessRepairDirective {
+        #[cfg(feature = "trace")]
+        eprintln!("[TRACE] {}:{} {} - enter LoopStageExecutor::evaluate_harness_repair_for_target", file!(), line!(), module_path!());
         self.ctx.prime_harness_repair_target(target, failure_output);
         crate::harness_repair::build_harness_repair_directive(&self.ctx.harness_repair_state(), target)
     }
@@ -48,8 +56,8 @@ impl LoopStageExecutor {
     fn emit_debug(&mut self, trigger_id: &EventId, kind: &str, reason: &str, payload: serde_json::Value) {
         if let Some(emitter) = self.ctx.emitter.as_ref() {
             let debug_payload = decision_trace_payload(reason, payload);
-            use std::hash::{Hash, Hasher};
             use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
 
             let mut hasher = DefaultHasher::new();
             debug_payload.hash(&mut hasher);
@@ -58,11 +66,7 @@ impl LoopStageExecutor {
             if self.ctx.last_delta_hash.as_ref() != Some(&debug_hash) {
                 self.ctx.last_delta_hash = Some(debug_hash);
                 emitter.emit_child(
-                    RuntimeEvent::Debug(canon_event::DebugEvent {
-                        source: "loop_stage_executor".to_string(),
-                        kind: kind.to_string(),
-                        payload: debug_payload,
-                    }),
+                    RuntimeEvent::Debug(canon_event::DebugEvent { source: "loop_stage_executor".to_string(), kind: kind.to_string(), payload: debug_payload }),
                     vec![trigger_id.clone()],
                     file!(),
                     line!(),
@@ -508,19 +512,11 @@ impl LoopStageExecutor {
     }
 
     fn should_trigger_observe_from_error(&self, error_kind: &str, fatal_invariant: bool) -> bool {
-        matches!(
-            evaluate_error_observe(error_kind, false, fatal_invariant),
-            ErrorObserveRule::GenericErrorObserve
-        )
+        matches!(evaluate_error_observe(error_kind, false, fatal_invariant), ErrorObserveRule::GenericErrorObserve)
     }
 
     fn apply_planning_transition_effects(&mut self, planning_status: Option<&str>, error_kind: Option<&str>) -> bool {
-        let transition = evaluate_loop_transition(
-            self.ctx.pending_required_successor.as_deref(),
-            planning_status,
-            error_kind,
-            None,
-        );
+        let transition = evaluate_loop_transition(self.ctx.pending_required_successor.as_deref(), planning_status, error_kind, None);
 
         if transition.recovery_rules.contains(&LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan) {
             self.reset_plan_window_state();
@@ -588,12 +584,7 @@ impl LoopStageExecutor {
         None
     }
 
-    fn handle_runtime_observe_mode(
-        &mut self,
-        trigger_id: &EventId,
-        event: &RuntimeEvent,
-        observe_mode: ObserveExecutionMode,
-    ) {
+    fn handle_runtime_observe_mode(&mut self, trigger_id: &EventId, event: &RuntimeEvent, observe_mode: ObserveExecutionMode) {
         if observe_mode == ObserveExecutionMode::Forced {
             self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
         } else if observe_mode == ObserveExecutionMode::SuppressedByPendingSuccessor {
@@ -672,12 +663,8 @@ impl LoopStageExecutor {
         Some((expected.clone(), evaluate_recovery_event(expected.as_deref(), pending_required_successor, has_last_verified)))
     }
 
-    fn recovery_forces_observe(
-        recovery_eval: &Option<(Option<String>, crate::policy::RecoveryEventEvaluation)>,
-    ) -> bool {
-        recovery_eval
-            .as_ref()
-            .is_some_and(|(_, eval)| eval.force_observe_recovery)
+    fn recovery_forces_observe(recovery_eval: &Option<(Option<String>, crate::policy::RecoveryEventEvaluation)>) -> bool {
+        recovery_eval.as_ref().is_some_and(|(_, eval)| eval.force_observe_recovery)
     }
 
     fn advance_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {
@@ -721,7 +708,6 @@ impl LoopStageExecutor {
         EventOutcome::NoOp("loop_stage_async")
     }
 }
-
 
 impl EventConsumer for LoopStageExecutor {
     fn filter(&self) -> EventFilter {

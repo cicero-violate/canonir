@@ -202,8 +202,7 @@ burst = 1
 
     fn load_harness_config() -> CapabilityConfig {
         // Load snapshot config; resolver fallback handles missing harness roles
-        CapabilityConfig::snapshot_store_load()
-            .expect("snapshot config must load")
+        CapabilityConfig::snapshot_store_load().expect("snapshot config must load")
     }
 
     // ── relay_resolve_role_to_endpoint ────────────────────────────────────────

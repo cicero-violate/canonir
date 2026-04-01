@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::control_harness::{step_control_state, ControlEvent, ControlState};
 use crate::constraint_harness::{constraint_seed_states, step_constraint_state, ConstraintSeed};
+use crate::control_harness::{step_control_state, ControlEvent, ControlState};
 use crate::{ConstraintAction, ConstraintRoute};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -23,20 +23,11 @@ fn derive_route(_cs: &ControlState) -> ConstraintRoute {
 
 pub fn step_joint(state: &JointState, event: &JointEvent) -> JointState {
     match event {
-        JointEvent::Control(e) => JointState {
-            control: step_control_state(state.control, *e),
-            constraint: state.constraint.clone(),
-        },
+        JointEvent::Control(e) => JointState { control: step_control_state(state.control, *e), constraint: state.constraint.clone() },
         JointEvent::Constraint(a) => {
             let route = derive_route(&state.control);
             let next_state = step_constraint_state(state.constraint.state.clone(), route, *a);
-            JointState {
-                control: state.control,
-                constraint: ConstraintSeed {
-                    state: next_state,
-                    route,
-                },
-            }
+            JointState { control: state.control, constraint: ConstraintSeed { state: next_state, route } }
         }
     }
 }
@@ -48,10 +39,7 @@ pub fn joint_seed_states() -> Vec<JointState> {
     let mut seeds = Vec::new();
     for cs in control_seeds {
         for ks in &constraint_seeds {
-            seeds.push(JointState {
-                control: cs,
-                constraint: ks.clone(),
-            });
+            seeds.push(JointState { control: cs, constraint: ks.clone() });
         }
     }
     seeds
@@ -64,14 +52,8 @@ pub fn joint_reachability_table(max_depth: usize) -> HashMap<(JointState, JointE
     let seeds = joint_seed_states();
 
     let control_events = super::control_harness::synthetic_control_events();
-    let constraint_events = vec![
-        ConstraintAction::CargoInit,
-        ConstraintAction::CargoNew,
-        ConstraintAction::RepairLocalized,
-        ConstraintAction::RepairWorkspace,
-        ConstraintAction::Validation,
-        ConstraintAction::Other,
-    ];
+    let constraint_events =
+        vec![ConstraintAction::CargoInit, ConstraintAction::CargoNew, ConstraintAction::RepairLocalized, ConstraintAction::RepairWorkspace, ConstraintAction::Validation, ConstraintAction::Other];
 
     for seed in seeds {
         queue.push_back((seed, 0));

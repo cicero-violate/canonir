@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InvariantStatus {
@@ -36,7 +36,9 @@ mod tests {
         let mut lc = InvariantLifecycle::new();
         lc.record_support(3);
         lc.tick(1);
-        for _ in 0..6 { lc.record_violation(3); }
+        for _ in 0..6 {
+            lc.record_violation(3);
+        }
         lc.tick(2);
         let entry = lc.entries().find(|e| e.fingerprint == 3);
         assert!(entry.map(|e| matches!(e.status, InvariantStatus::HardBanned)).unwrap_or(false));

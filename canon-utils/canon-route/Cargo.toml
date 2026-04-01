@@ -3,6 +3,9 @@ name = "canon-route"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+trace = []
+
 [lib]
 name = "canon_route"
 path = "src/lib.rs"

@@ -268,6 +268,8 @@ fn handle_event_msg(
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<()> {
+    canon_exec::init_llm_worker();
+    eprintln!("[LLM INIT] init_llm_worker called in event_runtime main");
     let args: Vec<String> = env::args().collect();
     let mut tlog_path: Option<PathBuf> = None;
     let mut once = false;
@@ -298,6 +300,8 @@ fn main() -> Result<()> {
     if std::env::var("CANON_VERIFY_TLOG_EQUIV").ok().as_deref() == Some("1") {
         let _ = maybe_verify_tlog_equivalence(&tlog_path);
     }
+
+    println!("[RUNTIME TRACE] reached post-verify_tlog_equiv checkpoint");
 
     // Use the cursor's start_seq to skip reading old tlog segments.
     // Consumers rebuild from scratch on each run.
@@ -365,11 +369,36 @@ fn main() -> Result<()> {
     let goodness_root = tlog_path.parent().map(|p| p.to_path_buf());
     consumers.push(Box::new(canon_goodness::GoodnessConsumer::new(goodness_root)));
     if event_execution_enabled {
-        consumers.push(Box::new(CapabilityExecutor::new(workspace.clone())));
+    consumers.push(Box::new(CapabilityExecutor::new(workspace.clone())));
+
+    // 🔥 CRITICAL FIX: register DispatchConsumer so it can receive RouteSelected
+    let dc = DispatchConsumer::new();
+    let is_sync = dc.is_synchronous();
+    let filter = dc.filter();
+    eprintln!("[BOOT TRACE] DispatchConsumer is_synchronous={} filter={:?}", is_sync, filter);
+    consumers.push(Box::new(dc));
     }
     canon_exec::init_llm_worker();
+    eprintln!("[LLM INIT] init_llm_worker called in event_runtime");
     canon_exec::init_analysis_worker();
     canon_exec::init_bash_worker();
+    use std::io::Write;
+    let mut f = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/workspace/ai_sandbox/canon/runtime_debug.log") {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("[RUNTIME DEBUG ERROR] failed to open debug log: {}", e);
+            return Ok(());
+        }
+    };
+
+    writeln!(f, "[RUNTIME DEBUG FILE] registering {} consumers", consumers.len()).ok();
+    for c in &consumers {
+        writeln!(f, "[RUNTIME DEBUG FILE] consumer: {}", c.consumer_name()).ok();
+    }
+
     let mut runtime = EventRuntime::new(consumers);
     // Hooks / middleware chain.
     if let Ok(cfg) = canon_llm::config::CapabilityConfig::snapshot_store_load() {

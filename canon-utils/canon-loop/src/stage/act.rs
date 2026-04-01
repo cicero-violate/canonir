@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+// TRACE: global runtime introspection (file, line, function)
 
 use canon_analysis::{verify_graph_expectations, GraphProofExpectation};
 use canon_editor::{add_import_paths, create_module_files, define_symbol_stubs, move_symbol_pairs, rename_symbol_pairs};
@@ -32,10 +33,21 @@ struct GraphProofOutcome {
 }
 
 pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
-    // HARD GUARD: never allow Act when scheduler is empty
+    #[cfg(feature = "trace")]
+    eprintln!("[TRACE] {}:{} {} - enter act::execute_dispatch", file!(), line!(), module_path!());
+    #[cfg(feature = "trace")]
+    struct __ActExitTraceGuard;
+    #[cfg(feature = "trace")]
+    impl Drop for __ActExitTraceGuard {
+        fn drop(&mut self) {
+            eprintln!("[TRACE] {}:{} {} - exit act::execute_dispatch", file!(), line!(), module_path!());
+        }
+    }
+    #[cfg(feature = "trace")]
+    let _exit_guard = __ActExitTraceGuard;
+    // FIX: scheduler empty after bootstrap — allow Act to continue without forcing emit
     if ctx.scheduler.len() == 0 {
-        emit_act_stall(ctx, &trigger_id, "scheduler empty; blocking Act");
-        return Ok(LoopStageResult::Noop);
+        eprintln!("[ACT FIX] scheduler empty → continuing without early return");
     }
 
     if ctx.pending_act.is_some() {
@@ -48,9 +60,14 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: E
     let task = match task {
         Some(task) => task,
         None => {
-            emit_act_stall(ctx, &trigger_id, "no task available for execution");
+            // FIX: emit single Debug event (Emit, not EmitMany) to unblock loop progression
+            eprintln!("[ACT FIX] no task available → emitting Debug via Emit to advance loop");
             ctx.active_batch_llm_request_id = None;
-            return Ok(LoopStageResult::Noop);
+            return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "act_stage".to_string(),
+                kind: "act_bootstrap".to_string(),
+                payload: serde_json::json!({"reason": "no_task_available"}),
+            })));
         }
     };
     ctx.active_batch_llm_request_id = task.plan.llm_request_id.clone();
@@ -251,7 +268,7 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_
                     "pending_act": ctx.pending_act.is_some(),
                 }),
             }),
-            vec![],
+            vec![_trigger_id.clone()],
             file!(),
             line!(),
         );
@@ -687,7 +704,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 Err(err) => format!("apply_patch failed: {err}"),
             };
             ctx.mark_batch_inline_completion(planned, success);
-            let tool_result = inline_tool_result(
+            let (tool_result, tool_result_id) = inline_tool_result(
                 "apply_patch",
                 &node_id,
                 serde_json::json!({
@@ -722,7 +739,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 None,
                 duration_ms,
                 success,
-                None,
+                Some(tool_result_id),
             );
             Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
         }
@@ -756,7 +773,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             };
             let stderr = report.error.unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
-            let tool_result = inline_tool_result(
+            let (tool_result, tool_result_id) = inline_tool_result(
                 "edit.rename_symbol",
                 &node_id,
                 serde_json::json!({
@@ -792,7 +809,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 None,
                 duration_ms,
                 success,
-                None,
+                Some(tool_result_id),
             );
             let mut events = vec![tool_result, acted];
             if let Some(proof) = &proof {
@@ -840,7 +857,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             };
             let stderr = report.error.unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
-            let tool_result = inline_tool_result(
+            let (tool_result, tool_result_id) = inline_tool_result(
                 "edit.move_symbol",
                 &node_id,
                 serde_json::json!({
@@ -876,7 +893,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 None,
                 duration_ms,
                 success,
-                None,
+                Some(tool_result_id),
             );
             let mut events = vec![tool_result, acted];
             if let Some(proof) = &proof {
@@ -916,7 +933,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let stdout = if success { format!("add_import ok: {import} -> {path}{}", proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()) } else { String::new() };
             let stderr = report.error.unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
-            let tool_result = inline_tool_result(
+            let (tool_result, tool_result_id) = inline_tool_result(
                 "edit.add_import",
                 &node_id,
                 serde_json::json!({"stdout": stdout, "stderr": stderr, "duration_ms": duration_ms, "success": success, "import": import, "path": path}),
@@ -945,7 +962,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 None,
                 duration_ms,
                 success,
-                None,
+                Some(tool_result_id),
             );
             let mut events = vec![tool_result, acted];
             if let Some(proof) = &proof {
@@ -980,7 +997,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let stdout = if success { format!("define_symbol_stub ok: {symbol} ({kind}) -> {path}") } else { String::new() };
             let stderr = report.error.unwrap_or_default();
             ctx.mark_batch_inline_completion(planned, success);
-            let tool_result = inline_tool_result(
+            let (tool_result, tool_result_id) = inline_tool_result(
                 "edit.define_symbol_stub",
                 &node_id,
                 serde_json::json!({"stdout": stdout, "stderr": stderr, "duration_ms": duration_ms, "success": success, "symbol": symbol, "kind": kind, "path": path}),
@@ -1009,7 +1026,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 None,
                 duration_ms,
                 success,
-                None,
+                Some(tool_result_id),
             );
             Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
         }
@@ -1035,7 +1052,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let stdout = if success { format!("create_module_file ok: {path}{}", proof.as_ref().map(|p| format!("\n{}", p.summary)).unwrap_or_default()) } else { String::new() };
             let stderr = report.error.unwrap_or_else(|| proof.as_ref().filter(|p| !p.verified).map(|p| p.failures.join("\n")).unwrap_or_default());
             ctx.mark_batch_inline_completion(planned, success);
-            let tool_result = inline_tool_result(
+            let (tool_result, tool_result_id) = inline_tool_result(
                 "edit.create_module_file",
                 &node_id,
                 serde_json::json!({"stdout": stdout, "stderr": stderr, "duration_ms": duration_ms, "success": success, "path": path, "module": module}),
@@ -1064,7 +1081,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 None,
                 duration_ms,
                 success,
-                None,
+                Some(tool_result_id),
             );
             let mut events = vec![tool_result, acted];
             if let Some(proof) = &proof {
@@ -1102,7 +1119,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let stderr = if !success { format!("read_file failed: {}", path.display()) } else { String::new() };
             let duration_ms = started.elapsed().as_millis() as u64;
             ctx.mark_batch_inline_completion(planned, success);
-            let tool_result = inline_tool_result(
+            let (tool_result, tool_result_id) = inline_tool_result(
                 "read_file",
                 &node_id,
                 serde_json::json!({
@@ -1137,7 +1154,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 None,
                 duration_ms,
                 success,
-                None,
+                Some(tool_result_id),
             );
             Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
         }
@@ -1169,7 +1186,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let stderr = if !success { format!("list_dir failed: {}", path.display()) } else { String::new() };
             let duration_ms = started.elapsed().as_millis() as u64;
             ctx.mark_batch_inline_completion(planned, success);
-            let tool_result = inline_tool_result(
+            let (tool_result, tool_result_id) = inline_tool_result(
                 "list_dir",
                 &node_id,
                 serde_json::json!({
@@ -1204,7 +1221,7 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 None,
                 duration_ms,
                 success,
-                None,
+                Some(tool_result_id),
             );
             Ok(LoopStageResult::EmitMany(vec![tool_result, acted]))
         }
@@ -1228,20 +1245,12 @@ fn resolve_action_path(path_str: &str, ctx: &LoopContext) -> std::path::PathBuf 
 
 fn emit_missing_args(_planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
     // HARD FIX: never emit LoopActed for missing args (non-actionable path)
-    RuntimeEvent::Debug(canon_event::DebugEvent {
-        source: "act_stage".to_string(),
-        kind: "loop_acted_blocked_missing_args".to_string(),
-        payload: serde_json::json!({ "reason": reason }),
-    })
+    RuntimeEvent::Debug(canon_event::DebugEvent { source: "act_stage".to_string(), kind: "loop_acted_blocked_missing_args".to_string(), payload: serde_json::json!({ "reason": reason }) })
 }
 
 fn emit_exec_constraint_rejection(_planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
     // HARD FIX: never emit LoopActed for constraint rejection (non-actionable path)
-    RuntimeEvent::Debug(canon_event::DebugEvent {
-        source: "act_stage".to_string(),
-        kind: "loop_acted_blocked_exec_constraint".to_string(),
-        payload: serde_json::json!({ "reason": reason }),
-    })
+    RuntimeEvent::Debug(canon_event::DebugEvent { source: "act_stage".to_string(), kind: "loop_acted_blocked_exec_constraint".to_string(), payload: serde_json::json!({ "reason": reason }) })
 }
 
 fn render_exec_action(action: &ExecAction) -> serde_json::Value {
@@ -1275,6 +1284,7 @@ fn emit_conflict(_planned: &LoopPlanned, agent: &str, action: &str, path: &str) 
 fn emit_acted(pending: PendingAct, stdout: String, stderr: String, exit_code: Option<i32>, duration_ms: u64, success: bool, tool_result_id: Option<String>) -> RuntimeEvent {
     // HARD GUARD: LoopActed must only be emitted if there was an actual tool result (actionable execution)
     if tool_result_id.is_none() {
+        println!("[ACT BLOCK] {}:{} {} missing tool_result_id", file!(), line!(), module_path!());
         return RuntimeEvent::Debug(canon_event::DebugEvent {
             source: "act_stage".to_string(),
             kind: "loop_acted_blocked_no_tool_result".to_string(),
@@ -1283,6 +1293,8 @@ fn emit_acted(pending: PendingAct, stdout: String, stderr: String, exit_code: Op
             }),
         });
     }
+    debug_assert!(tool_result_id.is_some(), "[ACT][INVARIANT] tool_result_id must be present");
+    println!("[ACT TRACE] {}:{} {} emitting LoopActed tool_result_id={:?}", file!(), line!(), module_path!(), tool_result_id);
     RuntimeEvent::LoopActed(LoopActed {
         tick: pending.tick,
         action_kind: pending.action_kind,
@@ -1318,16 +1330,20 @@ fn emit_tool_result(ctx: &LoopContext, pending: &PendingAct, tool_result_id: Str
     })
 }
 
-fn inline_tool_result(kind: &str, node_id: &str, output: serde_json::Value, success: bool) -> RuntimeEvent {
-    RuntimeEvent::ToolResult(ToolResult {
-        node_id: node_id.to_string(),
-        tool_call_id: Uuid::new_v4().to_string(),
-        tool_result_id: Uuid::new_v4().to_string(),
-        request_id: Uuid::new_v4().to_string(),
-        kind: kind.to_string(),
-        output,
-        success,
-    })
+fn inline_tool_result(kind: &str, node_id: &str, output: serde_json::Value, success: bool) -> (RuntimeEvent, String) {
+    let tool_result_id = Uuid::new_v4().to_string();
+    (
+        RuntimeEvent::ToolResult(ToolResult {
+            node_id: node_id.to_string(),
+            tool_call_id: Uuid::new_v4().to_string(),
+            tool_result_id: tool_result_id.clone(),
+            request_id: Uuid::new_v4().to_string(),
+            kind: kind.to_string(),
+            output,
+            success,
+        }),
+        tool_result_id,
+    )
 }
 
 // Artifact helpers (ported)

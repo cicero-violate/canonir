@@ -24,19 +24,22 @@ pub struct ConflictRecord {
 
 pub fn resolve_conflict(c1: &ConstraintRef, c2: &ConstraintRef, action: &str) -> (u64, ConflictRecord) {
     let winner = if c1.tier != c2.tier {
-        if c1.tier > c2.tier { c1 } else { c2 }
+        if c1.tier > c2.tier {
+            c1
+        } else {
+            c2
+        }
     } else {
-        if c1.support >= c2.support { c1 } else { c2 }
+        if c1.support >= c2.support {
+            c1
+        } else {
+            c2
+        }
     };
 
     let loser = if winner.fingerprint == c1.fingerprint { c2 } else { c1 };
 
-    let record = ConflictRecord {
-        c1: c1.fingerprint,
-        c2: c2.fingerprint,
-        action: action.to_string(),
-        resolution: format!("winner={} loser={}", winner.fingerprint, loser.fingerprint),
-    };
+    let record = ConflictRecord { c1: c1.fingerprint, c2: c2.fingerprint, action: action.to_string(), resolution: format!("winner={} loser={}", winner.fingerprint, loser.fingerprint) };
 
     (winner.fingerprint, record)
 }

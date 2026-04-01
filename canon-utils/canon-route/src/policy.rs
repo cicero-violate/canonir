@@ -127,6 +127,7 @@ pub struct RouteCacheState<'a> {
 pub enum DeterministicRouteRule {
     BootstrapRefreshObserve,
     StateDriftObserve,
+    PlannerDiscoveryReplan,
     DoneVerify,
     SemanticProgressVerify,
     NoActionableFailureObserve,
@@ -213,6 +214,7 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState, decision:
 enum RouteProposal {
     DeterministicRouteDecision(DeterministicRouteDecision),
     StateDriftObserve,
+    PlannerDiscoveryReplan,
     MissingTargetPlan,
     BlockedValidationPlan,
     NoSemanticProgressPlan,
@@ -236,6 +238,14 @@ impl RouteProposal {
                 prompt_tag: "deterministic:state_drift_observe",
                 noop_reason: "route_executor_state_drift_observe",
                 rule: DeterministicRouteRule::StateDriftObserve,
+            },
+            Self::PlannerDiscoveryReplan => DeterministicRouteDecision {
+                route: RouteKind::Plan,
+                rationale: "planner discovery action completed; continue the planner session with the latest tool result".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:planner_discovery_replan",
+                noop_reason: "route_executor_planner_discovery_replan",
+                rule: DeterministicRouteRule::PlannerDiscoveryReplan,
             },
             Self::MissingTargetPlan => DeterministicRouteDecision {
                 route: RouteKind::Plan,
@@ -333,6 +343,10 @@ fn derive_deterministic_route_from_constraints(ctx: &RouteContext, proposal: Rou
     }
 }
 
+fn is_planner_discovery_action(action_kind: &str) -> bool {
+    matches!(action_kind, "list_dir" | "read_file")
+}
+
 fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
     if ctx.bootstrap_refresh_required {
         return Some(RouteProposal::BootstrapRefreshObserve);
@@ -386,12 +400,9 @@ fn dispatch_route_proposal(ctx: &RouteContext) -> Option<RouteProposal> {
 
 fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<RouteProposal> {
     match event {
+        RuntimeEvent::LoopActed(a) if ctx.scheduler_len == 0 && ctx.pending_tool_result_ids.is_empty() && is_planner_discovery_action(&a.action_kind) => Some(RouteProposal::PlannerDiscoveryReplan),
         RuntimeEvent::LoopActed(_)
-            if ctx.scheduler_len == 0
-                && ctx.pending_tool_result_ids.is_empty()
-                && latest_no_semantic_progress(&ctx.recent_execution_results)
-                && !ctx.finish_ready
-                && !has_actionable_failure(ctx) =>
+            if ctx.scheduler_len == 0 && ctx.pending_tool_result_ids.is_empty() && latest_no_semantic_progress(&ctx.recent_execution_results) && !ctx.finish_ready && !has_actionable_failure(ctx) =>
         {
             if has_explicit_missing_target(ctx) {
                 return Some(RouteProposal::DeterministicRouteDecision(DeterministicRouteDecision {
@@ -422,11 +433,7 @@ fn event_route_proposal(ctx: &RouteContext, event: &RuntimeEvent) -> Option<Rout
         }
         RuntimeEvent::LoopActed(_) if ctx.scheduler_len > 0 && ctx.pending_tool_result_ids.is_empty() => Some(RouteProposal::ContinueAct),
         // HARD invariant (refined): PlanningCompleted → Act ONLY if work exists
-        RuntimeEvent::PlanningCompleted(_)
-            if ctx.pending_tool_result_ids.is_empty() && ctx.planned_pending > 0 =>
-        {
-            Some(RouteProposal::PlannedToAct)
-        }
+        RuntimeEvent::PlanningCompleted(_) if ctx.pending_tool_result_ids.is_empty() && ctx.planned_pending > 0 => Some(RouteProposal::PlannedToAct),
         _ => None,
     }
 }
@@ -472,7 +479,7 @@ pub fn evaluate_route_dispatch(ctx: &RouteContext, _policy_state: RoutePolicySta
         };
     }
     // awaiting_control_successor removed — invariant-only transition authority
-        // removed awaiting_control_successor branch
+    // removed awaiting_control_successor branch
     if dispatch_state.route_emitted_for_current_control {
         return RouteDispatchEvaluation {
             suppression: Some(RouteSuppressionDecision {
@@ -515,7 +522,7 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
             rule: DeterministicRouteRule::NoSemanticProgressPlan,
         });
     }
-    if let RuntimeEvent::LoopActed(_) = event {
+    if let RuntimeEvent::LoopActed(acted) = event {
         if ctx.bootstrap_refresh_required {
             return Some(DeterministicRouteDecision {
                 route: RouteKind::Observe,
@@ -534,6 +541,16 @@ pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -
                 prompt_tag: "deterministic:state_drift_observe",
                 noop_reason: "route_executor_state_drift_observe",
                 rule: DeterministicRouteRule::StateDriftObserve,
+            });
+        }
+        if ctx.planned_pending == 0 && ctx.pending_tool_result_ids.is_empty() && is_planner_discovery_action(&acted.action_kind) {
+            return Some(DeterministicRouteDecision {
+                route: RouteKind::Plan,
+                rationale: "planner discovery action completed; continue the planner session with the latest tool result".to_string(),
+                confidence: 0.99,
+                prompt_tag: "deterministic:planner_discovery_replan",
+                noop_reason: "route_executor_planner_discovery_replan",
+                rule: DeterministicRouteRule::PlannerDiscoveryReplan,
             });
         }
         if latest_no_semantic_progress(&ctx.recent_execution_results) {
@@ -1275,7 +1292,7 @@ mod tests {
         true
     }
 
-#[allow(dead_code)]
+    #[allow(dead_code)]
     fn expected_semantic_actionability(state: SemanticActionabilityState) -> bool {
         state.completeness == SummaryCompleteness::Complete
             && (state.validation_blocked == ValidationBlockedAxis::Yes
@@ -1317,11 +1334,7 @@ mod tests {
         ctx.semantic_summary.complete = true;
         ctx.semantic_summary.path_exists = false;
         ctx.semantic_summary.target_root = Some("/tmp/semantic-target".into());
-        let eval = evaluate_route_dispatch(
-            &ctx,
-            RoutePolicyState {},
-            RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false },
-        );
+        let eval = evaluate_route_dispatch(&ctx, RoutePolicyState {}, RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false });
         let _deterministic = eval.deterministic.expect("expected deterministic dispatch");
         assert!(true);
         assert!(true);
@@ -1339,11 +1352,7 @@ mod tests {
         ctx.semantic_summary.target_root = Some(root.display().to_string());
         ctx.semantic_summary.path_exists = false;
         ctx.semantic_summary.cargo_project = false;
-        let eval = evaluate_route_dispatch(
-            &ctx,
-            RoutePolicyState {},
-            RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false },
-        );
+        let eval = evaluate_route_dispatch(&ctx, RoutePolicyState {}, RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false });
         let _deterministic = eval.deterministic.expect("expected deterministic dispatch");
         assert!(true);
         assert!(true);
@@ -1410,11 +1419,7 @@ mod tests {
         ctx.semantic_summary.path_exists = false;
         ctx.semantic_summary.cargo_project = false;
 
-        let eval = evaluate_route_dispatch(
-            &ctx,
-            RoutePolicyState {},
-            RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false },
-        );
+        let eval = evaluate_route_dispatch(&ctx, RoutePolicyState {}, RouteDispatchState { pending_request_id: None, route_emitted_for_current_control: false });
         let _deterministic = eval.deterministic.expect("expected deterministic dispatch");
         assert!(true);
         assert!(true);
@@ -1613,7 +1618,7 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_route_for_event_observes_when_no_progress_has_no_actionable_failure() {
+    fn deterministic_route_for_event_replans_after_planner_discovery_action() {
         let mut ctx = RouteContext::default();
         ctx.semantic_summary.complete = true;
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new("no_semantic_progress", "read_file produced no semantic delta", Vec::new(), false));
@@ -1636,9 +1641,9 @@ mod tests {
             plan_id: None,
             plan_step_id: None,
         };
-        let _decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
-        assert!(true);
-        assert!(true);
+        let decision = deterministic_route_for_event(&ctx, &RuntimeEvent::LoopActed(acted)).unwrap();
+        assert_eq!(decision.route, RouteKind::Plan);
+        assert_eq!(decision.rule, DeterministicRouteRule::PlannerDiscoveryReplan);
     }
 
     #[test]
@@ -1681,7 +1686,7 @@ mod tests {
     #[test]
     fn route_objective_alignment_state_space_covers_primary_cases() {
         #[allow(dead_code)]
-struct DeterministicCase {
+        struct DeterministicCase {
             name: &'static str,
             configure: fn(&mut RouteContext),
             expected_lane: RouteKind,
@@ -1807,17 +1812,10 @@ struct DeterministicCase {
             {
                 let _ctx = RouteContext::default();
                 let _decision = decision(RouteKind::Observe, RouteKind::Observe, "accepted");
-                (
-                    _ctx,
-                    RoutePolicyState {},
-                    None,
-                    Some(decision),
-                    None,
-                    vec![RoutePolicyRule::ForcePlanOnRepeatedObserve],
-                )
+                (_ctx, RoutePolicyState {}, None, Some(decision), None, vec![RoutePolicyRule::ForcePlanOnRepeatedObserve])
             },
         ];
-//            let _eval = evaluate_route_transition(&_ctx, state, event.as_ref(), None);
+        //            let _eval = evaluate_route_transition(&_ctx, state, event.as_ref(), None);
         for (ctx, state, event, _decision, _deterministic_rule, _expected_rules) in rows {
             let eval = evaluate_route_transition(&ctx, state, event.as_ref(), None);
             // Minimal assertion to preserve invariant shape without breaking semantics

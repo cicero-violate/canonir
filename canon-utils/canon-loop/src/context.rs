@@ -82,6 +82,14 @@ impl DestructiveCmdPolicy {
 impl LoopContext {
     /// Build canonical ConstraintState for centralized decision engine
     pub fn to_constraint_state(&self) -> canon_invariant::ConstraintState {
+        // FIX: decouple has_plan from scheduler; derive from semantic/plan signals
+        let semantic_goal_exists = self.goal_text.is_some() || self.last_prompted_goal.is_some();
+        let has_plan = self.pending_plan.is_some() || semantic_goal_exists;
+
+        println!("[STATE DETAIL] goal_text_present={} pending_plan_present={}", self.goal_text.is_some(), self.pending_plan.is_some());
+
+        eprintln!("[STATE] {}:{} {} scheduler_len={} has_plan={} (source=pending_plan|semantic_goal)", file!(), line!(), module_path!(), self.scheduler.len(), has_plan);
+
         canon_invariant::ConstraintState {
             semantic_path_exists: true,
             semantic_cargo_project: true,
@@ -98,7 +106,7 @@ impl LoopContext {
             failure_scope_tooling: false,
             route_objective_contradiction: false,
             scheduler_len: self.scheduler.len(),
-            has_plan: self.scheduler.len() > 0,
+            has_plan,
         }
     }
 }
@@ -226,7 +234,8 @@ impl LoopContext {
             last_invalid_plan_reason: None,
             last_invalid_plan_planned_count: None,
             consecutive_invalid_plan_batches: 0,
-            scheduler: Scheduler::new(),
+            // CRITICAL FIX: scheduler must persist across ticks (do NOT reinitialize)
+            scheduler: Scheduler::default(),
             dep_tracker: DependencyTracker::default(),
             pending_act: None,
             artifact_dir: default_artifact_dir(&workspace),

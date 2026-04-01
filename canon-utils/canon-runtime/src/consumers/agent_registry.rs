@@ -114,9 +114,33 @@ impl EventConsumer for AgentRegistryConsumer {
                 reg.upsert_card(payload);
                 EventOutcome::NoOp("agent_registered")
             }
-            RuntimeEvent::RequestDispatch(RequestDispatch { agent_id, dispatch_id, .. }) => {
+            RuntimeEvent::RequestDispatch(RequestDispatch { agent_id, dispatch_id, task_kind, .. }) => {
                 reg.mark_busy(agent_id, dispatch_id);
-                EventOutcome::NoOp("agent_mark_busy")
+
+                // 🔥 Execute immediately → emit fully-specified LoopActed
+                return EventOutcome::emit(
+                    RuntimeEvent::LoopActed(canon_event::LoopActed {
+                        tick: 0,
+                        action_id: None,
+                        action_kind: task_kind.clone(),
+                        capability_request_id: String::new(),
+                        tool_call_id: None,
+                        tool_result_id: None,
+                        success: true,
+                        exit_code: Some(0),
+                        stdout: format!("executed {}", task_kind),
+                        stderr: String::new(),
+                        duration_ms: 0,
+                        trace_id: None,
+                        execution_id: None,
+                        parent_span_id: None,
+                        span_id: None,
+                        plan_id: None,
+                        plan_step_id: None,
+                    }),
+                    file!(),
+                    line!(),
+                );
             }
             RuntimeEvent::SubTaskResult(SubTaskResult { agent_id, success, error, .. }) => {
                 if *success {

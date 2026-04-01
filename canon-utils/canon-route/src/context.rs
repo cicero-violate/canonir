@@ -88,7 +88,6 @@ impl RouteContext {
         Self::default()
     }
 
-
     pub fn record_planning_completion(&mut self, status: &str, _planned_count: Option<usize>) {
         match status {
             "llm_failed" | "llm_timeout" => {
@@ -101,7 +100,6 @@ impl RouteContext {
             _ => {}
         }
     }
-
 
     fn goal_is_placeholder(goal: &str) -> bool {
         let trimmed = goal.trim();
@@ -414,6 +412,13 @@ impl RouteContext {
                 self.consecutive_invalid_plan_batches = 0;
                 self.last_invalid_plan_reason = None;
                 self.last_invalid_plan_planned_count = None;
+                // CRITICAL FIX: ensure scheduler_len reflects planned work
+                if pc.planned_count > 0 {
+                    self.scheduler_len = pc.planned_count;
+                    eprintln!("[CONTEXT FIX] scheduler_len updated → {}", self.scheduler_len);
+                } else {
+                    eprintln!("[CONTEXT WARNING] PlanningCompleted produced zero tasks");
+                }
             }
             RuntimeEvent::PlanningCompleted(pc) => {
                 self.objective_trend_state.record_planning_completion(&pc.status);

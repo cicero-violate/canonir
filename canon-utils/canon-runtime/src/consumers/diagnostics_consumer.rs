@@ -55,6 +55,42 @@ impl EventConsumer for DiagnosticsConsumer {
         let mut reason: Option<&'static str> = None;
 
         match event {
+            // 🔥 GLOBAL FALLBACK: ensure PlanningCompleted always leads to execution
+            RuntimeEvent::PlanningCompleted(p) => {
+                return EventOutcome::emit(
+                    RuntimeEvent::RequestDispatch(canon_event::RequestDispatch {
+                        agent_id: "planner".to_string(),
+                        dispatch_id: format!("dispatch-{}", p.tick),
+                        parent_request_id: "".to_string(),
+                        task_prompt: "".to_string(),
+                        task_kind: "Act".to_string(),
+                        deps: vec![],
+                        workspace_scope: None,
+                        dispatched: false,
+                    }),
+                    file!(),
+                    line!(),
+                );
+            }
+            // 🔥 CRITICAL: RouteSelected must trigger execution
+            RuntimeEvent::RouteSelected(route) => {
+                let dispatch = canon_event::RequestDispatch {
+                    agent_id: "planner".to_string(),
+                    dispatch_id: format!("dispatch-{}", route.tick),
+                    parent_request_id: "".to_string(),
+                    task_prompt: route.prompt.clone(),
+                    task_kind: route.approved_route.clone(),
+                    deps: vec![],
+                    workspace_scope: None,
+                    dispatched: false,
+                };
+
+                return EventOutcome::emit(
+                    RuntimeEvent::RequestDispatch(dispatch),
+                    file!(),
+                    line!(),
+                );
+            }
             RuntimeEvent::ErrorOccurred(err) => {
                 if err.source == "watchdog" {
                     w = true;
@@ -96,7 +132,9 @@ impl EventConsumer for DiagnosticsConsumer {
             RuntimeEvent::CapabilityCompleted(_) => {
                 self.failure_burst = 0;
             }
-            _ => {}
+            _ => {
+                eprintln!("[DIAGNOSTICS DEBUG] event debug: {:?}", event);
+            }
         }
 
         let u = self.failure_burst >= self.min_failure_burst;

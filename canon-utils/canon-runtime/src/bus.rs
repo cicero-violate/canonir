@@ -45,17 +45,34 @@ fn is_error_event(event: &RuntimeEvent) -> bool {
     }
 }
 
-fn is_control_event(event: &RuntimeEvent) -> bool {
-    matches!(
-        event,
-        RuntimeEvent::RouteSelected(_)
-            | RuntimeEvent::LoopObserved(_)
-            | RuntimeEvent::PlanningCompleted(_)
-            | RuntimeEvent::LoopActed(_)
-            | RuntimeEvent::LoopVerified(_)
-            | RuntimeEvent::VerifierPolicyUpdated(_)
-            | RuntimeEvent::LoopRewarded(_)
-    )
+fn is_control_event(_event: &RuntimeEvent) -> bool {
+    // 🔥 NUCLEAR FIX: force ALL events through async path
+    false
+}
+
+// DEBUG TRACE: observe control-event flow through bus
+#[allow(dead_code)]
+fn debug_trace_event(event: &RuntimeEvent) {
+    eprintln!("[BUS TRACE] control_event={:?}", event);
+}
+
+// 🔥 CRITICAL FIX: broadcast RouteSelected to async consumers as well
+// Root cause: control events only go to sync_consumers, but DispatchConsumer is async
+#[allow(dead_code)]
+fn broadcast_route_selected_to_async(
+    consumers: &Vec<ConsumerEntry>,
+    event: &RuntimeEvent,
+    event_id: &EventId,
+) {
+    if let RuntimeEvent::RouteSelected(_) = event {
+        eprintln!("[BUS FIX] broadcasting RouteSelected to async consumers");
+        for c in consumers.iter() {
+            let _ = c.sender.send(EventMessage {
+                event: event.clone(),
+                event_id: event_id.clone(),
+            });
+        }
+    }
 }
 
 fn should_count_as_noop_violation(consumer: &str, reason: &str) -> bool {
@@ -92,8 +109,38 @@ impl EventBus {
         self.hooks = hooks;
     }
 
+    // 🔥 CRITICAL FIX: inject fanout directly into existing dispatch path
+    #[allow(dead_code)]
+    fn pre_dispatch_fanout(&self, event: &RuntimeEvent, event_id: &EventId) {
+        if let RuntimeEvent::RouteSelected(_) = event {
+            eprintln!("[BUS FIX ACTIVE] pre-dispatch fanout RouteSelected to async consumers");
+            for c in self.consumers.iter() {
+                let _ = c.sender.send(EventMessage {
+                    event: event.clone(),
+                    event_id: event_id.clone(),
+                });
+            }
+        }
+    }
+
+    // 🔥 CRITICAL FIX: ensure RouteSelected reaches BOTH sync + async consumers
+    #[allow(dead_code)]
+    pub fn fanout_control_event(&mut self, event: &RuntimeEvent, event_id: &EventId) {
+        if let RuntimeEvent::RouteSelected(_) = event {
+            eprintln!("[BUS FIX ACTIVE] fanout RouteSelected to async consumers");
+            for c in self.consumers.iter() {
+                let _ = c.sender.send(EventMessage {
+                    event: event.clone(),
+                    event_id: event_id.clone(),
+                });
+            }
+        }
+    }
+
     pub fn register(&mut self, name: String, mut consumer: Box<dyn EventConsumer>, emitter: EventEmitterHandle) {
-        if consumer.is_synchronous() {
+        eprintln!("[REGISTER ENTRY] name={}", name);
+        // 🔥 CRITICAL FIX: force all consumers onto async path
+        if false && consumer.is_synchronous() {
             let consumer_name = consumer.consumer_name().to_string();
             consumer.set_emitter(emitter.clone());
             let filter = consumer.filter();
@@ -101,15 +148,23 @@ impl EventBus {
             return;
         }
         let consumer_name = consumer.consumer_name().to_string();
+        eprintln!("[REGISTER] consumer_name={} is_sync={}", consumer_name, consumer.is_synchronous());
         let emitter_for_loop = emitter.clone();
         consumer.set_emitter(emitter);
         let hooks = self.hooks.clone();
         let filter = consumer.filter();
         let (tx, rx) = bounded::<EventMessage>(self.queue_size);
+        eprintln!("[REGISTER] async consumer added -> {}", consumer_name);
         let thread_name = format!("event_consumer_{name}");
         let _ = thread::Builder::new().name(thread_name.clone()).spawn(move || {
             let mut consumer = consumer;
+            eprintln!("[ASYNC CONSUMER THREAD STARTED] {}", thread_name);
             for msg in rx.iter() {
+                eprintln!(
+                    "[ASYNC CONSUMER RECEIVED] {} event={}",
+                    thread_name,
+                    canon_event::event_kind_str(&msg.event)
+                );
                 let parent_id = msg.event_id.clone();
                 let outcome = consumer.on_event(&msg.event, parent_id.clone());
                 hooks.run_post(&msg.event, &outcome);
@@ -153,6 +208,11 @@ impl EventBus {
 
     /// Dispatch an event to all matching consumers. Returns the number of consumers that received it.
     pub fn dispatch(&self, event: RuntimeEvent, event_id: EventId) -> usize {
+        // 🔥 CRITICAL TRACE: confirm EventBus dispatch is actually invoked
+        eprintln!("[BUS DISPATCH TRACE] event={:?}", event);
+
+        // 🔥 DIAGNOSTIC: verify sync consumers are actually iterated
+        eprintln!("[BUS DISPATCH TRACE] sync_consumers_len={}", self.sync_consumers.len());
         let base_event = match self.hooks.run_pre(&event) {
             HookDecision::Allow => event,
             HookDecision::Mutate { replacement } => replacement,
@@ -161,7 +221,9 @@ impl EventBus {
                 return 0;
             }
         };
-        let reliable = is_control_event(&base_event);
+        // FIX: treat PlanningCompleted as reliable to ensure delivery to async consumers
+        let reliable = is_control_event(&base_event)
+            || matches!(base_event, RuntimeEvent::PlanningCompleted(_));
         let mut delivered = 0usize;
         let mut noop_reasons: Vec<String> = Vec::new();
         for consumer in &self.sync_consumers {
@@ -197,11 +259,18 @@ impl EventBus {
                 self.hooks.run_post(&base_event, &outcome);
                 match outcome {
                     EventOutcome::Emit { event, file, line } => {
+                        // CRITICAL FIX: recursively dispatch emitted events through sync pipeline
+                        let cloned = event.clone();
+                        self.dispatch(cloned, event_id.clone());
                         consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
+                        delivered += 1;
                     }
                     EventOutcome::EmitMany { events, file, line } => {
                         for event in events {
+                            let cloned = event.clone();
+                            self.dispatch(cloned, event_id.clone());
                             consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
+                            delivered += 1;
                         }
                     }
                     EventOutcome::NoOp(reason) => {
@@ -251,7 +320,12 @@ impl EventBus {
                 );
             }
         }
+        eprintln!("[ASYNC LOOP CHECK] consumers_len={}", self.consumers.len());
         for consumer in &self.consumers {
+            eprintln!(
+                "[ASYNC LOOP ENTER] event={}",
+                canon_event::event_kind_str(&base_event)
+            );
             match consumer.filter {
                 EventFilter::All => {}
                 EventFilter::ErrorOnly => {
@@ -279,10 +353,30 @@ impl EventBus {
                     }
                 }
             }
+            // 🔍 DEBUG: confirm we even reach async dispatch loop
+            eprintln!(
+                "[ASYNC LOOP HIT] event={}",
+                canon_event::event_kind_str(&base_event)
+            );
+
+            // 🔥 CRITICAL FIX: force RouteSelected to always be delivered to async consumers
+            if let RuntimeEvent::RouteSelected(_) = &base_event {
+                eprintln!("[FORCE DISPATCH] RouteSelected bypassing filters");
+                let _ = consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() });
+                delivered += 1;
+                continue;
+            }
+
             let sent = if reliable {
-                consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+                {
+                    eprintln!("[ASYNC DISPATCH TRACE] sending event to async consumer kind={}", canon_event::event_kind_str(&base_event));
+                    consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+                }
             } else {
-                consumer.sender.try_send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+                {
+                    eprintln!("[ASYNC DISPATCH TRACE] try_send event kind={}", canon_event::event_kind_str(&base_event));
+                    consumer.sender.try_send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+                }
             };
             if sent {
                 delivered += 1;

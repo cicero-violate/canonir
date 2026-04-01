@@ -9,9 +9,9 @@ use canon_llm::{
 use canon_tools_patch::apply_patch;
 use serde_json::json;
 use serde_json::Value;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::io::Write;
 use std::sync::{Arc, OnceLock};
 
 const WORKSPACE: &str = "/workspace/ai_sandbox/canon";
@@ -312,15 +312,9 @@ Rules:
 
 fn parse_actions(raw: &str) -> Result<Vec<Value>> {
     if let Some(json_text) = extract_json_fence(raw) {
-        return parse_json_action(json_text)
-            .with_context(|| "fenced json block was not a valid action object");
+        return parse_json_action(json_text).with_context(|| "fenced json block was not a valid action object");
     }
-    parse_json_action(raw.trim()).with_context(|| {
-        format!(
-            "response was not a JSON action object: {:?}",
-            &raw.chars().take(200).collect::<String>()
-        )
-    })
+    parse_json_action(raw.trim()).with_context(|| format!("response was not a JSON action object: {:?}", &raw.chars().take(200).collect::<String>()))
 }
 
 fn extract_json_fence(text: &str) -> Option<&str> {
@@ -481,32 +475,19 @@ fn extract_anchor_context_excerpt(full: &str, err_msg: &str) -> Option<(usize, u
     let start_idx = idx.saturating_sub(AUTO_READ_CONTEXT_BEFORE);
     let end_idx = (idx + AUTO_READ_CONTEXT_AFTER + 1).min(file_lines.len());
     let start_line = start_idx + 1;
-    let excerpt = file_lines[start_idx..end_idx]
-        .iter()
-        .enumerate()
-        .map(|(i, l)| format!("{}: {}", start_line + i, l))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let excerpt = file_lines[start_idx..end_idx].iter().enumerate().map(|(i, l)| format!("{}: {}", start_line + i, l)).collect::<Vec<_>>().join("\n");
     Some((start_line, end_idx, excerpt))
 }
 
 /// Auto-read the region near the failed anchor, falling back to the full file.
 fn auto_read_for_patch_anchor(workspace: &Path, relative: &str, err_msg: &str) -> Result<String> {
     let path = safe_join(workspace, relative)?;
-    let full = std::fs::read_to_string(&path)
-        .with_context(|| format!("auto-read failed: {}", path.display()))?;
+    let full = std::fs::read_to_string(&path).with_context(|| format!("auto-read failed: {}", path.display()))?;
     if let Some((start, end, excerpt)) = extract_anchor_context_excerpt(&full, err_msg) {
-        return Ok(format!(
-            "Current content near likely match of failed anchor in {relative} (lines {start}-{end}):\n{excerpt}"
-        ));
+        return Ok(format!("Current content near likely match of failed anchor in {relative} (lines {start}-{end}):\n{excerpt}"));
     }
     // Fallback: first MAX_FULL_READ_LINES lines of the file.
-    let text = full.lines()
-        .take(MAX_FULL_READ_LINES)
-        .enumerate()
-        .map(|(i, l)| format!("{}: {}", i + 1, l))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = full.lines().take(MAX_FULL_READ_LINES).enumerate().map(|(i, l)| format!("{}: {}", i + 1, l)).collect::<Vec<_>>().join("\n");
     Ok(format!("Current content of {relative}:\n{text}"))
 }
 
@@ -514,32 +495,21 @@ fn auto_read_for_patch_anchor(workspace: &Path, relative: &str, err_msg: &str) -
 
 fn exec_list_dir(workspace: &Path, relative: &str) -> Result<String> {
     let path = safe_join(workspace, relative)?;
-    let mut entries = std::fs::read_dir(&path)
-        .with_context(|| format!("list_dir: {}", path.display()))?
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
+    let mut entries = std::fs::read_dir(&path).with_context(|| format!("list_dir: {}", path.display()))?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
     entries.sort();
     Ok(entries.join("\n"))
 }
 
 fn exec_read_file(workspace: &Path, relative: &str, start_line: Option<usize>) -> Result<String> {
     let path = safe_join(workspace, relative)?;
-    let full = std::fs::read_to_string(&path)
-        .with_context(|| format!("read_file: {}", path.display()))?;
+    let full = std::fs::read_to_string(&path).with_context(|| format!("read_file: {}", path.display()))?;
     let lines: Vec<&str> = full.lines().collect();
     let total = lines.len();
     let (from, max_lines) = match start_line {
         Some(n) => (n.saturating_sub(1).min(total), 250),
         None => (0, MAX_FULL_READ_LINES),
     };
-    let text = lines[from..]
-        .iter()
-        .take(max_lines)
-        .enumerate()
-        .map(|(i, l)| format!("{}: {}", from + i + 1, l))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = lines[from..].iter().take(max_lines).enumerate().map(|(i, l)| format!("{}: {}", from + i + 1, l)).collect::<Vec<_>>().join("\n");
     let shown = max_lines.min(total.saturating_sub(from));
     if total > from + shown {
         Ok(format!("{text}\n(file has {total} lines total; use \"line\":{} to read more)", from + shown + 1))
@@ -557,20 +527,45 @@ fn exec_run_command(workspace: &Path, cmd: &str, cwd: &str) -> Result<(bool, Str
         bail!("run_command cwd escapes workspace: {cwd}");
     }
     ensure_safe_command(cmd)?;
-    let output = Command::new("/bin/bash")
-        .arg("-c")
-        .arg(cmd)
-        .current_dir(&cwd_path)
-        .output()
-        .with_context(|| format!("failed to spawn: {cmd}"))?;
-    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.stderr.is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
+    // Hybrid execution model:
+    // - long-running commands → spawn (non-blocking)
+    // - short commands → capture output (blocking)
+
+    let is_long_running =
+        cmd.contains("cargo run")
+        || cmd.contains("supervisor")
+        || cmd.contains("serve")
+        || cmd.contains("watch")
+        // NEW: detect direct binary execution (prevents blocking)
+        || cmd.contains("./target/debug/")
+        || cmd.contains(" --tlog ")
+        || cmd.contains("| tee");
+
+    if is_long_running {
+        let child = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(cmd)
+            .current_dir(&cwd_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .with_context(|| format!("failed to spawn: {cmd}"))?;
+
+        Ok((true, format!("spawned pid={}", child.id())))
+    } else {
+        let output = Command::new("/bin/bash").arg("-c").arg(cmd).current_dir(&cwd_path).output().with_context(|| format!("failed to spawn: {cmd}"))?;
+
+        let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+        if !output.stderr.is_empty() {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(&String::from_utf8_lossy(&output.stderr));
         }
-        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+
+        Ok((output.status.success(), combined))
     }
-    Ok((output.status.success(), combined))
 }
 
 fn exec_python(workspace: &Path, code: &str, cwd: &str) -> Result<(bool, String)> {
@@ -604,8 +599,7 @@ fn exec_python(workspace: &Path, code: &str, cwd: &str) -> Result<(bool, String)
 }
 
 fn ensure_safe_command(cmd: &str) -> Result<()> {
-    const BLOCKED: &[&str] =
-        &["rm -rf", "git reset --hard", "git clean -f", "dd if=", "mkfs", "shred"];
+    const BLOCKED: &[&str] = &["rm -rf", "git reset --hard", "git clean -f", "dd if=", "mkfs", "shred"];
     for needle in BLOCKED {
         if cmd.contains(needle) {
             bail!("blocked command: {cmd}");
@@ -662,14 +656,8 @@ fn default_rationale(kind: &str) -> &'static str {
 }
 
 fn normalize_action(action: &mut Value) -> Result<()> {
-    let obj = action
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
-    let kind = obj
-        .get("action")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("action missing 'action'"))?
-        .to_string();
+    let obj = action.as_object_mut().ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
+    let kind = obj.get("action").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("action missing 'action'"))?.to_string();
     if obj.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).is_none() {
         obj.insert("rationale".to_string(), Value::String(default_rationale(&kind).to_string()));
     }
@@ -680,26 +668,12 @@ fn normalize_action(action: &mut Value) -> Result<()> {
 }
 
 fn validate_action(action: &Value) -> Result<()> {
-    let obj = action
-        .as_object()
-        .ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
-    let kind = obj
-        .get("action")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("action missing 'action'"))?;
-    let rationale = obj
-        .get("rationale")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| anyhow!("action missing non-empty 'rationale'"))?;
+    let obj = action.as_object().ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
+    let kind = obj.get("action").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("action missing 'action'"))?;
+    let rationale = obj.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("action missing non-empty 'rationale'"))?;
     let _ = rationale;
     if kind == "done" {
-        obj.get("reason")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow!("done missing non-empty 'reason'"))?;
+        obj.get("reason").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("done missing non-empty 'reason'"))?;
     }
     Ok(())
 }
@@ -732,9 +706,7 @@ fn action_command_summary(action: &Value) -> String {
         "list_dir" => format!("list_dir {}", action.get("path").and_then(|v| v.as_str()).unwrap_or("")),
         "apply_patch" => {
             let patch = action.get("patch").and_then(|v| v.as_str()).unwrap_or("");
-            patch_first_file(patch)
-                .map(|path| format!("apply_patch {}", path))
-                .unwrap_or_else(|| "apply_patch".to_string())
+            patch_first_file(patch).map(|path| format!("apply_patch {}", path)).unwrap_or_else(|| "apply_patch".to_string())
         }
         "done" => format!("done {}", action.get("reason").and_then(|v| v.as_str()).unwrap_or("")),
         _ => kind.to_string(),
@@ -752,16 +724,10 @@ fn append_action_log(role: &str, action: &Value) -> Result<()> {
     });
     let path = PathBuf::from(ACTION_LOG_FILE);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-    writeln!(file, "{}", serde_json::to_string(&record)?)
-        .with_context(|| format!("failed to append {}", path.display()))?;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path).with_context(|| format!("failed to open {}", path.display()))?;
+    writeln!(file, "{}", serde_json::to_string(&record)?).with_context(|| format!("failed to append {}", path.display()))?;
     Ok(())
 }
 
@@ -771,15 +737,7 @@ fn append_action_log(role: &str, action: &Value) -> Result<()> {
 /// Returns the done reason on success, or an error on hard failure.
 /// `check_on_done`: if true, run cargo build + test before accepting done.
 async fn run_agent(
-    role: &str,
-    system_instructions: &str,
-    initial_prompt: String,
-    endpoint: &LlmEndpoint,
-    bridge: &WsBridge,
-    workspace: &Path,
-    config: &CapabilityConfig,
-    tabs: &TabManagerHandle,
-    check_on_done: bool,
+    role: &str, system_instructions: &str, initial_prompt: String, endpoint: &LlmEndpoint, bridge: &WsBridge, workspace: &Path, config: &CapabilityConfig, tabs: &TabManagerHandle, check_on_done: bool,
 ) -> Result<String> {
     let mut step = 0usize;
     let mut last_result: Option<String> = None;
@@ -801,10 +759,23 @@ async fn run_agent(
         eprintln!("[{role}] step={} prompt_bytes={}", step + 1, prompt.len());
 
         let raw = match llm_worker_send_request(
-            bridge, &endpoint.id, &endpoint.url, endpoint.stateful,
-            &prompt, &role_schema, None, None, false, true,
-            role, tabs, endpoint.max_tabs, config.tab_cooldown_ms,
-        ).await {
+            bridge,
+            &endpoint.id,
+            &endpoint.url,
+            endpoint.stateful,
+            &prompt,
+            &role_schema,
+            None,
+            None,
+            false,
+            true,
+            role,
+            tabs,
+            endpoint.max_tabs,
+            config.tab_cooldown_ms,
+        )
+        .await
+        {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("[{role}] step={} llm_error: {e}", step + 1);
@@ -836,16 +807,12 @@ async fn run_agent(
 
         let mut action = actions[0].clone();
         if let Err(e) = normalize_action(&mut action) {
-            last_result = Some(format!(
-                "Invalid action: {e}\nReturn exactly one action with a non-empty `rationale` and any required fields."
-            ));
+            last_result = Some(format!("Invalid action: {e}\nReturn exactly one action with a non-empty `rationale` and any required fields."));
             step += 1;
             continue;
         }
         if let Err(e) = validate_action(&action) {
-            last_result = Some(format!(
-                "Invalid action: {e}\nReturn exactly one action with a non-empty `rationale` and any required fields."
-            ));
+            last_result = Some(format!("Invalid action: {e}\nReturn exactly one action with a non-empty `rationale` and any required fields."));
             step += 1;
             continue;
         }
@@ -892,56 +859,42 @@ async fn run_agent(
                     return Ok((true, reason.to_string()));
                 }
                 eprintln!("[{role}] step={} done — running cargo build --workspace", step + 1);
-                let (build_ok, build_out) = exec_run_command(workspace, "cargo build --workspace", WORKSPACE)
-                    .unwrap_or_else(|e| (false, e.to_string()));
+                let (build_ok, build_out) = exec_run_command(workspace, "cargo build --workspace", WORKSPACE).unwrap_or_else(|e| (false, e.to_string()));
                 if !build_ok {
                     eprintln!("[{role}] step={} cargo build failed — rejecting done", step + 1);
-                    return Ok((false, format!(
-                        "done rejected: cargo build --workspace failed.\n\n{}",
-                        truncate(&build_out, MAX_SNIPPET)
-                    )));
+                    return Ok((false, format!("done rejected: cargo build --workspace failed.\n\n{}", truncate(&build_out, MAX_SNIPPET))));
                 }
                 eprintln!("[{role}] step={} cargo build ok — running cargo test --workspace", step + 1);
-                let (test_ok, test_out) = exec_run_command(workspace, "cargo test --workspace", WORKSPACE)
-                    .unwrap_or_else(|e| (false, e.to_string()));
+                let (test_ok, test_out) = exec_run_command(workspace, "cargo test --workspace", WORKSPACE).unwrap_or_else(|e| (false, e.to_string()));
                 if test_ok {
                     eprintln!("[{role}] step={} cargo test ok — accepting done", step + 1);
                     Ok((true, reason.to_string()))
                 } else {
                     eprintln!("[{role}] step={} cargo test failed — rejecting done", step + 1);
-                    Ok((false, format!(
-                        "done rejected: cargo test --workspace failed.\n\n{}",
-                        truncate(&test_out, MAX_SNIPPET)
-                    )))
+                    Ok((false, format!("done rejected: cargo test --workspace failed.\n\n{}", truncate(&test_out, MAX_SNIPPET))))
                 }
             }
             "list_dir" => {
-                let path = action.get("path").and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow!("list_dir missing 'path'"))?;
+                let path = action.get("path").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("list_dir missing 'path'"))?;
                 let out = exec_list_dir(workspace, path)?;
                 Ok((false, format!("list_dir {path}:\n{out}")))
             }
             "read_file" => {
-                let path = action.get("path").and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow!("read_file missing 'path'"))?;
+                let path = action.get("path").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("read_file missing 'path'"))?;
                 let line = action.get("line").and_then(|v| v.as_u64()).map(|n| n as usize);
                 let out = exec_read_file(workspace, path, line)?;
                 eprintln!("[{role}] step={} read_file path={path} bytes={}", step + 1, out.len());
                 Ok((false, format!("read_file {path}:\n{out}")))
             }
             "apply_patch" => {
-                let patch = action.get("patch").and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow!("apply_patch missing 'patch'"))?;
+                let patch = action.get("patch").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("apply_patch missing 'patch'"))?;
                 match apply_patch(patch, workspace) {
                     Ok(_) => {
                         eprintln!("[{role}] step={} apply_patch ok", step + 1);
-                        let check_result = patch_first_file(patch)
-                            .and_then(|f| infer_crate_for_patch(workspace, f))
-                            .map(|krate| {
-                                eprintln!("[{role}] step={} cargo check -p {krate}", step + 1);
-                                exec_run_command(workspace, &format!("cargo check -p {krate}"), WORKSPACE)
-                                    .unwrap_or_else(|e| (false, e.to_string()))
-                            });
+                        let check_result = patch_first_file(patch).and_then(|f| infer_crate_for_patch(workspace, f)).map(|krate| {
+                            eprintln!("[{role}] step={} cargo check -p {krate}", step + 1);
+                            exec_run_command(workspace, &format!("cargo check -p {krate}"), WORKSPACE).unwrap_or_else(|e| (false, e.to_string()))
+                        });
                         match check_result {
                             Some((ok, out)) => {
                                 let label = if ok { "cargo check ok" } else { "cargo check failed" };
@@ -954,8 +907,7 @@ async fn run_agent(
                     Err(e) => {
                         let err_str = e.to_string();
                         eprintln!("[{role}] step={} apply_patch failed: {err_str}", step + 1);
-                        let read_path = extract_anchor_fail_path(&err_str)
-                            .or_else(|| patch_first_file(patch).map(|s| s.to_string()));
+                        let read_path = extract_anchor_fail_path(&err_str).or_else(|| patch_first_file(patch).map(|s| s.to_string()));
                         let guidance = patch_failure_guidance(read_path.as_deref(), &err_str);
                         let mut msg = format!("apply_patch failed: {err_str}\n\n{guidance}");
                         if let Some(fp) = read_path {
@@ -969,8 +921,7 @@ async fn run_agent(
                 }
             }
             "run_command" => {
-                let cmd = action.get("cmd").and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow!("run_command missing 'cmd'"))?;
+                let cmd = action.get("cmd").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("run_command missing 'cmd'"))?;
                 let cwd = action.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORKSPACE);
                 eprintln!("[{role}] step={} run_command cmd={cmd}", step + 1);
                 let (success, out) = exec_run_command(workspace, cmd, cwd)?;
@@ -979,8 +930,7 @@ async fn run_agent(
                 Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
             }
             "python" => {
-                let code = action.get("code").and_then(|v| v.as_str())
-                    .ok_or_else(|| anyhow!("python missing 'code'"))?;
+                let code = action.get("code").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("python missing 'code'"))?;
                 let cwd = action.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORKSPACE);
                 eprintln!("[{role}] step={} python bytes={}", step + 1, code.len());
                 let (success, out) = exec_python(workspace, code, cwd)?;
@@ -988,9 +938,7 @@ async fn run_agent(
                 eprintln!("[{role}] step={} {label} output_bytes={}", step + 1, out.len());
                 Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
             }
-            other => Ok((false, format!(
-                "unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, python, or done"
-            ))),
+            other => Ok((false, format!("unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, python, or done"))),
         })();
 
         match step_result {
@@ -998,7 +946,9 @@ async fn run_agent(
                 eprintln!("[{role}] done: {reason}");
                 return Ok(reason);
             }
-            Ok((false, out)) => { last_result = Some(out); }
+            Ok((false, out)) => {
+                last_result = Some(out);
+            }
             Err(e) => {
                 eprintln!("[{role}] step={} error: {e}", step + 1);
                 last_result = Some(format!("Error executing action: {e}"));
@@ -1006,14 +956,10 @@ async fn run_agent(
         }
         step += 1;
     }
-
 }
 
-
 fn find_endpoint<'a>(config: &'a CapabilityConfig, role: &str) -> Result<&'a LlmEndpoint> {
-    config.llm_endpoints.iter()
-        .find(|e| e.role.as_deref() == Some(role))
-        .ok_or_else(|| anyhow!("no endpoint with role '{role}' in capability_config.toml"))
+    config.llm_endpoints.iter().find(|e| e.role.as_deref() == Some(role)).ok_or_else(|| anyhow!("no endpoint with role '{role}' in capability_config.toml"))
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -1022,27 +968,19 @@ fn find_endpoint<'a>(config: &'a CapabilityConfig, role: &str) -> Result<&'a Llm
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let orchestrate = args.iter().any(|a| a == "--orchestrate");
-    let start_role = args
-        .windows(2)
-        .find(|w| w[0] == "--start")
-        .map(|w| w[1].as_str())
-        .unwrap_or("executor");
+    let start_role = args.windows(2).find(|w| w[0] == "--start").map(|w| w[1].as_str()).unwrap_or("executor");
     if !matches!(start_role, "executor" | "verifier" | "planner" | "diagnostics") {
         bail!("invalid --start value: {start_role} (expected executor|verifier|planner|diagnostics)");
     }
-    let is_verifier  = !orchestrate && args.iter().any(|a| a == "--verifier");
-    let is_planner   = !orchestrate && args.iter().any(|a| a == "--planner");
+    let is_verifier = !orchestrate && args.iter().any(|a| a == "--verifier");
+    let is_planner = !orchestrate && args.iter().any(|a| a == "--planner");
     let is_diagnostics = !orchestrate && args.iter().any(|a| a == "--diagnostics");
-    let ws_port: u16 = args.windows(2)
-        .find(|w| w[0] == "--port")
-        .and_then(|w| w[1].parse().ok())
-        .unwrap_or(WS_PORT_DEFAULT);
+    let ws_port: u16 = args.windows(2).find(|w| w[0] == "--port").and_then(|w| w[1].parse().ok()).unwrap_or(WS_PORT_DEFAULT);
 
     let workspace = PathBuf::from(WORKSPACE);
     let plan_path = workspace.join(PLAN_FILE);
 
-    let config = CapabilityConfig::snapshot_store_load()
-        .context("failed to load capability_config.toml")?;
+    let config = CapabilityConfig::snapshot_store_load().context("failed to load capability_config.toml")?;
 
     let ws_addr: std::net::SocketAddr = format!("127.0.0.1:{ws_port}").parse()?;
     let bridge = ws_server::spawn(ws_addr, config.response_timeout_secs, Arc::new(OnceLock::new()));
@@ -1072,13 +1010,8 @@ Always inspect state/event_log/event.tlog.d and the relevant project files.\n\n\
 Latest verifier summary:\n{}\n\n\
 Do not use PLANS/mini-agent-plan.md as input.\n\
 Infer failures from code, logs, runtime state, and verifier findings.\n\n\
-Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin."
-                    ,
-                    if last_verifier_summary.is_empty() {
-                        "(none yet)"
-                    } else {
-                        &last_verifier_summary
-                    }
+Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin.",
+                    if last_verifier_summary.is_empty() { "(none yet)" } else { &last_verifier_summary }
                 );
                 eprintln!("[orchestrate] cycle={} starting diagnostics", cycle + 1);
                 let _ = run_agent("diagnostics", SYSTEM_INSTRUCTIONS_DIAGNOSTICS, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
@@ -1089,33 +1022,26 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
             for role in order {
                 match role {
                     "executor" => {
-                        let plan = std::fs::read_to_string(&plan_path)
-                            .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+                        let plan = std::fs::read_to_string(&plan_path).with_context(|| format!("failed to read {PLAN_FILE}"))?;
                         let ep = find_endpoint(&config, "mini_agent")?.clone();
                         eprintln!("[orchestrate] starting executor");
-                        let prompt = format!(
-                            "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin."
-                        );
+                        let prompt = format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nObjective (from {PLAN_FILE}):\n{plan}\n\nEmit exactly one action to begin.");
                         let _exec_result = run_agent("executor", SYSTEM_INSTRUCTIONS_EXECUTOR, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
                     }
                     "verifier" => {
-                        let plan = std::fs::read_to_string(&plan_path)
-                            .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+                        let plan = std::fs::read_to_string(&plan_path).with_context(|| format!("failed to read {PLAN_FILE}"))?;
                         let ep = find_endpoint(&config, "verifier")?.clone();
                         eprintln!("[orchestrate] starting verifier");
                         let prompt = format!(
                             "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nPlan to verify (from {PLAN_FILE}):\n{plan}\n\nBegin by reading the plan and identifying all tasks marked `- [x]`. Verify each one. Emit exactly one action to begin."
                         );
-                        verify_result = Some(
-                            run_agent("verifier", SYSTEM_INSTRUCTIONS_VERIFIER, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?
-                        );
+                        verify_result = Some(run_agent("verifier", SYSTEM_INSTRUCTIONS_VERIFIER, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?);
                         if let Some(result) = verify_result.as_deref() {
                             last_verifier_summary = result.to_string();
                         }
                     }
                     "planner" => {
-                        let plan_after = std::fs::read_to_string(&plan_path)
-                            .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+                        let plan_after = std::fs::read_to_string(&plan_path).with_context(|| format!("failed to read {PLAN_FILE}"))?;
                         let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
                         let ep = find_endpoint(&config, "mini_planner")?.clone();
                         eprintln!("[orchestrate] starting planner");
@@ -1150,8 +1076,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
             ("mini_agent", SYSTEM_INSTRUCTIONS_EXECUTOR)
         };
 
-        let plan = std::fs::read_to_string(&plan_path)
-            .with_context(|| format!("failed to read {PLAN_FILE}"))?;
+        let plan = std::fs::read_to_string(&plan_path).with_context(|| format!("failed to read {PLAN_FILE}"))?;
         if plan.trim().is_empty() {
             bail!("plan file is empty — write an objective into {PLAN_FILE} before running");
         }

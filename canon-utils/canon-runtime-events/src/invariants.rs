@@ -235,13 +235,7 @@ mod tests {
             "test",
             EventKind::RouteSelected,
             1,
-            CanonPayload {
-                input: json!({"x": 1}),
-                output: json!({"y": 1}),
-                delta: json!({}),
-                meta: CanonPayloadMeta { file: "test".to_string(), line: 1 },
-                data: json!({}),
-            },
+            CanonPayload { input: json!({"x": 1}), output: json!({"y": 1}), delta: json!({}), meta: CanonPayloadMeta { file: "test".to_string(), line: 1 }, data: json!({}) },
         );
         assert!(validate_event(&e).is_err());
     }
@@ -311,13 +305,7 @@ mod tests {
         // At the control harness layer: pending_required_successor + stale cached observe route
         // → RequestFreshRoute (not suppress or replay stale).
         use canon_invariant::control_harness::{evaluate_control_state, ControlDecision, ControlState};
-        let stuck = ControlState {
-            pending_required_successor_route_selected: true,
-            has_cached_route: true,
-            cached_route_is_observe: true,
-            can_emit_route_selected: true,
-            ..ControlState::default()
-        };
+        let stuck = ControlState { pending_required_successor_route_selected: true, has_cached_route: true, cached_route_is_observe: true, can_emit_route_selected: true, ..ControlState::default() };
         assert_eq!(evaluate_control_state(stuck), ControlDecision::RequestFreshRoute);
     }
 
@@ -326,11 +314,7 @@ mod tests {
         // Once a route has already been emitted for the current control edge,
         // a second attempt must be suppressed even if capacity exists.
         use canon_invariant::control_harness::{evaluate_control_state, ControlDecision, ControlState};
-        let already_emitted = ControlState {
-            route_emitted_for_current_control: true,
-            can_emit_route_selected: true,
-            ..ControlState::default()
-        };
+        let already_emitted = ControlState { route_emitted_for_current_control: true, can_emit_route_selected: true, ..ControlState::default() };
         assert_eq!(evaluate_control_state(already_emitted), ControlDecision::Suppress("duplicate_route_for_current_control"));
     }
 

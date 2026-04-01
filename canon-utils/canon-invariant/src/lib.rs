@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
+// TRACE: global runtime introspection (file, line, function)
 
-pub mod control_harness;
-pub mod request_lifecycle_harness;
 pub mod constraint_harness;
+pub mod control_harness;
 pub mod cross_product_harness;
+pub mod request_lifecycle_harness;
 
 pub use control_harness::{evaluate_control_state, ControlDecision, ControlState, SyntheticControlMetrics};
 pub use request_lifecycle_harness::{evaluate_request_lifecycle_state, RequestLifecycleDecision, RequestLifecycleState, SyntheticRequestLifecycleMetrics};
@@ -102,7 +103,6 @@ pub struct ConstraintState {
 pub struct DecisionState {
     pub scheduler_len: usize,
     pub has_plan: bool,
-    pub goal_unfinished: bool,
 }
 
 impl ConstraintState {
@@ -132,16 +132,17 @@ pub enum ConstraintDecision {
 
 /// CENTRALIZED decision function (single source of truth)
 pub fn decide(state: DecisionState) -> Decision {
-    let decision = match state {
-        DecisionState { has_plan: true, .. } => Decision::Act,
-        DecisionState { goal_unfinished: true, .. } => Decision::Plan,
-        DecisionState { scheduler_len: 0, .. } => Decision::Observe,
-        _ => Decision::Plan,
+    // SINGLE SOURCE OF TRUTH: decision depends ONLY on scheduler_len + has_plan
+    let decision = if state.scheduler_len == 0 && !state.has_plan {
+        Decision::Plan
+    } else if state.scheduler_len > 0 {
+        Decision::Act
+    } else {
+        Decision::Observe
     };
-    println!(
-        "[DECIDE] scheduler_len={} has_plan={} goal_unfinished={} -> {:?}",
-        state.scheduler_len, state.has_plan, state.goal_unfinished, decision
-    );
+    // ensure impossible state never occurs
+    debug_assert!(!(state.scheduler_len == 0 && matches!(decision, Decision::Act)));
+    eprintln!("[DECIDE TRACE] {}:{} {} fn=decide scheduler_len={} has_plan={} decision={:?}", file!(), line!(), module_path!(), state.scheduler_len, state.has_plan, decision);
     decision
 }
 
@@ -1191,10 +1192,7 @@ mod tests {
             action: None,
             deterministic_route: None,
         });
-        assert_eq!(
-            decision,
-            ConstraintDecision::Allow
-        );
+        assert_eq!(decision, ConstraintDecision::Allow);
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1367,9 +1365,9 @@ mod tests {
                                     _ => deterministic_axis_value(deterministic),
                                 };
                                 let state = match drift {
-                    DriftAxis::Clean => ConstraintState {
-                        scheduler_len: 0,
-                        has_plan: false,
+                                    DriftAxis::Clean => ConstraintState {
+                                        scheduler_len: 0,
+                                        has_plan: false,
                                         semantic_path_exists: true,
                                         semantic_cargo_project: false,
                                         real_path_exists: true,
@@ -1385,9 +1383,9 @@ mod tests {
                                         failure_scope_tooling: false,
                                         route_objective_contradiction: false,
                                     },
-                    DriftAxis::Drifted => ConstraintState {
-                        scheduler_len: 0,
-                        has_plan: false,
+                                    DriftAxis::Drifted => ConstraintState {
+                                        scheduler_len: 0,
+                                        has_plan: false,
                                         semantic_path_exists: false,
                                         semantic_cargo_project: false,
                                         real_path_exists: true,

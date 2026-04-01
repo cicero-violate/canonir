@@ -3,6 +3,9 @@ name = "canon-loop"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+trace = []
+
 [lib]
 name = "canon_loop"
 path = "src/lib.rs"

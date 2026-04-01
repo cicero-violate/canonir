@@ -71,9 +71,10 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                     Err(_err) => "127.0.0.1:9100".parse().expect("fallback llm bridge addr"),
                 };
                 let bridge = runtime.block_on(async { ws_server::spawn(addr, config.response_timeout_secs, Arc::clone(&ws_emitter_thread)) });
-                runtime.block_on(async {
-                    let wait = bridge.wait_for_connection();
-                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), wait).await;
+                // NON-BLOCKING: do not gate execution on WS connection
+                let bridge_bg = bridge.clone();
+                runtime.spawn(async move {
+                    let _ = bridge_bg.wait_for_connection().await;
                 });
                 let tabs = endpoint_worker::llm_worker_new_tabs();
                 runtime.block_on(endpoint_worker::llm_worker_init_workers(&bridge, &config, &tabs));

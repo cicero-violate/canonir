@@ -1,87 +1,106 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- event log segments in state/event_log/event.tlog.d (3 files, ~145MB total)
-- python structured scan (latest): loop_acted_no_tool=3, act_with_empty_scheduler=0
+- event log segments in state/event_log/event.tlog.d (3 files, ~152MB total)
+- python structured scan (latest):
+  - loop_acted_no_tool=19
+  - act_with_empty_scheduler=9
+  - missing_decision_traces=12852
+  - missing_route_traces=12850
+  - plan_zero_tasks=0
+  - missing_plan_error=0
 - canon-utils source (invariant, route, loop, runtime-supervisor)
-- commands: python log scan, rg ConstraintRoute usage
 
 ## Ranked Failures
 
 ### 1. Impact: HIGH
-Signal: Decision logic not centralized (architectural violation)
+Signal: LoopActed emitted without tool_result (critical invariant failure)
 Evidence:
-- canon-invariant/src/lib.rs defines both ConstraintRoute and Decision
-- ConstraintRoute still widely used across modules
-- executor and policy layers still contain routing logic
-- Decision is not the sole authority for routing
-Repair Targets:
-- canon-invariant/src/lib.rs
-  - make decide(...) return Decision ONLY
-  - remove or isolate ConstraintRoute behind mapping layer
-- canon-route/src/executor.rs
-  - remove ALL local routing logic
-  - consume Decision exclusively
-- canon-route/src/policy.rs
-  - eliminate all branching
-  - reduce to mapping or delete
-- global
-  - eliminate all ConstraintRoute-based decisions
-
-### 2. Impact: HIGH
-Signal: LoopActed emitted without tool_result
-Evidence:
-- event logs: loop_acted_no_tool = 3
+- event logs: loop_acted_no_tool = 19 (severe regression)
 Repair Targets:
 - canon-loop/src/stage/act.rs
   - enforce invariant: LoopActed ⇒ tool_result_id.is_some()
-  - block emission in ALL paths
-  - audit all emit sites
+  - block ALL emission paths lacking tool_result_id
+  - audit success, error, retry, and fallback paths
 
-### 3. Impact: MEDIUM
-Signal: Historical Act-with-empty-scheduler issue appears resolved but not guaranteed
+### 2. Impact: HIGH
+Signal: Missing DECIDE + ROUTE trace emission (observability failure)
 Evidence:
-- latest logs: act_with_empty_scheduler = 0
-- earlier runs showed violations → indicates fragility
+- missing_decision_traces = 12852
+- missing_route_traces = 12850
+Repair Targets:
+- canon-invariant/src/lib.rs
+  - emit DECIDE trace from decide(...)
+- canon-route/src/executor.rs
+  - emit ROUTE trace with explicit Decision → Route mapping
+- global
+  - enforce invariant: every route_selected must include DECIDE + ROUTE traces
+
+### 3. Impact: HIGH
+Signal: Act executed with empty scheduler
+Evidence:
+- act_with_empty_scheduler = 9
 Repair Targets:
 - canon-invariant/src/lib.rs
   - enforce scheduler_len == 0 ⇒ Decision::Observe
 - canon-route/src/executor.rs
-  - ensure no fallback paths produce Act
-- validation
-  - add regression checks
+  - prevent Act mapping when scheduler empty
+- canon-loop/src/context.rs
+  - validate scheduler_len correctness
 
-### 4. Impact: MEDIUM
-Signal: ConstraintState not minimal for decision
+### 4. Impact: HIGH
+Signal: Decision logic not centralized
 Evidence:
-- ConstraintState includes many unrelated fields
-- decision should depend only on scheduler_len and has_plan
+- ConstraintRoute still used
+- routing logic distributed across executor and policy
 Repair Targets:
 - canon-invariant/src/lib.rs
-  - reduce ConstraintState to minimal decision fields
-  - split diagnostic fields elsewhere
+  - make decide(...) the sole routing authority
+  - eliminate ConstraintRoute from decision path
+- canon-route/src/executor.rs
+  - remove all conditional routing logic
+- canon-route/src/policy.rs
+  - reduce to mapping-only or remove
 
 ### 5. Impact: MEDIUM
-Signal: Distributed decision logic persists across system
+Signal: Plan stage safeguards incomplete
 Evidence:
-- supervisor and tests still interact with ConstraintRoute
-- partial Decision usage only (not universal)
+- verifier indicates missing PLAN_ERROR/assert safeguards
+- logs show no enforcement
 Repair Targets:
-- canon-runtime-supervisor/src/*
-  - ensure no override of Decision
-- canon-loop/src/stage/*
-  - ensure all stages consume Decision only
+- canon-loop/src/stage/plan.rs
+  - enforce ≥1 task OR explicit failure
+  - emit PLAN_ERROR and assert on invalid outputs
+
+### 6. Impact: MEDIUM
+Signal: Dispatch deduplication not strict
+Evidence:
+- verifier indicates non-strict dedup behavior
+Repair Targets:
+- executor/dispatch layer
+  - enforce strict deduplication
+  - guarantee idempotent dispatch
+
+### 7. Impact: MEDIUM
+Signal: ConstraintState not minimal
+Evidence:
+- includes fields beyond scheduler_len and has_plan
+Repair Targets:
+- canon-invariant/src/lib.rs
+  - reduce ConstraintState to minimal decision inputs
+  - separate diagnostic data
 
 ## Planner Handoff
 
 Highest-value repair targets:
-1. Make Decision the single source of truth for routing
-2. Remove ConstraintRoute as a decision mechanism
-3. Eliminate all distributed routing logic (executor, policy, supervisor)
-4. Enforce LoopActed ⇒ tool_result_id invariant strictly
-5. Minimize ConstraintState to decision-relevant fields
+1. Fix LoopActed invariant (urgent correctness issue)
+2. Implement DECIDE + ROUTE trace emission globally
+3. Enforce scheduler_len == 0 ⇒ Observe invariant
+4. Centralize decision logic in decide(...)
+5. Enforce Plan stage guarantees (≥1 task or explicit failure)
 
 Blockers / Gaps:
-- ConstraintRoute still deeply embedded
-- Decision not universally enforced
-- No proof from logs that all decisions originate from decide(...)
+- Severe invariant regression (LoopActed violations spiking)
+- Observability incomplete (trace gaps large)
+- Decision logic still distributed
+- Plan safeguards not enforced

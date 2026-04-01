@@ -82,11 +82,7 @@ impl LlmWorker {
             // For non-stateful endpoints the role_schema is always prepended (each
             // call starts a fresh context).
             let include_role = !role_schema.trim().is_empty() && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
-            let raw_prompt = if include_role {
-                format!("{}\n\n{}", role_schema.trim_end(), prompt)
-            } else {
-                prompt.clone()
-            };
+            let raw_prompt = if include_role { format!("{}\n\n{}", role_schema.trim_end(), prompt) } else { prompt.clone() };
             let full_prompt = if raw_prompt.len() > 120_000 {
                 // Walk back from byte 120_000 to the nearest valid char boundary.
                 let mut safe = 120_000usize;
@@ -102,13 +98,7 @@ impl LlmWorker {
             };
 
             tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
-            tab_manager_log_llm(format!(
-                "phase={} endpoint={} tab={} send attempt={}",
-                phase,
-                self.endpoint_id,
-                tab_id,
-                attempt + 1
-            ));
+            tab_manager_log_llm(format!("phase={} endpoint={} tab={} send attempt={}", phase, self.endpoint_id, tab_id, attempt + 1));
             let raw = match self.bridge.send_turn(tab_id, &self.url, full_prompt).await {
                 Ok(v) => v,
                 Err(e) => {
@@ -116,19 +106,9 @@ impl LlmWorker {
                     tab_manager_drop_tab(&self.tabs, &self.endpoint_id, tab_id).await;
                     self.tabs_with_role_sent.remove(&tab_id);
                     let _ = self.bridge.close_tab(tab_id).await;
-                    tab_manager_log_llm(format!(
-                        "phase={} endpoint={} tab={} send_error={} attempt={}",
-                        phase,
-                        self.endpoint_id,
-                        tab_id,
-                        e,
-                        attempt + 1
-                    ));
+                    tab_manager_log_llm(format!("phase={} endpoint={} tab={} send_error={} attempt={}", phase, self.endpoint_id, tab_id, e, attempt + 1));
                     if should_retry_send_turn(&e) && attempt + 1 < MAX_SEND_ATTEMPTS {
-                        tab_manager_log_llm(format!(
-                            "phase={} endpoint={} retrying_fresh_tab_after_error={}",
-                            phase, self.endpoint_id, e
-                        ));
+                        tab_manager_log_llm(format!("phase={} endpoint={} retrying_fresh_tab_after_error={}", phase, self.endpoint_id, e));
                         continue;
                     }
                     return Err(anyhow::anyhow!("llm send_turn error: {e}"));

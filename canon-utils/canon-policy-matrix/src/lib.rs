@@ -14,9 +14,8 @@ use canon_route::{
     decision::RouteDecision,
     policy::{
         evaluate_route_cache, evaluate_route_dispatch, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_failure, evaluate_route_recovery, evaluate_route_transition,
-        latest_apply_patch_outcome, latest_run_command_outcome, latest_verify_outcome, ApplyPatchOutcomeClass, DeterministicRouteRule, RouteCacheRule, RouteCacheState,
-        RouteDispatchRule, RouteDispatchState, RouteEmitEffectRule, RouteEmitRule, RouteEmitState, RouteFailureRule, RoutePolicyRule, RoutePolicyState, RouteRecoveryRule, RunCommandOutcomeClass,
-        VerifyOutcomeClass,
+        latest_apply_patch_outcome, latest_run_command_outcome, latest_verify_outcome, ApplyPatchOutcomeClass, DeterministicRouteRule, RouteCacheRule, RouteCacheState, RouteDispatchRule,
+        RouteDispatchState, RouteEmitEffectRule, RouteEmitRule, RouteEmitState, RouteFailureRule, RoutePolicyRule, RoutePolicyState, RouteRecoveryRule, RunCommandOutcomeClass, VerifyOutcomeClass,
     },
 };
 use canon_semantic_state::{CompilerHintKind, CompilerHintRecord, SemanticExecutionResultRecord, SemanticStateSummary};
@@ -712,7 +711,6 @@ pub struct RouteRecoveryRow {
     pub expected_rule: RouteRecoveryRule,
 }
 
-
 #[derive(Clone, Debug)]
 pub struct RunCommandOutcomeRow {
     pub name: &'static str,
@@ -1186,7 +1184,6 @@ pub fn route_recovery_rows() -> Vec<RouteRecoveryRow> {
     }]
 }
 
-
 pub fn planner_judgment_rows() -> Vec<PlannerJudgmentRow> {
     let mut rows = Vec::new();
     for path in PlannerPathState::ALL {
@@ -1636,7 +1633,7 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
         LoopTransitionRow {
             name: "invalid_plan_clears_suppression",
             family: LoopScenarioFamily::InvalidPlanClearsSuppression,
-            
+
             planning_status: Some("invalid_plan"),
             error_kind: None,
             expected_successor: None,
@@ -1648,7 +1645,7 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
         LoopTransitionRow {
             name: "planned_status_has_no_invalid_plan_recovery",
             family: LoopScenarioFamily::InvalidPlanNoRecoveryForOtherStatus,
-            
+
             planning_status: Some("planned"),
             error_kind: None,
             expected_successor: None,
@@ -1660,7 +1657,7 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
         LoopTransitionRow {
             name: "act_stall_triggers_observe",
             family: LoopScenarioFamily::ActStallTriggersObserve,
-            
+
             planning_status: None,
             error_kind: Some("act_stall"),
             expected_successor: None,
@@ -1672,7 +1669,7 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
         LoopTransitionRow {
             name: "non_act_stall_does_not_trigger_observe",
             family: LoopScenarioFamily::NonActStallDoesNotTriggerObserve,
-            
+
             planning_status: None,
             error_kind: Some("invariant_violation"),
             expected_successor: None,
@@ -1684,7 +1681,7 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
         LoopTransitionRow {
             name: "reward_recovery_for_expected_successor",
             family: LoopScenarioFamily::RewardRecoveryForExpectedSuccessor,
-            
+
             planning_status: None,
             error_kind: None,
             expected_successor: Some("loop_rewarded"),
@@ -1696,7 +1693,7 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
         LoopTransitionRow {
             name: "non_reward_successor_does_not_recover",
             family: LoopScenarioFamily::NonRewardSuccessorDoesNotRecover,
-            
+
             planning_status: None,
             error_kind: None,
             expected_successor: Some("route_selected"),
@@ -1708,7 +1705,7 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
         LoopTransitionRow {
             name: "observe_blocked_by_pending_successor",
             family: LoopScenarioFamily::ObserveBlockedByPendingSuccessor,
-            
+
             planning_status: None,
             error_kind: None,
             expected_successor: None,
@@ -1720,7 +1717,7 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
         LoopTransitionRow {
             name: "observe_not_blocked_without_successor",
             family: LoopScenarioFamily::ObserveNotBlockedWithoutSuccessor,
-            
+
             planning_status: None,
             error_kind: None,
             expected_successor: None,
@@ -2129,12 +2126,7 @@ fn assert_route_row(row: &RouteTransitionRow) {
 
     let event = row.event.as_ref().map(to_runtime_event);
     let decision = row.decision.as_ref().map(to_route_decision);
-    let eval = evaluate_route_transition(
-        &ctx,
-        RoutePolicyState {},
-        event.as_ref(),
-        decision.as_ref(),
-    );
+    let eval = evaluate_route_transition(&ctx, RoutePolicyState {}, event.as_ref(), decision.as_ref());
 
     assert_eq!(eval.deterministic.as_ref().map(|d| d.rule), row.expected_deterministic, "route row {} deterministic mismatch", row.name);
     assert_eq!(eval.rules, row.expected_rules, "route row {} rule mismatch", row.name);
@@ -2592,12 +2584,7 @@ fn to_runtime_event(event: &RouteRowEvent) -> RuntimeEvent {
                 _ => *status,
             };
 
-            RuntimeEvent::PlanningCompleted(PlanningCompleted {
-                tick: 0,
-                llm_request_id: Some(String::new()),
-                planned_count: *planned_count,
-                status: normalized_status.to_string(),
-            })
+            RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: 0, llm_request_id: Some(String::new()), planned_count: *planned_count, status: normalized_status.to_string() })
         }
     }
 }
