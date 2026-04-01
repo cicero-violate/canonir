@@ -2,7 +2,8 @@
 
 ## Inputs Scanned
 - event log segments (state/event_log/event.tlog.d)
-- latest structured python analysis (current cycle)
+- latest python analysis (current cycle)
+- verifier summary (lane_a)
 - prior inspection of canon-loop, canon-route, canon-runtime
 
 ## Ranked Failures
@@ -15,8 +16,8 @@ Evidence:
 Repair Targets:
 - canon-loop/src/stage/observe.rs
   - enforce single-exit structure with guaranteed LoopObserved emission
-  - add runtime assertion ensuring emission occurred
-  - eliminate implicit fallthrough reliance
+  - add runtime assertion ensuring emission occurred exactly once
+  - eliminate implicit fallthrough and hidden bypass paths
 
 ### 2. Impact: CRITICAL
 Signal: Decision→Route invariant collapse
@@ -26,36 +27,37 @@ Evidence:
 Repair Targets:
 - canon-route/src/executor.rs
   - replace debug_assert!(true, ...) with enforced invariant
-  - block route emission without decision trace
+  - block route emission if decision trace is missing
 
 ### 3. Impact: CRITICAL
-Signal: Routing authority still influenced by non-semantic state
+Signal: SemanticStateSummary is not sole routing authority
 Evidence:
 - 16 queue-driven routing signals
-- presence of tick/hash gating in LoopContext
+- verifier confirms continued use of scheduler_len / planned_pending
 Repair Targets:
-- canon-route + canon-loop context
-  - remove scheduler_len / planned_pending / tick/hash gating
-  - derive routing exclusively from SemanticStateSummary
+- canon-route policy + executor
+  - remove all scheduler_len / planned_pending dependencies
+  - enforce routing derived exclusively from SemanticStateSummary
 
 ### 4. Impact: CRITICAL
-Signal: Synthetic dispatch bypass persists
+Signal: RequestDispatch / synthetic dispatch not fully removed
 Evidence:
 - 461 synthetic dispatch signals
+- verifier explicitly reports incomplete RequestDispatch removal
 Repair Targets:
-- canon-runtime
-  - remove RequestDispatch entirely
-  - eliminate replay duplication paths
+- canon-runtime dispatch layer
+  - fully remove RequestDispatch paths
+  - eliminate synthetic fanout and replay-based dispatch
 
 ### 5. Impact: CRITICAL
 Signal: Invariants detected but not enforced
 Evidence:
 - 1,278 invariant/error lines
-- runtime continues execution under violation
+- runtime continues execution despite violations
 Repair Targets:
 - canon-invariant
   - convert invariant violations into fail-fast behavior
-  - halt execution on violation
+  - halt execution when invariants are violated
 
 ### 6. Impact: HIGH
 Signal: Successor lifecycle incomplete
@@ -64,6 +66,7 @@ Evidence:
 Repair Targets:
 - canon-runtime lifecycle
   - enforce exactly-once successor discharge
+  - remove lifecycle bypass cases
 
 ### 7. Impact: HIGH
 Signal: Persistent missing/duplicate patterns
@@ -71,22 +74,23 @@ Evidence:
 - "missing": 500 occurrences
 - "duplicate": 2 occurrences
 Repair Targets:
-- runtime control flow
-  - eliminate bypass paths (early exits / fallthrough)
+- runtime control-flow
+  - eliminate early exits and implicit bypass paths
   - enforce invariant checkpoints on all exits
 
 ## Planner Handoff
 
 Priority order:
-1. Guarantee LoopObserved emission
-2. Enforce decision→route invariant
-3. Remove queue-derived routing inputs
-4. Eliminate synthetic dispatch
+1. Guarantee LoopObserved emission (fix observe control flow)
+2. Enforce decision→route invariant strictly
+3. Remove queue-derived routing inputs (semantic-only authority)
+4. Fully eliminate RequestDispatch and synthetic dispatch
 5. Enforce fail-fast invariant behavior
-6. Fix successor lifecycle
+6. Fix successor lifecycle completion
 
 Blockers:
-- System is active but not converging (metrics unchanged)
-- Routing/control flow still partially derived from non-semantic state
+- System is active but not converging (metrics unchanged across cycles)
+- Routing/control flow still partially driven by non-semantic state
+- RequestDispatch removal incomplete (per verifier)
 - Invariants are informational only and not enforced
 

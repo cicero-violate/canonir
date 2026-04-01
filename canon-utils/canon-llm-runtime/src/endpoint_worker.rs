@@ -12,6 +12,7 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
 static WORKERS: Lazy<Mutex<HashMap<(String, bool, usize), mpsc::Sender<LlmWorkItem>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -31,6 +32,7 @@ pub struct LlmWorkItem {
     pub submit_only: bool,
     pub response: oneshot::Sender<Result<String>>,
 }
+#[derive(Clone)]
 struct LlmWorker {
     endpoint_id: String,
     url: String,
@@ -38,25 +40,25 @@ struct LlmWorker {
     stateful: bool,
     bridge: WsBridge,
     tabs: TabManagerHandle,
-    seen_hashes: HashSet<u64>,
-    cache: HashMap<u64, String>,
+    seen_hashes: Arc<Mutex<HashSet<u64>>>,
+    cache: Arc<Mutex<HashMap<u64, String>>>,
     /// Tracks which tab IDs have already received the role/system prompt.
     /// For stateful endpoints we send the role_schema only on the first turn;
     /// subsequent turns carry only the user prompt, saving tokens.
-    tabs_with_role_sent: HashSet<u32>,
+    tabs_with_role_sent: Arc<Mutex<HashSet<u32>>>,
 }
 impl LlmWorker {
-    async fn handle_request(&mut self, req: LlmWorkItem) {
+    async fn handle_request(&self, req: LlmWorkItem) {
         // telemetry removed
         if req.bust_cache {
             if let Some(key) = req.cache_key {
-                self.cache.remove(&key);
+                self.cache.lock().await.remove(&key);
             }
         }
         if let Some(key) = req.cache_key {
-            if let Some(hit) = self.cache.get(&key) {
+            if let Some(hit) = self.cache.lock().await.get(&key).cloned() {
                 // telemetry removed
-                let _ = req.response.send(Ok(hit.clone()));
+                let _ = req.response.send(Ok(hit));
                 return;
             }
         }
@@ -64,20 +66,29 @@ impl LlmWorker {
             response_router::response_router_register(req.req_id, node_id).await;
         }
         tab_manager_log_llm(format!("phase={} endpoint={} req_id={} send_turn_start", req.phase, self.endpoint_id, req.req_id));
-        let result = if req.submit_only {
-            self.submit_turn_only(&req.phase, req.req_id, req.prompt, req.role_schema).await
-        } else {
-            self.send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, req.prompt, req.role_schema).await
-        };
-        if let Ok(raw) = result.as_ref() {
-            if let Some(key) = req.cache_key {
-                self.cache.insert(key, raw.clone());
+        if req.submit_only {
+            let result = self.submit_turn_only(&req.phase, req.req_id, req.prompt, req.role_schema).await;
+            if let Ok(raw) = result.as_ref() {
+                if let Some(key) = req.cache_key {
+                    self.cache.lock().await.insert(key, raw.clone());
+                }
             }
+            let _ = req.response.send(result);
+            return;
         }
-        // telemetry removed
-        let _ = req.response.send(result);
+
+        let worker = self.clone();
+        tokio::spawn(async move {
+            let result = worker.send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, req.prompt, req.role_schema).await;
+            if let Ok(raw) = result.as_ref() {
+                if let Some(key) = req.cache_key {
+                    worker.cache.lock().await.insert(key, raw.clone());
+                }
+            }
+            let _ = req.response.send(result);
+        });
     }
-    async fn send_turn(&mut self, phase: &str, req_id: u64, allow_req_id_mismatch: bool, prompt: String, role_schema: String) -> Result<String> {
+    async fn send_turn(&self, phase: &str, req_id: u64, allow_req_id_mismatch: bool, prompt: String, role_schema: String) -> Result<String> {
         const MAX_SEND_ATTEMPTS: usize = 2;
         for attempt in 0..MAX_SEND_ATTEMPTS {
             let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
@@ -86,7 +97,13 @@ impl LlmWorker {
             // turn to this tab; all subsequent turns carry only the user prompt.
             // For non-stateful endpoints the role_schema is always prepended (each
             // call starts a fresh context).
-            let include_role = !role_schema.trim().is_empty() && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
+            let include_role = if role_schema.trim().is_empty() {
+                false
+            } else if !self.stateful {
+                true
+            } else {
+                self.tabs_with_role_sent.lock().await.insert(tab_id)
+            };
             let raw_prompt = if include_role { format!("{}\n\n{}", role_schema.trim_end(), prompt) } else { prompt.clone() };
             let full_prompt = if raw_prompt.len() > 120_000 {
                 // Walk back from byte 120_000 to the nearest valid char boundary.
@@ -109,7 +126,7 @@ impl LlmWorker {
                 Err(e) => {
                     tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
                     tab_manager_drop_tab(&self.tabs, &self.endpoint_id, tab_id).await;
-                    self.tabs_with_role_sent.remove(&tab_id);
+                    self.tabs_with_role_sent.lock().await.remove(&tab_id);
                     let _ = self.bridge.close_tab(tab_id).await;
                     let penalty_ms = tab_manager_apply_rate_limit_penalty(&self.tabs, &self.endpoint_id).await;
                     tab_manager_log_llm(format!("phase={} endpoint={} tab={} send_error={} attempt={}", phase, self.endpoint_id, tab_id, e, attempt + 1));
@@ -157,7 +174,7 @@ impl LlmWorker {
             let cooldown_ms = tab_manager_note_success(&self.tabs, &self.endpoint_id, tab_id).await;
             tab_manager_log_llm(format!("phase={} endpoint={} tab={} adaptive_cooldown_ms={}", phase, self.endpoint_id, tab_id, cooldown_ms));
             let hash = llm_worker_stable_hash64(&raw);
-            if !self.seen_hashes.insert(hash) {
+            if !self.seen_hashes.lock().await.insert(hash) {
                 // Duplicate outputs can legitimately occur for verify/observe steps; don't fail the call.
                 tab_manager_log_llm(format!("phase={} endpoint={} tab={} duplicate_hash={}", phase, self.endpoint_id, tab_id, hash));
             }
@@ -166,9 +183,15 @@ impl LlmWorker {
         Err(anyhow::anyhow!("llm send_turn exhausted retries"))
     }
 
-    async fn submit_turn_only(&mut self, _phase: &str, req_id: u64, prompt: String, role_schema: String) -> Result<String> {
+    async fn submit_turn_only(&self, _phase: &str, req_id: u64, prompt: String, role_schema: String) -> Result<String> {
         let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
-        let include_role = !role_schema.trim().is_empty() && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
+        let include_role = if role_schema.trim().is_empty() {
+            false
+        } else if !self.stateful {
+            true
+        } else {
+            self.tabs_with_role_sent.lock().await.insert(tab_id)
+        };
         let raw_prompt = if include_role { format!("{}\n\n{}", role_schema.trim_end(), prompt) } else { prompt };
         let full_prompt = if raw_prompt.len() > 120_000 {
             let mut safe = 120_000usize;
@@ -221,9 +244,9 @@ pub async fn llm_worker_send_request_with_req_id(
             stateful,
             bridge: bridge.clone(),
             tabs: tabs.clone(),
-            seen_hashes: HashSet::new(),
-            cache: HashMap::new(),
-            tabs_with_role_sent: HashSet::new(),
+            seen_hashes: Arc::new(Mutex::new(HashSet::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            tabs_with_role_sent: Arc::new(Mutex::new(HashSet::new())),
         };
         tokio::spawn(llm_worker_run_worker(worker, rx_worker));
         tx_worker
@@ -241,9 +264,9 @@ pub async fn llm_worker_send_request_with_req_id(
                 stateful,
                 bridge: bridge.clone(),
                 tabs: tabs.clone(),
-                seen_hashes: HashSet::new(),
-                cache: HashMap::new(),
-                tabs_with_role_sent: HashSet::new(),
+                seen_hashes: Arc::new(Mutex::new(HashSet::new())),
+                cache: Arc::new(Mutex::new(HashMap::new())),
+                tabs_with_role_sent: Arc::new(Mutex::new(HashSet::new())),
             };
             tokio::spawn(llm_worker_run_worker(worker, rx_worker));
             workers.insert(worker_key, tx_worker.clone());
@@ -284,15 +307,15 @@ pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfi
             stateful: endpoint.stateful,
             bridge: bridge.clone(),
             tabs: tabs.clone(),
-            seen_hashes: HashSet::new(),
-            cache: HashMap::new(),
-            tabs_with_role_sent: HashSet::new(),
+            seen_hashes: Arc::new(Mutex::new(HashSet::new())),
+            cache: Arc::new(Mutex::new(HashMap::new())),
+            tabs_with_role_sent: Arc::new(Mutex::new(HashSet::new())),
         };
         tokio::spawn(llm_worker_run_worker(worker, rx_worker));
         workers.insert(worker_key, tx_worker);
     }
 }
-async fn llm_worker_run_worker(mut worker: LlmWorker, mut rx: mpsc::Receiver<LlmWorkItem>) {
+async fn llm_worker_run_worker(worker: LlmWorker, mut rx: mpsc::Receiver<LlmWorkItem>) {
     while let Some(req) = rx.recv().await {
         worker.handle_request(req).await;
     }
