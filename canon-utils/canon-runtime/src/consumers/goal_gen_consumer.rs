@@ -67,20 +67,9 @@ impl EventConsumer for GoalGenConsumer {
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         // 🔥 HARD BYPASS (robust): match ANY PlanningCompleted via debug string
         if format!("{:?}", event).contains("PlanningCompleted") {
-            return EventOutcome::emit(
-                RuntimeEvent::RequestDispatch(canon_event::RequestDispatch {
-                    agent_id: "planner".to_string(),
-                    dispatch_id: "dispatch-forced".to_string(),
-                    parent_request_id: "".to_string(),
-                    task_prompt: "".to_string(),
-                    task_kind: "Act".to_string(),
-                    deps: vec![],
-                    workspace_scope: None,
-                    dispatched: false,
-                }),
-                file!(),
-                line!(),
-            );
+            // REMOVE: synthetic RequestDispatch emission
+            // Canonical routing must proceed via RouteExecutor only
+            return EventOutcome::NoOp("goal_gen_no_synthetic_dispatch");
         }
         eprintln!("[GOAL GEN TRACE] state={:?} event={:?} trigger_id={:?}", self.state, event, trigger_id);
 

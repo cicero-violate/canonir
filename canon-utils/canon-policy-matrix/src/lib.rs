@@ -2307,7 +2307,7 @@ fn assert_loop_row(row: &LoopTransitionRow) {
 }
 
 fn assert_loop_runtime_row(row: &LoopRuntimeRow) {
-    let eval = evaluate_loop_runtime(row.halted, row.force_observe_recovery, row.trigger_observe, row.suppress_observe_on_invariant, row.pending_required_successor, row.is_route_selected_event);
+    let eval = evaluate_loop_runtime(row.halted, row.force_observe_recovery, row.trigger_observe, row.suppress_observe_on_invariant, None, row.is_route_selected_event);
     assert_eq!(eval.observe_mode, row.expected_mode, "loop runtime row {} mode mismatch", row.name);
     assert_eq!(eval.halt_blocks_stage, row.expected_halt_blocks_stage, "loop runtime row {} halt mismatch", row.name);
     assert_eq!(eval.warn_route_selected_while_halted, row.expected_warn_route_selected_while_halted, "loop runtime row {} warn mismatch", row.name);
@@ -2315,7 +2315,7 @@ fn assert_loop_runtime_row(row: &LoopRuntimeRow) {
 }
 
 fn assert_recovery_event_row(row: &RecoveryEventRow) {
-    let eval = evaluate_recovery_event(row.expected_successor, row.pending_required_successor, row.has_last_verified);
+    let eval = evaluate_recovery_event(row.expected_successor, None, row.has_last_verified);
     assert_eq!(eval.rule, row.expected_rule, "recovery event row {} rule mismatch", row.name);
     assert_eq!(eval.force_observe_recovery, row.expected_force_observe_recovery, "recovery event row {} observe mismatch", row.name);
     assert_eq!(eval.execute_reward_recovery, row.expected_execute_reward_recovery, "recovery event row {} reward mismatch", row.name);

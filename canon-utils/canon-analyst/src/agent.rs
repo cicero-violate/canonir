@@ -80,7 +80,6 @@ pub async fn run(question: &str, tlog_path: &str) -> Result<()> {
             "analyst", // phase
             &tabs,
             endpoint.max_tabs,
-            config.tab_cooldown_ms,
         )
         .await?;
 

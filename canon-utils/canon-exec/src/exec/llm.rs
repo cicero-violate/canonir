@@ -112,7 +112,6 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                     "relay",
                                     &tabs,
                                     endpoint.max_tabs,
-                                    0,
                                 )
                                 .await
                             })
@@ -274,7 +273,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                     let endpoint_url = endpoint.url.clone();
                     let endpoint_stateful = endpoint.stateful;
                     let endpoint_max_tabs = endpoint.max_tabs;
-                    let tab_cooldown_ms = config.tab_cooldown_ms;
+                    // removed tab_cooldown_ms: field no longer exists in CapabilityConfig
                     let role_content_cloned = role_content.clone();
                     let prompt_with_request_id_cloned = prompt_with_request_id.clone();
                     let tabs_cloned = tabs.clone();
@@ -299,7 +298,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                     None,
                                     &tabs_cloned,
                                     endpoint_max_tabs,
-                                    tab_cooldown_ms,
+                                    0,
                                     retries,
                                     delay,
                                     bust_cache,
@@ -317,7 +316,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                     None,
                                     &tabs_cloned,
                                     endpoint_max_tabs,
-                                    tab_cooldown_ms,
+                                    0,
                                     retries,
                                     delay,
                                     bust_cache,

@@ -273,6 +273,12 @@ impl EventRuntime {
                                 self.drain_emitted_events()?;
                             }
                         }
+                        "route_selected" => {
+                            if let Ok(decoded) = serde_json::from_value::<canon_event::RouteSelected>(data.clone()) {
+                                self.handle_replayed_event(RuntimeEvent::RouteSelected(decoded), parents)?;
+                                self.drain_emitted_events()?;
+                            }
+                        }
                         "loop_acted" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::LoopActed>(data.clone()) {
                                 self.handle_replayed_event(RuntimeEvent::LoopActed(decoded), parents)?;
@@ -318,12 +324,6 @@ impl EventRuntime {
                         "route_tick" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::RouteTick>(data.clone()) {
                                 self.handle_replayed_event(RuntimeEvent::RouteTick(decoded), parents)?;
-                                self.drain_emitted_events()?;
-                            }
-                        }
-                        "route_selected" => {
-                            if let Ok(decoded) = serde_json::from_value::<canon_event::RouteSelected>(data.clone()) {
-                                self.handle_replayed_event(RuntimeEvent::RouteSelected(decoded), parents)?;
                                 self.drain_emitted_events()?;
                             }
                         }

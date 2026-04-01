@@ -538,6 +538,30 @@ fn exec_read_file(workspace: &Path, relative: &str, start_line: Option<usize>) -
     }
 }
 
+fn shell_tokens(cmd: &str) -> Vec<&str> {
+    cmd.split(|c: char| c.is_whitespace() || matches!(c, '|' | '&' | ';' | '(' | ')' | '<' | '>'))
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn contains_token_pair(cmd: &str, first: &str, second: &str) -> bool {
+    let tokens = shell_tokens(cmd);
+    tokens.windows(2).any(|window| window[0] == first && window[1] == second)
+}
+
+fn starts_direct_debug_binary(cmd: &str) -> bool {
+    let first = shell_tokens(cmd).into_iter().next().unwrap_or("");
+    first.starts_with("./target/debug/") || first.contains("/target/debug/")
+}
+
+fn looks_like_long_running_command(cmd: &str) -> bool {
+    contains_token_pair(cmd, "cargo", "run")
+        || contains_token_pair(cmd, "cargo", "watch")
+        || starts_direct_debug_binary(cmd)
+        || cmd.contains(" --tlog ")
+        || cmd.contains("| tee")
+}
+
 fn exec_run_command(workspace: &Path, cmd: &str, cwd: &str) -> Result<(bool, String)> {
     let cwd_path = PathBuf::from(cwd);
     if !cwd_path.is_absolute() {
@@ -551,15 +575,7 @@ fn exec_run_command(workspace: &Path, cmd: &str, cwd: &str) -> Result<(bool, Str
     // - long-running commands → spawn (non-blocking)
     // - short commands → capture output (blocking)
 
-    let is_long_running =
-        cmd.contains("cargo run")
-        || cmd.contains("supervisor")
-        || cmd.contains("serve")
-        || cmd.contains("watch")
-        // NEW: detect direct binary execution (prevents blocking)
-        || cmd.contains("./target/debug/")
-        || cmd.contains(" --tlog ")
-        || cmd.contains("| tee");
+    let is_long_running = looks_like_long_running_command(cmd);
 
     if is_long_running {
         let child = Command::new("/bin/bash")
@@ -588,6 +604,17 @@ fn exec_run_command(workspace: &Path, cmd: &str, cwd: &str) -> Result<(bool, Str
                 combined = format!("no matches (exit={})", output.status.code().unwrap_or(-1));
                 if cmd.contains("/tmp/runtime.trace") {
                     combined.push_str("\ntrace probe returned no matches; file may be stale, missing, or the pattern may not be present yet");
+                }
+            }
+        }
+        if cmd.contains("/tmp/runtime.trace") && (cmd.contains("rg ") || cmd.contains("grep ")) {
+            let trace = PathBuf::from("/tmp/runtime.trace");
+            match std::fs::metadata(&trace) {
+                Ok(meta) => {
+                    combined.push_str(&format!("\ntrace_path=/tmp/runtime.trace trace_size={}B", meta.len()));
+                }
+                Err(_) => {
+                    combined.push_str("\ntrace_path=/tmp/runtime.trace trace_missing=true");
                 }
             }
         }
@@ -765,7 +792,7 @@ fn append_action_log(role: &str, action: &Value) -> Result<()> {
 /// Returns the done reason on success, or an error on hard failure.
 /// `check_on_done`: if true, run cargo build + test before accepting done.
 async fn run_agent(
-    role: &str, system_instructions: &str, initial_prompt: String, endpoint: &LlmEndpoint, bridge: &WsBridge, workspace: &Path, config: &CapabilityConfig, tabs: &TabManagerHandle, check_on_done: bool,
+    role: &str, system_instructions: &str, initial_prompt: String, endpoint: &LlmEndpoint, bridge: &WsBridge, workspace: &Path, _config: &CapabilityConfig, tabs: &TabManagerHandle, check_on_done: bool,
 ) -> Result<String> {
     let mut step = 0usize;
     let mut last_result: Option<String> = None;
@@ -800,7 +827,6 @@ async fn run_agent(
             role,
             tabs,
             endpoint.max_tabs,
-            config.tab_cooldown_ms,
         )
         .await
         {

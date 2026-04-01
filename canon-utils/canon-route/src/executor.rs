@@ -130,6 +130,16 @@ impl RouteExecutor {
                 decision,
                 self.ctx.scheduler_len
             );
+            // REQUIRED TRACE: even skipped dispatch must log ROUTE TRACE to avoid trace gaps
+            eprintln!(
+                "[ROUTE TRACE SKIP] trace_id={} {}:{} {} decision={:?} scheduler_len={}",
+                trace_id,
+                file!(),
+                line!(),
+                module_path!(),
+                decision,
+                self.ctx.scheduler_len
+            );
             return;
         }
 
@@ -435,6 +445,22 @@ impl EventConsumer for RouteExecutor {
             eprintln!("[ROUTE EXEC TRACE] PlanningCompleted → checking scheduler before routing");
             if p.planned_count > 0 {
                 eprintln!("[ROUTE EXEC TRACE] PlanningCompleted → RETURNING RouteSelected (authoritative)");
+                eprintln!(
+                    "[ROUTE TRACE] {}:{} {} fn=planning_completed_authoritative scheduler_len={} route=Act",
+                    file!(),
+                    line!(),
+                    module_path!(),
+                    self.ctx.scheduler_len
+                );
+                // INVARIANT: RouteSelected must have a DECIDE TRACE-equivalent context
+                eprintln!(
+                    "[DECIDE TRACE] {}:{} {} fn=planning_completed_authoritative scheduler_len={} has_plan={} decision=Act",
+                    file!(),
+                    line!(),
+                    module_path!(),
+                    self.ctx.scheduler_len,
+                    self.ctx.scheduler_len > 0
+                );
                 return EventOutcome::emit(
                     RuntimeEvent::RouteSelected(RouteSelected {
                         tick: p.tick,
@@ -455,6 +481,22 @@ impl EventConsumer for RouteExecutor {
             }
             if p.status == "missing_semantic_context" {
                 eprintln!("[ROUTE EXEC TRACE] PlanningCompleted missing semantic context → RETURNING RouteSelected(observe)");
+                eprintln!(
+                    "[ROUTE TRACE] {}:{} {} fn=planning_completed_missing_context scheduler_len={} route=observe",
+                    file!(),
+                    line!(),
+                    module_path!(),
+                    self.ctx.scheduler_len
+                );
+                // INVARIANT: RouteSelected must have a DECIDE TRACE-equivalent context
+                eprintln!(
+                    "[DECIDE TRACE] {}:{} {} fn=planning_completed_missing_context scheduler_len={} has_plan={} decision=Observe",
+                    file!(),
+                    line!(),
+                    module_path!(),
+                    self.ctx.scheduler_len,
+                    self.ctx.scheduler_len > 0
+                );
                 return EventOutcome::emit(
                     RuntimeEvent::RouteSelected(RouteSelected {
                         tick: p.tick,
@@ -529,7 +571,7 @@ impl EventConsumer for RouteExecutor {
             return EventOutcome::NoOp(fast_path.noop_reason);
         }
 
-        // TODO: replace with scheduler.len() once exposed in RouteContext
+        // planned_pending is the authoritative signal for pending planned work
         let event_dispatch_eval = evaluate_route_event_dispatch(event, self.ctx.planned_pending, self.ctx.pending_tool_result_ids.is_empty());
         if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::IdleDispatch) {
             if self.pending_request_id.as_deref() == Some("deterministic") && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_)) {
@@ -689,6 +731,7 @@ impl RouteExecutor {
             }
         }
         // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+        // INVARIANT: every RouteSelected emission MUST have exactly one preceding ROUTE TRACE
         eprintln!(
             "[ROUTE TRACE] {}:{} {} fn=emit_route_selected decision={:?} scheduler_len={}",
             file!(),
@@ -701,6 +744,11 @@ impl RouteExecutor {
             tick: self.ctx.scheduler_tick,
             approved_route: {
                 // INVARIANT: scheduler_len == 0 must never route to Act
+                eprintln!(
+                    "[DECIDE CHECK] scheduler_len={} decision={:?}",
+                    self.ctx.scheduler_len,
+                    decision.lane
+                );
                 if matches!(decision.lane, RouteKind::Act) && self.ctx.scheduler_len == 0 {
                     "observe".to_string()
                 } else {

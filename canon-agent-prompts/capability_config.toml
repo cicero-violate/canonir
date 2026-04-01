@@ -54,7 +54,6 @@ reports_disable = true
 reports_skip_snapshot = true
 
 [llm]
-tab_cooldown_ms = 4000
 
 [[llm.endpoints]]
 id = "planner_chatgpt_group"

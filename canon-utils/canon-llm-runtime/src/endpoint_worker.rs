@@ -1,7 +1,8 @@
 use super::config::CapabilityConfig;
 use super::response_router;
 use super::tab_management::{
-    tab_manager_drop_tab, tab_manager_get_or_open_tab, tab_manager_mark_tab_cooldown, tab_manager_mark_tab_in_flight, tab_manager_mark_tab_response, tab_manager_mark_tab_sent,
+    tab_manager_apply_rate_limit_penalty, tab_manager_drop_tab, tab_manager_get_or_open_tab, tab_manager_mark_tab_in_flight, tab_manager_mark_tab_response, tab_manager_mark_tab_sent,
+    tab_manager_note_success,
 };
 
 pub use super::tab_management::{tab_manager_log_llm, tab_manager_now_ms, TabManagerHandle};
@@ -33,7 +34,6 @@ struct LlmWorker {
     endpoint_id: String,
     url: String,
     max_tabs: usize,
-    tab_cooldown_ms: u64,
     stateful: bool,
     bridge: WsBridge,
     tabs: TabManagerHandle,
@@ -106,7 +106,9 @@ impl LlmWorker {
                     tab_manager_drop_tab(&self.tabs, &self.endpoint_id, tab_id).await;
                     self.tabs_with_role_sent.remove(&tab_id);
                     let _ = self.bridge.close_tab(tab_id).await;
+                    let penalty_ms = tab_manager_apply_rate_limit_penalty(&self.tabs, &self.endpoint_id).await;
                     tab_manager_log_llm(format!("phase={} endpoint={} tab={} send_error={} attempt={}", phase, self.endpoint_id, tab_id, e, attempt + 1));
+                    tab_manager_log_llm(format!("phase={} endpoint={} adaptive_penalty_ms={}", phase, self.endpoint_id, penalty_ms));
                     if should_retry_send_turn(&e) && attempt + 1 < MAX_SEND_ATTEMPTS {
                         tab_manager_log_llm(format!("phase={} endpoint={} retrying_fresh_tab_after_error={}", phase, self.endpoint_id, e));
                         continue;
@@ -147,9 +149,8 @@ impl LlmWorker {
                 }
                 // temp_chat removed: redirect to temporary-chat UI races with prompt injection.
             }
-            if self.tab_cooldown_ms > 0 {
-                tab_manager_mark_tab_cooldown(&self.tabs, tab_id, self.tab_cooldown_ms).await;
-            }
+            let cooldown_ms = tab_manager_note_success(&self.tabs, &self.endpoint_id, tab_id).await;
+            tab_manager_log_llm(format!("phase={} endpoint={} tab={} adaptive_cooldown_ms={}", phase, self.endpoint_id, tab_id, cooldown_ms));
             let hash = llm_worker_stable_hash64(&raw);
             if !self.seen_hashes.insert(hash) {
                 // Duplicate outputs can legitimately occur for verify/observe steps; don't fail the call.
@@ -166,10 +167,10 @@ fn should_retry_send_turn(err: &WsBridgeError) -> bool {
 }
 pub async fn llm_worker_send_request(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
-    phase: &str, tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
+    phase: &str, tabs: &TabManagerHandle, max_tabs: usize,
 ) -> Result<String> {
     let (req_id, raw) =
-        llm_worker_send_request_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, cache_key, bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs, tab_cooldown_ms)
+        llm_worker_send_request_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, cache_key, bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs)
             .await?;
     let _ = req_id;
     Ok(raw)
@@ -177,7 +178,7 @@ pub async fn llm_worker_send_request(
 
 pub async fn llm_worker_send_request_with_req_id(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
-    phase: &str, tabs: &TabManagerHandle, max_tabs: usize, tab_cooldown_ms: u64,
+    phase: &str, tabs: &TabManagerHandle, max_tabs: usize,
 ) -> Result<(u64, String)> {
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
@@ -191,7 +192,6 @@ pub async fn llm_worker_send_request_with_req_id(
             endpoint_id: endpoint_id.to_string(),
             url: url.to_string(),
             max_tabs,
-            tab_cooldown_ms,
             stateful,
             bridge: bridge.clone(),
             tabs: tabs.clone(),
@@ -230,7 +230,6 @@ pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfi
             endpoint_id: endpoint.id.clone(),
             url: endpoint.url.clone(),
             max_tabs: endpoint.max_tabs,
-            tab_cooldown_ms: config.tab_cooldown_ms,
             stateful: endpoint.stateful,
             bridge: bridge.clone(),
             tabs: tabs.clone(),

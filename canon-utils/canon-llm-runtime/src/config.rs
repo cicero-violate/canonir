@@ -118,8 +118,6 @@ struct CapabilityConfigRawLlm {
     pub endpoints: CapabilityConfigRawEndpoints,
     #[serde(default)]
     pub roles: HashMap<String, RoleConfig>,
-    #[serde(default = "capability_config_default_tab_cooldown_ms")]
-    pub tab_cooldown_ms: u64,
 }
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -282,9 +280,6 @@ fn capability_config_default_reports_skip_snapshot() -> bool {
 fn capability_config_default_max_tabs() -> usize {
     1
 }
-fn capability_config_default_tab_cooldown_ms() -> u64 {
-    0
-}
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct RoleConfig {
     #[serde(default)]
@@ -359,7 +354,6 @@ pub struct CapabilityConfig {
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
     pub llm_roles: HashMap<String, RoleConfig>,
-    pub tab_cooldown_ms: u64,
 }
 impl CapabilityConfig {
     pub fn snapshot_store_load() -> Result<Self> {
@@ -443,7 +437,6 @@ impl CapabilityConfig {
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,
-            tab_cooldown_ms: raw.llm.tab_cooldown_ms,
         })
     }
     pub fn apply_env_flags(&self) {

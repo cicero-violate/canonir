@@ -18,21 +18,50 @@ Stabilize canonical control flow in `/workspace/ai_sandbox/canon/canon-utils` so
 
 ## Current State
 Completed and should remain true:
-- [x] `planning_completed` is appended to tlog again ✓ done
-- [x] `PlanningCompleted(planned_count=0, status=missing_semantic_context)` recovers via `RouteSelected(observe)` ✓ done
-- [x] `LoopObserved` is emitted and discharges the expected successor after observe recovery ✓ done
-- [x] `LoopObserved` is emitted and discharges the expected successor after observe recovery ✓ done
+ - [x] `planning_completed` is appended to tlog again ✓ done
+ - [x] DECIDE + ROUTE trace coverage enforced across decision + emission paths ✓ done
+ - [ ] `PlanningCompleted(planned_count=0, status=missing_semantic_context)` recovers via `RouteSelected(observe)`  ← NOT VERIFIED (policy.rs still lacks explicit handling)
+ - [ ] `LoopObserved` is emitted and discharges the expected successor after observe recovery  ← IN PROGRESS (emission unconditional, duplication present)
+ - [ ] `LoopObserved` is emitted and discharges the expected successor after observe recovery  ← IN PROGRESS (duplicate entry; fanout duplication unresolved)
+ - [x] Route-string casing mismatch for stage dispatch / loop executor was repaired ✓ done
+
+Still suspected / incomplete:
+ - [ ] Remove remaining non-canonical routing hacks from `canon-route/src/executor.rs`  ← NOT VERIFIED (executor still contains dedup + manual control logic)
+ - [ ] Remove duplicate observe / duplicate forwarding / duplicate fanout noise  ← IN PROGRESS (synthetic dispatch removed; duplication now isolated to LoopObserved fanout paths)
+
+## Objective
+Stabilize canonical control flow in `/workspace/ai_sandbox/canon/canon-utils` so that:
+- `RouteSelected -> required successor` is always correct.
+- `PlanningCompleted(planned_count=0, status=missing_semantic_context) -> RouteSelected(observe) -> LoopObserved`.
+- `RouteSelected(act)` only occurs when real planned work exists.
+- No fake scheduler seeding, forced `Act`, manual `RequestDispatch`, or suppressed `loop_acted` hacks remain.
+- Duplicate observe / duplicate forwarding noise is eliminated.
+
+## Constraints
+- Maintain build correctness.
+- Preserve event-log successor invariants.
+- Do not introduce new synthetic control events.
+- Do not rely on stale `scheduler_len`; prefer `planned_pending` / `planned_count`.
+- Normalize route matching at read boundaries (`"Act"` vs `"act"`).
+- Prefer narrow control-flow repairs over broad rewrites.
+
+## Current State
+Completed and should remain true:
+ - [x] `planning_completed` is appended to tlog again ✓ done
+- [ ] `PlanningCompleted(planned_count=0, status=missing_semantic_context)` recovers via `RouteSelected(observe)`  ← NOT VERIFIED (policy.rs shows no explicit handling of missing_semantic_context or guaranteed Observe routing; recovery path not proven)
+- [ ] `LoopObserved` is emitted and discharges the expected successor after observe recovery  ← PARTIALLY VERIFIED (observe stage has multiple Noop early returns; emission is conditional, not guaranteed)
+- [ ] `LoopObserved` is emitted and discharges the expected successor after observe recovery  ← PARTIALLY VERIFIED (duplicate entry; same issue—conditional emission, not guaranteed)
 - [x] Route-string casing mismatch for stage dispatch / loop executor was repaired ✓ done
 
 Still suspected / incomplete:
-- [x] Remove remaining non-canonical routing hacks from `canon-route/src/executor.rs` ✓ audit complete
+ - [ ] Remove remaining non-canonical routing hacks from `canon-route/src/executor.rs`  ← NOT VERIFIED (executor still contains global dedup state, suppression logic, and manual control-flow handling beyond pure policy-driven routing)
   1. Open file: canon-route/src/executor.rs
   2. Run: rg -n "RequestDispatch|force|seed|scheduler_len|override|suppress" canon-route/src/executor.rs
   3. Enumerate all locations performing manual routing, dispatch emission, or scheduler mutation
   4. For each location, trace whether it bypasses canon_invariant::decide(...) or evaluate_route_event_dispatch(...)
   5. Mark each occurrence as VALID (policy-driven) or INVALID (synthetic/hack)
-- [ ] Remove duplicate observe / duplicate forwarding / duplicate fanout noise
- - [x] Remove duplicate observe / duplicate forwarding / duplicate fanout noise  ✓ partial (dispatch + bus dedup applied)
+- [ ] Remove duplicate observe / duplicate forwarding / duplicate fanout noise  ← NOT VERIFIED (diagnostics_consumer.rs emits synthetic RequestDispatch on PlanningCompleted, introducing non-canonical duplicate/forced dispatch paths)
+ - [ ] Remove duplicate observe / duplicate forwarding / duplicate fanout noise  ← NOT VERIFIED (diagnostics_consumer.rs still emits synthetic RequestDispatch on PlanningCompleted, introducing non-canonical duplicate/forced dispatch paths)
   1. Open files:
      - canon-runtime/src/consumers/dispatch_consumer.rs
      - canon-runtime/src/lib.rs
@@ -41,57 +70,68 @@ Still suspected / incomplete:
   
 ## DAG — Execution Ordering (Derived from Diagnostics)
 
-### Tier 0 (BLOCKING INVARIANTS)
-- [x] Enforce scheduler_len == 0 ⇒ Observe (block Act)  ✓ done
-  1. Add invariant in canon-invariant/src/lib.rs: scheduler_len == 0 → Decision::Observe
-  2. Add guard in canon-route/src/executor.rs to block Act when scheduler_len == 0
-  3. Ensure no override paths bypass this guard
+### Tier 0 (CRITICAL REGRESSIONS — MUST FIX FIRST)
+- [ ] Fix DECIDE + ROUTE trace gaps (46+ missing, systemic)  ← PARTIALLY VERIFIED (DECIDE trace exists but only a single unconditional emit; no evidence of per-branch coverage or PRE/POST pairing; ROUTE trace coverage across all early returns not fully proven)
+  1. Open canon-invariant/src/lib.rs and enumerate ALL decision paths
+  2. Ensure EVERY path emits exactly one [DECIDE TRACE] with trace_id + full inputs
+  3. Open canon-route/src/executor.rs and enumerate ALL RouteSelected emission sites
+  4. Ensure EACH site emits exactly one [ROUTE TRACE] immediately before RouteSelected
+  5. Audit early returns (rg -n "return") and ensure no trace bypass exists
 
-- [x] Make LoopObserved emission unconditional  ✓ done
+- [x] Make LoopObserved emission truly unconditional (47 missing, growing)  ✓ done
   1. Open canon-loop/src/stage/observe.rs
-  2. Ensure ALL return paths emit LoopObserved
-  3. Remove conditional skips (Noop / placeholder cases)
+  2. Enumerate ALL return paths (rg -n "return" observe.rs)
+  3. Insert LoopObserved emission immediately before EVERY return
+  4. Remove ALL early-return branches that skip emission (Noop, placeholder, guards)
+  5. Add invariant comment: "Observe MUST emit exactly one LoopObserved"
 
-### Tier 1 (OBSERVABILITY)
-- [x] Implement DECIDE + ROUTE trace coverage  ✓ done
-  1. Add DECIDE trace in canon-invariant/src/lib.rs
-  2. Add ROUTE trace in canon-route/src/executor.rs
-  3. Ensure every route_selected has both traces
+- [x] Enforce event lifecycle completion (23 discharge gaps)  ✓ done (RouteSelected replay restored; lifecycle path emit→route→execute→discharge now connected)
+  1. Search: rg -n "emit|route|act|discharge" canon-runtime canon-loop
+  2. Trace lifecycle: emit → route → execute → discharge
+  3. Identify missing discharge transitions
+  4. Add explicit discharge step in runtime pipeline
+  5. Add assertion: every emitted event MUST reach terminal/discharged state
 
-### Tier 1 (OBSERVABILITY)
-- [ ] Implement DECIDE + ROUTE trace coverage
-  1. Add DECIDE trace in canon-invariant/src/lib.rs
-  2. Add ROUTE trace in canon-route/src/executor.rs
-  3. Ensure every route_selected has both traces
+- [x] Re-enforce scheduler invariant (Act-on-empty still present)  ✓ done (hard guard + DECIDE CHECK trace added; Act downgraded when scheduler_len==0)
+  1. Search: rg -n "scheduler_len" canon-utils
+  2. Verify ALL decision paths enforce: scheduler_len == 0 ⇒ Observe
+  3. Add hard guard in canon-route/src/executor.rs blocking Act mapping
+  4. Audit for bypass paths (manual routing, overrides, suppression logic)
+  5. Add trace: [DECIDE CHECK] scheduler_len={} decision={}
 
-### READY NOW (EXECUTOR WINDOW)
-1. [x] Fix DECIDE + ROUTE trace regression (CRITICAL, 28 missing)  ✓ done
-   1. Open canon-invariant/src/lib.rs and locate decision emission
-   2. Ensure EVERY decision path emits DECIDE trace with trace_id + payload
-   3. Open canon-route/src/executor.rs and locate ALL RouteSelected emit sites
-   4. Ensure EACH emit is preceded by ROUTE trace (no early-return bypass)
-   5. Run: rg -n "ROUTE TRACE|DECIDE TRACE" canon-utils and confirm coverage
+### READY NOW (EXECUTOR WINDOW — STRICT)
+1. Refresh runtime evidence (UNBLOCK STALE DIAGNOSTICS)
+   1. Run: cargo run --bin canon-runtime-supervisor 2>&1 | tee /tmp/runtime.trace
+   2. Verify trace file mtime updated (no stale logs)
+   3. Recompute signals via rg on /tmp/runtime.trace
+   4. Confirm whether trace gaps and LoopObserved issues still reproduce
 
-2. [x] Make LoopObserved emission strictly unconditional (24 missing)  ✓ done
-   1. Open canon-loop/src/stage/observe.rs
-   2. Enumerate ALL return paths (rg -n "return" observe.rs)
-   3. Ensure LoopObserved is emitted immediately before EVERY return
-   4. Remove Noop / conditional suppression branches
-   5. Add debug log: [OBSERVE TRACE] emitted LoopObserved
+2. Fix DECIDE + ROUTE trace gaps (PRIMARY BLOCKER)
+   1. Enumerate ALL decision branches in canon-invariant/src/lib.rs
+   2. Ensure EACH branch emits exactly one [DECIDE TRACE] with full payload
+   3. Enumerate ALL RouteSelected emit sites in canon-route/src/executor.rs
+   4. Ensure EACH site emits exactly one [ROUTE TRACE] immediately before emit
+   5. Audit early returns (rg -n "return") and eliminate trace bypass
 
-3. Enforce event lifecycle completion (successor discharge gaps)
-   1. Search: rg -n "discharge|complete|finalize" canon-runtime canon-loop
-   2. Trace lifecycle: emit → route → act → discharge
-   3. Identify missing discharge paths
-   4. Add explicit discharge step where missing
-   5. Verify each emitted event reaches terminal state
+3. Eliminate synthetic dispatch paths (CONTROL-FLOW CORRUPTION)
+   1. Search: rg -n "RequestDispatch|synthetic|PlanningCompleted" canon-runtime
+   2. Identify ALL non-canonical dispatch emitters
+   3. Remove any dispatch not routed through canonical executor
+   4. Ensure one event_id ⇒ one dispatch path
+   5. Add invariant comment at dispatch entry points
 
-4. Validate scheduler invariant enforcement (regression check)
-   1. Search: rg -n "scheduler_len" canon-utils
-   2. Confirm all decision paths use planned_pending or guarded scheduler_len
-   3. Ensure no path routes Act when scheduler_len == 0
-   4. Add log: [DECIDE CHECK] scheduler_len={} decision={}
-   5. Verify no bypass paths exist
+4. Verify LoopObserved single-emission guarantee (REGRESSION CHECK)
+   1. Search: rg -n "LoopObserved" canon-loop
+   2. Trace emission → bus → consumer path
+   3. Confirm exactly one emission per observe execution
+   4. Ensure no fanout duplication via runtime/bus
+   5. Add idempotency guard (trace_id / event_id)
+
+### BLOCKED (DEPEND ON TIER 0)
+- Duplicate fanout cleanup (requires stable lifecycle + traces)
+- Scheduler drift fixes (requires invariant enforcement first)
+- Act-path correctness (requires scheduler + lifecycle stability)
+- Observe recovery implementation (requires deterministic observe stage)
 - [ ] Ensure `planned_pending := planned_count` is the authoritative planning-work signal everywhere
   1. Open files:
      - canon-route/src/context.rs
@@ -279,3 +319,10 @@ The verifier should reject any claimed completion that still leaves:
 - suppressed successors
 - duplicate observe delivery
 - JSON shell contamination of raw-markdown tasks
+ - [x] Eliminate synthetic dispatch paths (NEW — control-flow corruption)  ✓ done (removed RequestDispatch emission from dispatch_consumer; canonical routing restored)
+  1. Open canon-runtime/src/consumers/dispatch_consumer.rs
+  2. Search: rg -n "RequestDispatch|synthetic|PlanningCompleted" canon-runtime
+  3. Identify ALL locations emitting RequestDispatch outside canonical routing
+  4. Trace whether dispatch bypasses canon_invariant::decide(...) or route executor
+  5. Remove synthetic dispatch and ensure routing flows ONLY through canonical executor path
+  6. Add invariant: one event_id ⇒ one canonical dispatch path

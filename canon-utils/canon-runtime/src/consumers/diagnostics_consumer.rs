@@ -56,21 +56,10 @@ impl EventConsumer for DiagnosticsConsumer {
 
         match event {
             // 🔥 GLOBAL FALLBACK: ensure PlanningCompleted always leads to execution
-            RuntimeEvent::PlanningCompleted(p) => {
-                return EventOutcome::emit(
-                    RuntimeEvent::RequestDispatch(canon_event::RequestDispatch {
-                        agent_id: "planner".to_string(),
-                        dispatch_id: format!("dispatch-{}", p.tick),
-                        parent_request_id: "".to_string(),
-                        task_prompt: "".to_string(),
-                        task_kind: "Act".to_string(),
-                        deps: vec![],
-                        workspace_scope: None,
-                        dispatched: false,
-                    }),
-                    file!(),
-                    line!(),
-                );
+            RuntimeEvent::PlanningCompleted(_p) => {
+                // REMOVE: synthetic RequestDispatch emission
+                // Canonical routing must proceed via RouteExecutor only
+                return EventOutcome::NoOp("planning_completed_no_synthetic_dispatch");
             }
             // 🔥 CRITICAL: RouteSelected must trigger execution
             RuntimeEvent::RouteSelected(route) => {
@@ -146,19 +135,8 @@ impl EventConsumer for DiagnosticsConsumer {
         if should_run && !dedupe {
             if let Some(em) = self.emitter.as_ref() {
                 let why = reason.unwrap_or("diagnostic_trigger");
-                if !fatal_invariant {
-                    let dispatch = canon_event::RequestDispatch {
-                        dispatch_id: format!("diagnostics-{}", canon_event::new_event_id()),
-                        parent_request_id: parent_id_str.clone(),
-                        agent_id: "canon-analyst".to_string(),
-                        task_prompt: format!("Run canon-analyst: reason={why}; inspect recent events and failures."),
-                        task_kind: "diagnostics".to_string(),
-                        deps: vec![],
-                        workspace_scope: None,
-                        dispatched: true,
-                    };
-                    em.emit_child(RuntimeEvent::RequestDispatch(dispatch), vec![trigger_id.clone()], file!(), line!());
-                }
+                // REMOVE: synthetic RequestDispatch emission from diagnostics
+                // Diagnostics must not bypass canonical RouteExecutor dispatch path
                 em.emit_child(
                     RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
                         "diagnostics_triggered",

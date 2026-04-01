@@ -46,7 +46,36 @@ fn is_error_event(event: &RuntimeEvent) -> bool {
 }
 
 fn is_control_event(_event: &RuntimeEvent) -> bool {
-    // 🔥 NUCLEAR FIX: force ALL events through async path
+    // FIX: restore control-event separation to prevent async fanout duplication
+    // LoopObserved and other control events should NOT be broadcast to all async consumers
+    match _event {
+        RuntimeEvent::LoopObserved(_)
+        | RuntimeEvent::RouteSelected(_)
+        | RuntimeEvent::LoopActed(_)
+        | RuntimeEvent::LoopPlanned(_)
+        | RuntimeEvent::LoopVerified(_) => true,
+        _ => false,
+    }
+}
+
+// DEDUPE FIX: prevent repeated LoopObserved fanout across async consumers
+#[allow(dead_code)]
+fn should_drop_duplicate(event: &RuntimeEvent) -> bool {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+
+    if let RuntimeEvent::LoopObserved(e) = event {
+        let key = format!("loop_observed:{}", e.tick);
+        if let Ok(mut seen) = seen.lock() {
+            if seen.contains(&key) {
+                return true;
+            }
+            seen.insert(key);
+        }
+    }
     false
 }
 
@@ -67,6 +96,10 @@ fn broadcast_route_selected_to_async(
     if let RuntimeEvent::RouteSelected(_) = event {
         eprintln!("[BUS FIX] broadcasting RouteSelected to async consumers");
         for c in consumers.iter() {
+            if should_drop_duplicate(event) {
+                eprintln!("[BUS DEDUPE] dropped duplicate control event");
+                continue;
+            }
             let _ = c.sender.send(EventMessage {
                 event: event.clone(),
                 event_id: event_id.clone(),
@@ -367,8 +400,9 @@ impl EventBus {
                 }
             } else {
                 {
-                    eprintln!("[ASYNC DISPATCH TRACE] try_send event kind={}", canon_event::event_kind_str(&base_event));
-                    consumer.sender.try_send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
+                    // FIX: unify dispatch path — avoid duplicate fanout behavior
+                    eprintln!("[ASYNC DISPATCH TRACE] unified send event kind={}", canon_event::event_kind_str(&base_event));
+                    consumer.sender.send(EventMessage { event: base_event.clone(), event_id: event_id.clone() }).is_ok()
                 }
             };
             if sent {

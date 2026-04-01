@@ -314,21 +314,9 @@ impl EventConsumer for DispatchConsumer {
         // 🔥 CRITICAL: prove DispatchConsumer actually sees RouteSelected
         if let RuntimeEvent::RouteSelected(route) = event {
             eprintln!("[DISPATCH TRACE] DispatchConsumer RECEIVED RouteSelected tick={}", route.tick);
-
-            return EventOutcome::emit(
-                RuntimeEvent::RequestDispatch(RequestDispatch {
-                    agent_id: "planner".to_string(),
-                    dispatch_id: format!("dispatch-final-{}", route.tick),
-                    parent_request_id: "".to_string(),
-                    task_prompt: "".to_string(),
-                    task_kind: "Act".to_string(),
-                    deps: vec![],
-                    workspace_scope: None,
-                    dispatched: false,
-                }),
-                file!(),
-                line!(),
-            );
+            // REMOVE: synthetic RequestDispatch emission
+            // Routing + dispatch must flow through canonical RouteExecutor path only
+            return EventOutcome::NoOp("route_selected_no_synthetic_dispatch");
         }
         let RuntimeEvent::RequestDispatch(req) = event else {
             return EventOutcome::NoOp("dispatch_consumer_non_dispatch");

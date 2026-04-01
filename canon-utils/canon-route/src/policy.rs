@@ -312,8 +312,7 @@ impl RouteProposal {
                 noop_reason: "route_executor_continue_act",
                 rule: DeterministicRouteRule::ContinueAct,
             },
-            // NOTE: planned_pending is currently acting as a proxy for scheduler.len()
-            // TODO: replace with ctx.scheduler.len() once scheduler is exposed in RouteContext
+            // NOTE: planned_pending is the authoritative signal for pending planned work
             Self::PlannedToAct => DeterministicRouteDecision {
                 route: RouteKind::Act,
                 // Decision logic removed — centralized in canon-invariant

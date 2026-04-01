@@ -77,7 +77,7 @@ pub async fn request_agent_json(
 }
 async fn llm_client_call_agent_json_inner(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
-    tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
+    _tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
 ) -> Result<Value> {
     let cache_key = llm_client_cache_key_for(prompt, role_schema);
     let raw = endpoint_worker::llm_worker_send_request(
@@ -94,7 +94,6 @@ async fn llm_client_call_agent_json_inner(
         phase,
         tabs,
         max_tabs,
-        tab_cooldown_ms,
     )
     .await?;
     let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
@@ -106,7 +105,7 @@ async fn llm_client_call_agent_json_inner(
 }
 async fn llm_client_call_agent_json_inner_with_req_id(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
-    tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
+    _tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
 ) -> Result<(Value, u64)> {
     let cache_key = llm_client_cache_key_for(prompt, role_schema);
     let (req_id, raw) = endpoint_worker::llm_worker_send_request_with_req_id(
@@ -123,7 +122,6 @@ async fn llm_client_call_agent_json_inner_with_req_id(
         phase,
         tabs,
         max_tabs,
-        tab_cooldown_ms,
     )
     .await?;
     let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
@@ -235,7 +233,7 @@ async fn llm_client_call_agent_raw_with_retry_inner(
 }
 async fn llm_client_call_agent_raw_inner(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, phase: &str, node_id: Option<&str>, tabs: &TabManagerHandle, max_tabs: usize,
-    tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
+    _tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
 ) -> Result<Value> {
     let cache_key = llm_client_cache_key_for(prompt, role_schema);
     let raw = endpoint_worker::llm_worker_send_request(
@@ -252,7 +250,6 @@ async fn llm_client_call_agent_raw_inner(
         phase,
         tabs,
         max_tabs,
-        tab_cooldown_ms,
     )
     .await?;
     let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
