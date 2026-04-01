@@ -938,7 +938,8 @@ fn append_action_log(role: &str, action: &Value) -> Result<()> {
 /// Returns the done reason on success, or an error on hard failure.
 /// `check_on_done`: if true, run cargo build + test before accepting done.
 async fn run_agent(
-    role: &str, system_instructions: &str, initial_prompt: String, endpoint: &LlmEndpoint, bridge: &WsBridge, workspace: &Path, _config: &CapabilityConfig, tabs: &TabManagerHandle, check_on_done: bool,
+    role: &str, system_instructions: &str, initial_prompt: String, endpoint: &LlmEndpoint, bridge: &WsBridge, workspace: &Path, _config: &CapabilityConfig, tabs: &TabManagerHandle, submit_only: bool,
+    check_on_done: bool,
 ) -> Result<String> {
     let mut step = 0usize;
     let mut last_result: Option<String> = None;
@@ -973,6 +974,7 @@ async fn run_agent(
             role,
             tabs,
             endpoint.max_tabs,
+            submit_only,
         )
         .await
         {
@@ -1219,7 +1221,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
                     if last_verifier_summary.is_empty() { "(none yet)" } else { &last_verifier_summary }
                 );
                 eprintln!("[orchestrate] cycle={} starting diagnostics", cycle + 1);
-                let _ = run_agent("diagnostics", SYSTEM_INSTRUCTIONS_DIAGNOSTICS, prompt, &ep, &bridge, &workspace, &config, &tabs, false).await?;
+            let _ = run_agent("diagnostics", SYSTEM_INSTRUCTIONS_DIAGNOSTICS, prompt, &ep, &bridge, &workspace, &config, &tabs, false, false).await?;
             }
 
             let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
@@ -1229,7 +1231,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
             let planner_prompt = format!(
                 "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n- Derive lane plans from the spec; do not change spec truth.\n\nCreate or refresh {EXECUTOR_A_PLAN_FILE} and {EXECUTOR_B_PLAN_FILE}. Emit exactly one action to begin."
             );
-            let _plan_result = run_agent("planner", SYSTEM_INSTRUCTIONS_PLANNER, planner_prompt, &planner_ep, &bridge, &workspace, &config, &tabs, false).await?;
+            let _plan_result = run_agent("planner", SYSTEM_INSTRUCTIONS_PLANNER, planner_prompt, &planner_ep, &bridge, &workspace, &config, &tabs, false, false).await?;
 
             let exec_a_plan = std::fs::read_to_string(&exec_a_plan_path).with_context(|| format!("failed to read {EXECUTOR_A_PLAN_FILE}"))?;
             let exec_a_ep = find_endpoint(&config, "mini_agent")?.clone();
@@ -1257,6 +1259,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
                     &workspace,
                     &config,
                     &tabs_exec_a,
+                    true,
                     false,
                 )
                 .await?;
@@ -1276,6 +1279,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
                     &config,
                     &tabs,
                     false,
+                    false,
                 )
                 .await?;
 
@@ -1292,6 +1296,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
                     &workspace,
                     &config,
                     &tabs_exec_b,
+                    true,
                     false,
                 )
                 .await?;
@@ -1310,6 +1315,7 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
                     &workspace,
                     &config,
                     &tabs,
+                    false,
                     false,
                 )
                 .await?;
@@ -1385,7 +1391,19 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
             format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_A_PLAN_FILE}):\n{primary_input}\n\nDo not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin.")
         };
 
-        let reason = run_agent(role, instructions, initial_prompt, &endpoint, &bridge, &workspace, &config, &tabs, true).await?;
+        let submit_only = role == "mini_agent" || role == "executor_a" || role == "executor_b";
+        let reason = run_agent(
+            role,
+            instructions,
+            initial_prompt,
+            &endpoint,
+            &bridge,
+            &workspace,
+            &config,
+            &tabs,
+            submit_only,
+            false,
+        ).await?;
         println!("done: {reason}");
         Ok(())
     }

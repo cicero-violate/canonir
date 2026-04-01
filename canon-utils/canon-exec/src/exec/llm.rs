@@ -112,6 +112,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                     "relay",
                                     &tabs,
                                     endpoint.max_tabs,
+                                    false,
                                 )
                                 .await
                             })

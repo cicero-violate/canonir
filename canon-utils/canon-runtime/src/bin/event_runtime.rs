@@ -260,6 +260,9 @@ fn handle_event_msg(
             *processed = events.len();
         }
     }
+    // HEARTBEAT: ensure at least one event per cycle to prevent stall
+    // Canonical requirement: runtime must not go silent
+    let _ = runtime.emit_tick();
     Ok(())
 }
 
@@ -647,6 +650,8 @@ fn main() -> Result<()> {
     let mut last_saved_processed = processed;
 
     loop {
+        // HEARTBEAT: ensure at least one event per loop cycle to prevent silent stall
+        let _ = runtime.emit_tick();
         // Step 1: drain any events emitted by consumer threads (e.g. CapabilityCompleted).
         // These sit in emitter_rx until W processes them; they do NOT arrive via P2/q_event_rx.
         runtime.flush_emitted_events()?;

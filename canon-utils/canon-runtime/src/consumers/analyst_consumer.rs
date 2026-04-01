@@ -218,9 +218,8 @@ impl EventConsumer for AnalystConsumer {
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
             | RuntimeEvent::Llm(_)
-            | RuntimeEvent::RequestDispatch(_) => {
-                // IGNORE: RequestDispatch deprecated
-                EventOutcome::NoOp("request_dispatch_ignored")
+            => {
+                EventOutcome::NoOp("non_actionable_event")
             }
             | RuntimeEvent::SubTaskResult(_)
             | RuntimeEvent::Analysis(_)

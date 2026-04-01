@@ -94,6 +94,7 @@ async fn llm_client_call_agent_json_inner(
         phase,
         tabs,
         max_tabs,
+        false,
     )
     .await?;
     let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
@@ -122,6 +123,7 @@ async fn llm_client_call_agent_json_inner_with_req_id(
         phase,
         tabs,
         max_tabs,
+        false,
     )
     .await?;
     let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
@@ -250,6 +252,7 @@ async fn llm_client_call_agent_raw_inner(
         phase,
         tabs,
         max_tabs,
+        false,
     )
     .await?;
     let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";

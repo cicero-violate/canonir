@@ -157,7 +157,6 @@ impl EventConsumer for ForwardConsumer {
                 // FIX: DO NOT forward Bash → prevents duplicate execution
                 eprintln!("[FORWARD FIX] skipping Bash forward");
             }
-            | RuntimeEvent::RequestDispatch(_)
             | RuntimeEvent::SubTaskResult(_)
             | RuntimeEvent::Analysis(_)
             | RuntimeEvent::RuntimeStateUpdated(_)

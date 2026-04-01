@@ -80,6 +80,7 @@ pub async fn run(question: &str, tlog_path: &str) -> Result<()> {
             "analyst", // phase
             &tabs,
             endpoint.max_tabs,
+            false,
         )
         .await?;
 

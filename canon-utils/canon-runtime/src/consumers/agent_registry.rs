@@ -114,10 +114,6 @@ impl EventConsumer for AgentRegistryConsumer {
                 reg.upsert_card(payload);
                 EventOutcome::NoOp("agent_registered")
             }
-            RuntimeEvent::RequestDispatch(_) => {
-                // IGNORE: RequestDispatch deprecated
-                EventOutcome::NoOp("request_dispatch_ignored")
-            }
             RuntimeEvent::SubTaskResult(SubTaskResult { agent_id, success, error, .. }) => {
                 if *success {
                     reg.mark_idle(agent_id);

@@ -541,9 +541,8 @@ impl EventConsumer for RouteExecutor {
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
             | RuntimeEvent::Llm(_)
-            | RuntimeEvent::RequestDispatch(_) => {
-                // IGNORE: RequestDispatch deprecated
-                EventOutcome::NoOp("request_dispatch_ignored")
+            => {
+                EventOutcome::NoOp("ignored_event_kind")
             }
             | RuntimeEvent::SubTaskResult(_)
             | RuntimeEvent::Analysis(_)

@@ -65,6 +65,16 @@
       console.log("[CS] TEMP_CHAT_DONE from page");
       chrome.runtime.sendMessage({ type: "TEMP_CHAT_DONE" }, () => void chrome.runtime.lastError);
     }
+    if (event.data?.type === "SUBMIT_ACK") {
+      chrome.runtime.sendMessage(
+        {
+          type: "SUBMIT_ACK",
+          turn_id: event.data.turn_id ?? lastTurnId ?? null,
+          ts: event.data.ts ?? Date.now()
+        },
+        () => void chrome.runtime.lastError
+      );
+    }
   });
 
   // Background → Page: prompt injection

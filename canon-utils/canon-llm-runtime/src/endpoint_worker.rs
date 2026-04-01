@@ -28,6 +28,7 @@ pub struct LlmWorkItem {
     pub prompt: String,
     pub role_schema: String,
     pub phase: String,
+    pub submit_only: bool,
     pub response: oneshot::Sender<Result<String>>,
 }
 struct LlmWorker {
@@ -63,7 +64,11 @@ impl LlmWorker {
             response_router::response_router_register(req.req_id, node_id).await;
         }
         tab_manager_log_llm(format!("phase={} endpoint={} req_id={} send_turn_start", req.phase, self.endpoint_id, req.req_id));
-        let result = self.send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, req.prompt, req.role_schema).await;
+        let result = if req.submit_only {
+            self.submit_turn_only(&req.phase, req.req_id, req.prompt, req.role_schema).await
+        } else {
+            self.send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, req.prompt, req.role_schema).await
+        };
         if let Ok(raw) = result.as_ref() {
             if let Some(key) = req.cache_key {
                 self.cache.insert(key, raw.clone());
@@ -160,6 +165,29 @@ impl LlmWorker {
         }
         Err(anyhow::anyhow!("llm send_turn exhausted retries"))
     }
+
+    async fn submit_turn_only(&mut self, _phase: &str, req_id: u64, prompt: String, role_schema: String) -> Result<String> {
+        let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
+        let include_role = !role_schema.trim().is_empty() && (!self.stateful || self.tabs_with_role_sent.insert(tab_id));
+        let raw_prompt = if include_role { format!("{}\n\n{}", role_schema.trim_end(), prompt) } else { prompt };
+        let full_prompt = if raw_prompt.len() > 120_000 {
+            let mut safe = 120_000usize;
+            while safe > 0 && !raw_prompt.is_char_boundary(safe) {
+                safe -= 1;
+            }
+            let cut = raw_prompt[..safe].rfind('\n').unwrap_or(safe);
+            let mut s = raw_prompt[..cut].to_string();
+            s.push_str("\n... [prompt truncated]\n");
+            s
+        } else {
+            raw_prompt
+        };
+
+        tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
+        self.bridge.submit_turn(tab_id, &self.url, full_prompt).await?;
+        tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
+        Ok(format!("{{\"submit_ack\":true,\"req_id\":{req_id}}}"))
+    }
 }
 
 fn should_retry_send_turn(err: &WsBridgeError) -> bool {
@@ -167,10 +195,10 @@ fn should_retry_send_turn(err: &WsBridgeError) -> bool {
 }
 pub async fn llm_worker_send_request(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
-    phase: &str, tabs: &TabManagerHandle, max_tabs: usize,
+    phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool,
 ) -> Result<String> {
     let (req_id, raw) =
-        llm_worker_send_request_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, cache_key, bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs)
+        llm_worker_send_request_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, cache_key, bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs, submit_only)
             .await?;
     let _ = req_id;
     Ok(raw)
@@ -178,7 +206,7 @@ pub async fn llm_worker_send_request(
 
 pub async fn llm_worker_send_request_with_req_id(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
-    phase: &str, tabs: &TabManagerHandle, max_tabs: usize,
+    phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool,
 ) -> Result<(u64, String)> {
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
@@ -212,6 +240,7 @@ pub async fn llm_worker_send_request_with_req_id(
         prompt: prompt.to_string(),
         role_schema: role_schema.to_string(),
         phase: phase.to_string(),
+        submit_only,
         response: tx,
     };
     sender.send(req).await.map_err(|_| anyhow::anyhow!("endpoint worker closed"))?;

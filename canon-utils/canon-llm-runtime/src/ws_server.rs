@@ -8,6 +8,7 @@
 //!   { "type": "TAB_OPENED",     "tabId": n, "url": "...", "reqId"?: n }
 //!   { "type": "TAB_CLOSED",     "tabId": n }
 //!   { "type": "TAB_READY",      "tabId": n, "url": "...", "reqId"?: n }
+//!   { "type": "SUBMIT_ACK",     "tabId": n, "turnId"?: n, "ts"?: n }
 //!   { "type": "INBOUND_MESSAGE","tabId": n, "payload": "..." }
 //!   { "type": "PING" }                          ← keepalive, ignored
 //!
@@ -86,6 +87,8 @@ struct ServerState {
     pending: HashMap<u32, oneshot::Sender<String>>,
     /// tabId → expected turnId for inbound chunk filtering.
     pending_turn_id: HashMap<u32, u64>,
+    /// tabId → oneshot waiting for submit acknowledgment.
+    pending_submit: HashMap<u32, oneshot::Sender<()>>,
 
     /// reqId → oneshot waiting for TAB_OPENED confirmation.
     pending_open: HashMap<u64, oneshot::Sender<u32>>,
@@ -122,6 +125,7 @@ impl ServerState {
             tab_assemblers: HashMap::new(),
             pending: HashMap::new(),
             pending_turn_id: HashMap::new(),
+            pending_submit: HashMap::new(),
             pending_open: HashMap::new(),
             pending_new_chat: HashMap::new(),
             pending_temp_chat: HashMap::new(),
@@ -202,6 +206,38 @@ impl WsBridge {
 
         match tokio::time::timeout(std::time::Duration::from_secs(self.response_timeout_secs), rx).await {
             Ok(Ok(text)) => Ok(text),
+            Ok(Err(_)) => Err(WsBridgeError::Cancelled),
+            Err(_) => Err(WsBridgeError::Timeout),
+        }
+    }
+
+    pub async fn submit_turn(&self, tab_id: u32, url: &str, text: String) -> Result<u64, WsBridgeError> {
+        let (tx, rx) = oneshot::channel::<()>();
+        let turn_id = self.next_turn_id.fetch_add(1, Ordering::Relaxed);
+
+        {
+            let mut st = self.state.lock().await;
+            st.pending_submit.insert(tab_id, tx);
+            st.pending_turn_id.insert(tab_id, turn_id);
+            if !st.tab_assemblers.contains_key(&tab_id) {
+                let site = SiteType::from_url(url);
+                st.tab_assemblers.insert(tab_id, FrameAssembler::new(site));
+            } else if let Some(asm) = st.tab_assemblers.get_mut(&tab_id) {
+                asm.reset();
+            }
+
+            let frame = json!({ "type": "TURN", "tabId": tab_id, "text": text, "turnId": turn_id });
+
+            match st.send(frame.clone()) {
+                Ok(()) => {}
+                Err(_) => {
+                    st.turn_replay_queue.push(frame);
+                }
+            }
+        }
+
+        match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+            Ok(Ok(())) => Ok(turn_id),
             Ok(Err(_)) => Err(WsBridgeError::Cancelled),
             Err(_) => Err(WsBridgeError::Timeout),
         }

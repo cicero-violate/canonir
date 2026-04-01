@@ -1,6 +1,6 @@
 use crate::causal::update_causal_graph;
 use canon_decision::JournalLine;
-use canon_event::{LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, RuntimeEvent, SubTaskResult, ToolCall, ToolResult, EventOutcome};
+use canon_event::{LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, RuntimeEvent, SubTaskResult, ToolCall, ToolResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
 use canon_judgment::{LlmSignals, RuntimeSignals};
 use canon_semantic_state::{
@@ -395,10 +395,7 @@ impl RouteContext {
                 }
                 update_causal_graph(&mut self.causal_graph, event);
             }
-            RuntimeEvent::RequestDispatch(_) => {
-                // IGNORE: RequestDispatch deprecated
-                EventOutcome::NoOp("request_dispatch_ignored");
-            }
+            // RequestDispatch fully removed — no handling required
             RuntimeEvent::ErrorOccurred(err) if err.kind == "invalid_plan_batch" => {
                 self.consecutive_invalid_plan_batches = self.consecutive_invalid_plan_batches.saturating_add(1);
                 self.objective_trend_state.record_invalid_plan_event();

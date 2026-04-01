@@ -246,7 +246,6 @@ impl EventConsumer for GoalGenConsumer {
             | (_, RuntimeEvent::File(_))
             | (_, RuntimeEvent::Bash(_))
             | (_, RuntimeEvent::Llm(_))
-            | (_, RuntimeEvent::RequestDispatch(_))
             | (_, RuntimeEvent::SubTaskResult(_))
             | (_, RuntimeEvent::Analysis(_))
             | (_, RuntimeEvent::RuntimeStateUpdated(_))

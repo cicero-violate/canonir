@@ -93,6 +93,31 @@ function sendToTab(tabId, message, attempts = 6, delayMs = 150) {
   });
 }
 
+function focusTabAndSubmit(tabId, payload) {
+  chrome.tabs.get(tabId, (tab) => {
+    const err = chrome.runtime.lastError;
+    if (err || !tab) {
+      console.warn(`[BG] focusTabAndSubmit tab=${tabId} lookup failed:`, err?.message);
+      sendToTab(tabId, { type: "OUTBOUND_SUBMIT", payload });
+      return;
+    }
+
+    const submit = () => sendToTab(tabId, { type: "OUTBOUND_SUBMIT", payload });
+
+    if (tab.windowId) {
+      chrome.windows.update(tab.windowId, { focused: true }, () => {
+        chrome.tabs.update(tabId, { active: true }, () => {
+          submit();
+        });
+      });
+    } else {
+      chrome.tabs.update(tabId, { active: true }, () => {
+        submit();
+      });
+    }
+  });
+}
+
 // ── Content script → Background ──────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const tabId = sender?.tab?.id;
@@ -144,6 +169,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "TEMP_CHAT_DONE") {
     console.log("[BG] TEMP_CHAT_DONE -> Rust", { tabId });
     sendToOwner(tabId, { type: "TEMP_CHAT_DONE", tabId });
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message?.type === "SUBMIT_ACK") {
+    sendToOwner(tabId, {
+      type: "SUBMIT_ACK",
+      tabId,
+      turnId: message.turn_id ?? null,
+      ts: message.ts ?? Date.now()
+    });
     sendResponse({ ok: true });
     return true;
   }
@@ -219,24 +255,10 @@ function handleRustMessage(msg, sendFn) {
     if (!targetTabId) return;
     console.log("[BG] TURN → sendToTab", targetTabId, "text length:", msg.text?.length);
     const turnId = msg.turnId ?? null;
-    chrome.tabs.get(targetTabId, (tab) => {
-      const err = chrome.runtime.lastError;
-      if (err || !tab) {
-        console.warn("[BG] TURN tab lookup failed:", err?.message);
-        sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto", turn_id: turnId } });
-        return;
-      }
-      if (tab.windowId) {
-        chrome.windows.update(tab.windowId, { focused: true }, () => {
-          chrome.tabs.update(targetTabId, { active: true }, () => {
-            sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto", turn_id: turnId } });
-          });
-        });
-      } else {
-        chrome.tabs.update(targetTabId, { active: true }, () => {
-          sendToTab(targetTabId, { type: "OUTBOUND_SUBMIT", payload: { text: msg.text, mode: "auto", turn_id: turnId } });
-        });
-      }
+    focusTabAndSubmit(targetTabId, {
+      text: msg.text,
+      mode: "auto",
+      turn_id: turnId
     });
     return;
   }

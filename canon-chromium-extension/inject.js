@@ -144,7 +144,7 @@
 
   function submitViaEnter() {
     const editor = document.querySelector('div[contenteditable="true"]');
-    if (!editor) return;
+    if (!editor) return false;
 
     editor.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -156,6 +156,7 @@
         cancelable: true
       })
     );
+    return true;
   }
 
   window.addEventListener("message", (event) => {
@@ -201,8 +202,11 @@
 
         if (sendBtn && !sendBtn.disabled) {
           sendBtn.click();
+          window.postMessage({ type: "SUBMIT_ACK", turn_id: window.__currentTurnId, ts: Date.now() }, "*");
         } else {
-          submitViaEnter();
+          if (submitViaEnter()) {
+            window.postMessage({ type: "SUBMIT_ACK", turn_id: window.__currentTurnId, ts: Date.now() }, "*");
+          }
         }
       }, 100);
     }

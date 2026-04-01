@@ -824,9 +824,8 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
             | RuntimeEvent::Llm(_)
-            | RuntimeEvent::RequestDispatch(_) => {
-                // IGNORE: RequestDispatch deprecated
-                return EventOutcome::NoOp("request_dispatch_ignored");
+            => {
+                return EventOutcome::NoOp("ignored_event_kind");
             }
             | RuntimeEvent::Analysis(_)
             | RuntimeEvent::NodeReady(_)
