@@ -7,7 +7,7 @@ cargo run -p canon-mini-agent --bin canon-mini-agent -- --orchestrate --start ex
 cargo run -p canon-mini-agent --bin canon-mini-agent -- --orchestrate --start verifier
 
 while true; do
-  cargo run -p canon-mini-agent --bin canon-mini-agent -- --orchestrate --start executor
+  cargo run -p canon-mini-agent --bin canon-mini-agent -- --orchestrate --start planner
   echo "Process exited. Restarting..."
   sleep 1
 done
