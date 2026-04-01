@@ -74,124 +74,23 @@ impl EventConsumer for ForwardConsumer {
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
-        // 🔥 CRITICAL FIX: top-level catch — ALWAYS emit RequestDispatch on RouteSelected
-        if let RuntimeEvent::RouteSelected(route) = event {
-            eprintln!("[DISPATCH FIX TOP] forcing RequestDispatch emission");
-
-            self.parent.emit_with_parents(
-                RuntimeEvent::RequestDispatch(canon_event::RequestDispatch {
-                    agent_id: "planner".to_string(),
-                    dispatch_id: format!("dispatch-top-{}", route.tick),
-                    parent_request_id: "".to_string(),
-                    task_prompt: "".to_string(),
-                    task_kind: "Act".to_string(),
-                    deps: vec![],
-                    workspace_scope: None,
-                    dispatched: false,
-                }),
-                vec![trigger_id.clone()],
-                file!(),
-                line!(),
-            );
-        }
-        // 🔥 CRITICAL FIX: RouteSelected must trigger RequestDispatch
-        if let RuntimeEvent::RouteSelected(route) = event {
-            eprintln!("[DISPATCH FIX] emitting RequestDispatch from ForwardConsumer");
-
-            // 🔥 CRITICAL: emit via parent bus directly to guarantee dispatch
-            self.parent.emit_with_parents(
-                RuntimeEvent::RequestDispatch(canon_event::RequestDispatch {
-                    agent_id: "planner".to_string(),
-                    dispatch_id: format!("dispatch-from-route-{}", route.tick),
-                    parent_request_id: "".to_string(),
-                    task_prompt: "".to_string(),
-                    task_kind: "Act".to_string(),
-                    deps: vec![],
-                    workspace_scope: None,
-                    dispatched: false,
-                }),
-                vec![trigger_id.clone()],
-                file!(),
-                line!(),
-            );
-
-            // 🔥 FIX: do NOT return — allow downstream processing to continue
-        }
         eprintln!("[DISPATCH TRACE] ForwardConsumer received event={:?} trigger_id={:?}", event, trigger_id);
 
         // FIX: ensure LoopPlanned propagates to parent bus
         if let RuntimeEvent::LoopPlanned(_) = event {
             self.parent.emit_with_parents(event.clone(), vec![trigger_id.clone()], file!(), line!());
         }
-        // RECOVERY: force LoopObserved on ErrorOccurred to unblock pipeline
-        if let RuntimeEvent::ErrorOccurred(err) = event {
-            eprintln!("[DISPATCH TRACE] forcing LoopObserved after ErrorOccurred");
-            return EventOutcome::emit(
-                RuntimeEvent::LoopObserved(LoopObserved {
-                    tick: 0,
-                    error_count: 1,
-                    warning_count: 0,
-                    compiler_errors: vec![serde_json::Value::String(err.message.clone())],
-                    goal_text: Some(String::new()),
-                    semantic_summary: Default::default(),
-                    observe_diagnostics: vec![],
-                }),
-                file!(),
-                line!(),
-            );
+        // FIX: do NOT force LoopObserved here — must respect invariant ordering
+        if let RuntimeEvent::ErrorOccurred(_err) = event {
+            eprintln!("[DISPATCH FIX] ErrorOccurred received — no forced observe");
+            return EventOutcome::NoOp("error_passthrough");
         }
         let forward = |parent: &EventEmitterHandle, e: RuntimeEvent| {
             parent.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
         };
         match event {
-            // IMPORTANT: handle RouteSelected FIRST to avoid it being swallowed by earlier patterns
-            RuntimeEvent::RouteSelected(r) => {
-                if r.approved_route == "Act" {
-                    eprintln!("[DISPATCH TRACE] RouteSelected → emitting RequestDispatch (fix)");
-
-                    // forward original event
-                    forward(&self.parent, event.clone());
-
-                    // ALSO immediately emit LoopPlanned to guarantee execution kick-off
-                    let _ = self.parent.emit_with_parents(
-                        RuntimeEvent::LoopPlanned(LoopPlanned {
-                            tick: r.tick,
-                            action_kind: "run_command".to_string(),
-                            action_payload: serde_json::json!({}),
-                            reason: "forced-after-dispatch".to_string(),
-                            llm_request_id: None,
-                            signals: None,
-                            trace_id: None,
-                            execution_id: None,
-                            span_id: None,
-                            parent_span_id: None,
-                            plan_id: None,
-                            plan_step_id: None,
-                            action_id: None,
-                            depends_on: vec![],
-                        }),
-                        vec![trigger_id.clone()],
-                        file!(),
-                        line!(),
-                    );
-
-                    // (removed invalid LoopActed emission — struct fields mismatch)
-
-                    return EventOutcome::emit(
-                        RuntimeEvent::RequestDispatch(RequestDispatch {
-                            dispatch_id: format!("dispatch-{}", r.tick),
-                            agent_id: "planner".to_string(),
-                            parent_request_id: "root".to_string(),
-                            task_prompt: r.prompt.clone(),
-                            task_kind: "run_command".to_string(),
-                            deps: vec![],
-                            dispatched: true,
-                            workspace_scope: None,
-                        }),
-                        file!(),
-                        line!(),
-                    );
-                }
+            RuntimeEvent::RouteSelected(_) => {
+                forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopObserved(_) => {}
             RuntimeEvent::LoopPlanned(p) => {
@@ -200,7 +99,9 @@ impl EventConsumer for ForwardConsumer {
                         v.push(id.clone());
                     }
                 }
+                eprintln!("[DISPATCH TRACE] forwarding LoopPlanned without bash rewrite");
                 forward(&self.parent, event.clone());
+                return EventOutcome::NoOp("loop_planned_forwarded");
             }
             RuntimeEvent::LoopActed(a) => {
                 if let Some(id) = &a.action_id {
@@ -211,28 +112,8 @@ impl EventConsumer for ForwardConsumer {
                 forward(&self.parent, event.clone());
             }
             RuntimeEvent::PlanningCompleted(_) => {
-                // FIX: bypass routing and go directly to execution planning
-                eprintln!("[DISPATCH TRACE] emitting LoopPlanned after PlanningCompleted");
-                return EventOutcome::emit(
-                    RuntimeEvent::LoopPlanned(LoopPlanned {
-                        tick: 0,
-                        action_kind: "run_command".to_string(),
-                        action_payload: serde_json::json!({}),
-                        reason: "auto-act-from-planning".to_string(),
-                        llm_request_id: None,
-                        signals: None,
-                        trace_id: None,
-                        execution_id: None,
-                        span_id: None,
-                        parent_span_id: None,
-                        plan_id: None,
-                        plan_step_id: None,
-                        action_id: None,
-                        depends_on: vec![],
-                    }),
-                    file!(),
-                    line!(),
-                );
+                // FIX: do NOT auto-execute — let RouteSelected decide next step
+                return EventOutcome::NoOp("planning_completed_passthrough");
             }
             RuntimeEvent::LoopVerified(_) | RuntimeEvent::ToolCall(_) | RuntimeEvent::ToolResult(_) | RuntimeEvent::ToolBatchSettled(_) => {
                 forward(&self.parent, event.clone());
@@ -274,10 +155,13 @@ impl EventConsumer for ForwardConsumer {
             | RuntimeEvent::RouteTick(_)
             | RuntimeEvent::Cargo(_)
             | RuntimeEvent::File(_)
-            | RuntimeEvent::Bash(_)
             | RuntimeEvent::Llm(_) => {
-                // FIX: Llm events must be forwarded so PlanningCompleted can be observed downstream
+                // Only LLM events should be forwarded
                 forward(&self.parent, event.clone());
+            }
+            | RuntimeEvent::Bash(_) => {
+                // FIX: DO NOT forward Bash → prevents duplicate execution
+                eprintln!("[FORWARD FIX] skipping Bash forward");
             }
             | RuntimeEvent::RequestDispatch(_)
             | RuntimeEvent::SubTaskResult(_)
@@ -455,24 +339,6 @@ impl EventConsumer for DispatchConsumer {
                 line!(),
             );
         }
-        // 🔥 GLOBAL FIX: ensure RouteSelected ALWAYS produces RequestDispatch
-        if let RuntimeEvent::RouteSelected(route) = event {
-            eprintln!("[DISPATCH TRACE] TOP-LEVEL RouteSelected → emitting RequestDispatch");
-            return EventOutcome::emit(
-                RuntimeEvent::RequestDispatch(RequestDispatch {
-                    agent_id: "planner".to_string(),
-                    dispatch_id: format!("dispatch-top-{}", route.tick),
-                    parent_request_id: "".to_string(),
-                    task_prompt: "".to_string(),
-                    task_kind: "Act".to_string(),
-                    deps: vec![],
-                    workspace_scope: None,
-                    dispatched: false,
-                }),
-                file!(),
-                line!(),
-            );
-        }
         let RuntimeEvent::RequestDispatch(req) = event else {
             return EventOutcome::NoOp("dispatch_consumer_non_dispatch");
         };
@@ -493,4 +359,4 @@ impl EventConsumer for DispatchConsumer {
         EventOutcome::NoOp("dispatch_consumer_spawned")
     }
 }
-use canon_event::{LoopPlanned, RouteSelected};
+use canon_event::RouteSelected;

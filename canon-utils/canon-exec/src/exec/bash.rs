@@ -73,22 +73,38 @@ impl Executable for BashInvoke {
     fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
         let cwd = self.cwd.unwrap_or_else(|| ".".to_string());
         if let Some(tx) = BASH_WORKER_TX.read().unwrap().as_ref() {
-            let _ = tx.send(BashWork { request_id: self.request_id, cmd: self.cmd, cwd, emitter: ctx.emitter, trigger_id: ctx.trigger_id });
-            Ok(ExecutionResult::Deferred)
+            match tx.send(BashWork {
+                request_id: self.request_id.clone(),
+                cmd: self.cmd.clone(),
+                cwd: cwd.clone(),
+                emitter: ctx.emitter.clone(),
+                trigger_id: ctx.trigger_id.clone(),
+            }) {
+                Ok(_) => {
+                    eprintln!("[BASH] sent to worker");
+                    return Ok(ExecutionResult::Deferred);
+                }
+                Err(e) => {
+                    eprintln!("[BASH ERROR] worker send failed: {:?}", e);
+                    // fall through to fallback
+                }
+            }
         } else {
-            // Fallback inline execution if worker is not initialized.
-            std::fs::create_dir_all(&cwd).ok();
-            let output = Command::new("bash").arg("-lc").arg(&self.cmd).current_dir(&cwd).output()?;
-            Ok(ExecutionResult::Emit(RuntimeEvent::CapabilityCompleted(CapabilityCompleted {
-                request_id: self.request_id,
-                capability: "bash",
-                result: CapabilityResult::Process(ProcessResult {
-                    status: output.status.code().unwrap_or(-1),
-                    success: output.status.success(),
-                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                }),
-            })))
+            eprintln!("[BASH] worker not initialized, using fallback");
         }
+
+        // Fallback inline execution
+        std::fs::create_dir_all(&cwd).ok();
+        let output = Command::new("bash").arg("-lc").arg(&self.cmd).current_dir(&cwd).output()?;
+        Ok(ExecutionResult::Emit(RuntimeEvent::CapabilityCompleted(CapabilityCompleted {
+            request_id: self.request_id,
+            capability: "bash",
+            result: CapabilityResult::Process(ProcessResult {
+                status: output.status.code().unwrap_or(-1),
+                success: output.status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            }),
+        })))
     }
 }

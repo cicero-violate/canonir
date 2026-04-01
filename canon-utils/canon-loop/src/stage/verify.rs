@@ -9,17 +9,15 @@ use canon_semantic_state::FailureScopeKind;
 use crate::{context::LoopContext, result::LoopStageResult};
 
 pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> {
-    #[cfg(feature = "trace")]
-    eprintln!("[TRACE] {}:{} {} - enter verify::execute", file!(), line!(), module_path!());
-    #[cfg(feature = "trace")]
+    // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+    eprintln!("[ENTER] {}:{} {} - verify::execute", file!(), line!(), module_path!());
     struct __VerifyExitTraceGuard;
-    #[cfg(feature = "trace")]
     impl Drop for __VerifyExitTraceGuard {
         fn drop(&mut self) {
-            eprintln!("[TRACE] {}:{} {} - exit verify::execute", file!(), line!(), module_path!());
+            // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+            eprintln!("[EXIT] {}:{} {} - verify::execute", file!(), line!(), module_path!());
         }
     }
-    #[cfg(feature = "trace")]
     let _exit_guard = __VerifyExitTraceGuard;
     let trace_id = Some(uuid::Uuid::new_v4().to_string());
     let execution_id = Some(uuid::Uuid::new_v4().to_string());
@@ -71,7 +69,7 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext) -> anyhow::Result<LoopS
         passed,
     };
 
-    #[cfg(feature = "trace")]
+    // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
     eprintln!("[TRACE] {}:{} {} - exit verify::execute", file!(), line!(), module_path!());
     let policy_update = meta_invariant_all_results_update_policy(verified.passed, verified.compiler_clean, &verified.diagnostics);
     let verifier_policy_updated = VerifierPolicyUpdated {

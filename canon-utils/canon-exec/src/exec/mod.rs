@@ -27,6 +27,7 @@ pub trait Executable {
     fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult>;
 }
 
+#[derive(Debug)]
 pub enum ExecutableEvent {
     Edit(EditEvent),
     Cargo(CargoEvent),
@@ -38,6 +39,7 @@ pub enum ExecutableEvent {
 
 impl ExecutableEvent {
     pub fn execute(self, ctx: ExecutionContext) -> anyhow::Result<ExecutionResult> {
+        eprintln!("[EXEC CORE] executing: {:?}", self);
         match self {
             ExecutableEvent::Edit(e) => e.execute(ctx),
             ExecutableEvent::Cargo(e) => e.execute(ctx),

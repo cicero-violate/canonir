@@ -39,7 +39,12 @@ pub fn evaluate_execution_policy(event: &ExecutableEvent) -> ExecutionPolicyOutc
             let destructive = ["rm ", "git reset", "git clean", "chmod ", "chown ", "sudo "].iter().any(|pattern| cmd.contains(pattern));
             if destructive {
                 ExecutionPolicyOutcome { decision: ExecutionPolicyDecision::Forbid, risk: ExecutionRisk::High, reason: "destructive shell command requires explicit higher-level approval" }
-            } else if cmd.starts_with("cargo check") || cmd.starts_with("rg ") || cmd.starts_with("ls ") || cmd.starts_with("cat ") {
+            } else if cmd.starts_with("cargo check")
+                || cmd.starts_with("rg ")
+                || cmd.starts_with("ls ")
+                || cmd.starts_with("cat ")
+                || cmd.starts_with("echo ")
+            {
                 ExecutionPolicyOutcome { decision: ExecutionPolicyDecision::Allow, risk: ExecutionRisk::Low, reason: "shell command is read-only or validation-oriented" }
             } else {
                 ExecutionPolicyOutcome { decision: ExecutionPolicyDecision::Review, risk: ExecutionRisk::High, reason: "generic shell command requires policy review" }

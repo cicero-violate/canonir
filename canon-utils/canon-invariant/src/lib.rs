@@ -133,6 +133,9 @@ pub enum ConstraintDecision {
 /// CENTRALIZED decision function (single source of truth)
 pub fn decide(state: DecisionState) -> Decision {
     // SINGLE SOURCE OF TRUTH: decision depends ONLY on scheduler_len + has_plan
+    // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+    static TRACE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let trace_id = TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let decision = if state.scheduler_len == 0 && !state.has_plan {
         Decision::Plan
     } else if state.scheduler_len > 0 {
@@ -142,7 +145,17 @@ pub fn decide(state: DecisionState) -> Decision {
     };
     // ensure impossible state never occurs
     debug_assert!(!(state.scheduler_len == 0 && matches!(decision, Decision::Act)));
-    eprintln!("[DECIDE TRACE] {}:{} {} fn=decide scheduler_len={} has_plan={} decision={:?}", file!(), line!(), module_path!(), state.scheduler_len, state.has_plan, decision);
+    // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+    eprintln!(
+        "[DECIDE TRACE] trace_id={} {}:{} {} fn=decide scheduler_len={} has_plan={} decision={:?}",
+        trace_id,
+        file!(),
+        line!(),
+        module_path!(),
+        state.scheduler_len,
+        state.has_plan,
+        decision
+    );
     decision
 }
 

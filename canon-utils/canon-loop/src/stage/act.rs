@@ -33,17 +33,15 @@ struct GraphProofOutcome {
 }
 
 pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
-    #[cfg(feature = "trace")]
-    eprintln!("[TRACE] {}:{} {} - enter act::execute_dispatch", file!(), line!(), module_path!());
-    #[cfg(feature = "trace")]
+    // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+    eprintln!("[ENTER] {}:{} {} - act::execute_dispatch", file!(), line!(), module_path!());
     struct __ActExitTraceGuard;
-    #[cfg(feature = "trace")]
     impl Drop for __ActExitTraceGuard {
         fn drop(&mut self) {
-            eprintln!("[TRACE] {}:{} {} - exit act::execute_dispatch", file!(), line!(), module_path!());
+            // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+            eprintln!("[EXIT] {}:{} {} - act::execute_dispatch", file!(), line!(), module_path!());
         }
     }
-    #[cfg(feature = "trace")]
     let _exit_guard = __ActExitTraceGuard;
     // FIX: scheduler empty after bootstrap — allow Act to continue without forcing emit
     if ctx.scheduler.len() == 0 {

@@ -191,11 +191,6 @@ impl EventRuntime {
         let mut processed = 0usize;
         for event in events {
             if let AnyEvent::Canon(canon) = event {
-                // 🔥 CRITICAL FIX: completely ignore planning_completed events from tlog (they break successor invariant)
-                if canon.kind.as_str() == "planning_completed" {
-                    eprintln!("[PROCESS_EVENTS FIX] skipping planning_completed from tlog");
-                    continue;
-                }
                 // Skip events the runtime already dispatched in-memory (live path).
                 // The live path (emit_event / drain_emitted_events) writes the event to
                 // tlog AND inserts its ID into dispatched_ids. When P2 re-delivers the
@@ -226,11 +221,6 @@ impl EventRuntime {
                     self.drain_emitted_events()?;
                 } else {
                     eprintln!("[PROCESS_EVENTS TRACE] kind={} actor={}", canon.kind, canon.actor);
-                    // 🔥 CRITICAL FIX: drop duplicate planning_completed events (they violate successor invariant)
-                    if canon.kind.as_str() == "planning_completed" {
-                        eprintln!("[PROCESS_EVENTS FIX] dropping duplicate planning_completed");
-                        continue;
-                    }
                     let data = canon.payload.data.clone();
                     let actor = canon.actor.as_str();
                     match canon.kind.as_str() {
@@ -494,12 +484,7 @@ impl EventRuntime {
                 eprintln!("[canon-runtime] WARN: event kind={kind_str} id={event_id} delivered to 0 consumers");
             }
         }
-        // 🔥 CRITICAL FIX: skip writing planning_completed to tlog to avoid successor invariant collisions
-        if !matches!(event, RuntimeEvent::PlanningCompleted(_)) {
-            self.append_runtime_event(&event, file, line, parent_ids, event_id.clone());
-        } else {
-            eprintln!("[RUNTIME FIX] skipping append of planning_completed to avoid invariant violation");
-        }
+          self.append_runtime_event(&event, file, line, parent_ids, event_id.clone());
         if emit_mode_update {
             let mode_update = RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: self.runtime_mode_update_payload() });
             let mode_update_id = canon_event::EventId::new(canon_event::new_event_id());

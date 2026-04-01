@@ -17,6 +17,7 @@ impl CapabilityExecutor {
 
 impl EventConsumer for CapabilityExecutor {
     fn filter(&self) -> EventFilter {
+        // FIX: fallback to All; filtering is enforced in on_event
         EventFilter::All
     }
 
@@ -34,6 +35,11 @@ impl EventConsumer for CapabilityExecutor {
 
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
+        // FIX: only execute actual executable events
+        if !matches!(event, RuntimeEvent::Bash(_) | RuntimeEvent::Llm(_)) {
+            return EventOutcome::NoOp("capability_executor_non_exec");
+        }
+
         self.current_trigger = Some(trigger_id.clone());
         let Ok(exec) = ExecutableEvent::try_from(event.clone()) else {
             return EventOutcome::NoOp("capability_executor_not_executable");

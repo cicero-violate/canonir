@@ -668,7 +668,9 @@ pub fn evaluate_route_event_dispatch(event: &RuntimeEvent, planned_pending: usiz
     }
 
     if let RuntimeEvent::PlanningCompleted(pc) = event {
-        let recoverable_empty_plan = planned_pending == 0 && matches!(pc.status.as_str(), "invalid_plan" | "llm_failed" | "llm_timeout") && pending_tool_results_empty;
+        let recoverable_empty_plan = planned_pending == 0
+            && matches!(pc.status.as_str(), "invalid_plan" | "llm_failed" | "llm_timeout" | "missing_semantic_context")
+            && pending_tool_results_empty;
         if recoverable_empty_plan {
             return RouteEventDispatchEvaluation { rule: RouteEventDispatchRule::RecoverableEmptyPlan, should_dispatch: true };
         }

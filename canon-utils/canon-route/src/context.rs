@@ -88,7 +88,11 @@ impl RouteContext {
         Self::default()
     }
 
-    pub fn record_planning_completion(&mut self, status: &str, _planned_count: Option<usize>) {
+    pub fn record_planning_completion(&mut self, status: &str, planned_count: Option<usize>) {
+        if let Some(n) = planned_count {
+            self.planned_pending = n;
+            self.scheduler_len = n;
+        }
         match status {
             "llm_failed" | "llm_timeout" => {
                 self.consecutive_llm_plan_failures += 1;

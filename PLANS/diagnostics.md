@@ -14,14 +14,14 @@
 ## Ranked Failures
 
 ### 1. Impact: HIGH
-Signal: LoopActed emitted without tool_result (critical invariant failure)
+Signal: LoopActed emitted without tool_result (critical invariant violation)
 Evidence:
-- event logs: loop_acted_no_tool = 19 (severe regression)
+- event logs: loop_acted_no_tool = 19 (severe and persistent)
 Repair Targets:
 - canon-loop/src/stage/act.rs
   - enforce invariant: LoopActed ⇒ tool_result_id.is_some()
-  - block ALL emission paths lacking tool_result_id
-  - audit success, error, retry, and fallback paths
+  - block all emission paths lacking tool_result_id
+  - audit all paths (success, error, retry, fallback)
 
 ### 2. Impact: HIGH
 Signal: Missing DECIDE + ROUTE trace emission (observability failure)
@@ -30,9 +30,9 @@ Evidence:
 - missing_route_traces = 12850
 Repair Targets:
 - canon-invariant/src/lib.rs
-  - emit DECIDE trace from decide(...)
+  - emit DECIDE trace with trace_id and structured payload
 - canon-route/src/executor.rs
-  - emit ROUTE trace with explicit Decision → Route mapping
+  - emit ROUTE trace with Decision → Route mapping
 - global
   - enforce invariant: every route_selected must include DECIDE + ROUTE traces
 
@@ -51,22 +51,21 @@ Repair Targets:
 ### 4. Impact: HIGH
 Signal: Decision logic not centralized
 Evidence:
-- ConstraintRoute still used
-- routing logic distributed across executor and policy
+- ConstraintRoute still present
+- routing logic distributed across modules
 Repair Targets:
 - canon-invariant/src/lib.rs
-  - make decide(...) the sole routing authority
+  - make decide(...) sole authority
   - eliminate ConstraintRoute from decision path
 - canon-route/src/executor.rs
-  - remove all conditional routing logic
+  - remove all routing branches
 - canon-route/src/policy.rs
   - reduce to mapping-only or remove
 
 ### 5. Impact: MEDIUM
 Signal: Plan stage safeguards incomplete
 Evidence:
-- verifier indicates missing PLAN_ERROR/assert safeguards
-- logs show no enforcement
+- missing assertions and PLAN_ERROR enforcement
 Repair Targets:
 - canon-loop/src/stage/plan.rs
   - enforce ≥1 task OR explicit failure
@@ -75,32 +74,31 @@ Repair Targets:
 ### 6. Impact: MEDIUM
 Signal: Dispatch deduplication not strict
 Evidence:
-- verifier indicates non-strict dedup behavior
+- duplicated / weakened dedup logic (from verifier context)
 Repair Targets:
-- executor/dispatch layer
+- executor / dispatch layer
   - enforce strict deduplication
-  - guarantee idempotent dispatch
+  - remove duplicated logic paths
 
 ### 7. Impact: MEDIUM
 Signal: ConstraintState not minimal
 Evidence:
-- includes fields beyond scheduler_len and has_plan
+- includes non-decision fields
 Repair Targets:
 - canon-invariant/src/lib.rs
-  - reduce ConstraintState to minimal decision inputs
-  - separate diagnostic data
+  - reduce to scheduler_len + has_plan only
 
 ## Planner Handoff
 
 Highest-value repair targets:
-1. Fix LoopActed invariant (urgent correctness issue)
-2. Implement DECIDE + ROUTE trace emission globally
-3. Enforce scheduler_len == 0 ⇒ Observe invariant
+1. Fix LoopActed invariant immediately
+2. Implement DECIDE + ROUTE trace emission with trace_id
+3. Enforce scheduler_len == 0 ⇒ Observe
 4. Centralize decision logic in decide(...)
-5. Enforce Plan stage guarantees (≥1 task or explicit failure)
+5. Enforce Plan stage guarantees
 
 Blockers / Gaps:
-- Severe invariant regression (LoopActed violations spiking)
-- Observability incomplete (trace gaps large)
-- Decision logic still distributed
-- Plan safeguards not enforced
+- Severe invariant violations (LoopActed)
+- Observability incomplete (missing traces)
+- Decision logic fragmented
+- Plan safeguards missing

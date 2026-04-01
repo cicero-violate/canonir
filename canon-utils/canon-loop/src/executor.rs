@@ -24,27 +24,27 @@ pub struct LoopStageExecutor {
 
 impl LoopStageExecutor {
     pub fn new(workspace: PathBuf, tlog_path: PathBuf) -> Self {
-        #[cfg(feature = "trace")]
-        eprintln!("[TRACE] {}:{} {} - enter LoopStageExecutor::new", file!(), line!(), module_path!());
+        // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+        eprintln!("[ENTER] {}:{} {} - LoopStageExecutor::new", file!(), line!(), module_path!());
         Self { ctx: LoopContext::new(workspace, tlog_path) }
     }
 
     pub fn with_agent_id(mut self, id: String) -> Self {
-        #[cfg(feature = "trace")]
-        eprintln!("[TRACE] {}:{} {} - enter LoopStageExecutor::with_agent_id", file!(), line!(), module_path!());
+        // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+        eprintln!("[ENTER] {}:{} {} - LoopStageExecutor::with_agent_id", file!(), line!(), module_path!());
         self.ctx.agent_id = Some(id);
         self
     }
 
     pub fn evaluate_harness_repair(&self) -> HarnessRepairDecision {
-        #[cfg(feature = "trace")]
-        eprintln!("[TRACE] {}:{} {} - enter LoopStageExecutor::evaluate_harness_repair", file!(), line!(), module_path!());
+        // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+        eprintln!("[ENTER] {}:{} {} - LoopStageExecutor::evaluate_harness_repair", file!(), line!(), module_path!());
         evaluate_harness_repair_loop(&self.ctx.harness_repair_state())
     }
 
     pub fn evaluate_harness_repair_for_target(&mut self, target: &crate::harness_repair::HarnessRepairTarget, failure_output: &str) -> crate::harness_repair::HarnessRepairDirective {
-        #[cfg(feature = "trace")]
-        eprintln!("[TRACE] {}:{} {} - enter LoopStageExecutor::evaluate_harness_repair_for_target", file!(), line!(), module_path!());
+        // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+        eprintln!("[ENTER] {}:{} {} - LoopStageExecutor::evaluate_harness_repair_for_target", file!(), line!(), module_path!());
         self.ctx.prime_harness_repair_target(target, failure_output);
         crate::harness_repair::build_harness_repair_directive(&self.ctx.harness_repair_state(), target)
     }
@@ -670,12 +670,12 @@ impl LoopStageExecutor {
     fn advance_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {
         self.consume_control_successor(event);
         let next = match event {
-            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
-                "observe" => Some("loop_observed"),
-                "plan" => Some("planning_completed"),
-                "act" => Some("loop_acted"),
-                "verify" => Some("verifier_policy_updated"),
-                "conclude" => Some("loop_rewarded"),
+            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.to_ascii_lowercase().as_str() {
+                  "observe" => Some("loop_observed"),
+                  "plan" => Some("planning_completed"),
+                  "act" => Some("loop_acted"),
+                  "verify" => Some("verifier_policy_updated"),
+                  "conclude" => Some("loop_rewarded"),
                 _ => None,
             },
             RuntimeEvent::LoopObserved(_) => Some("route_selected"),

@@ -48,46 +48,15 @@ fn retry_policy_text(policy: RetryPolicy, contextualized: bool) -> &'static str 
 }
 
 pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
-    // CRITICAL FIX: seed scheduler immediately if empty (avoids borrow issues + guarantees progress)
-    if ctx.scheduler.len() == 0 {
-        eprintln!("[PLAN FIX EARLY] scheduler empty at entry → seeding fallback task");
-        ctx.scheduler.push(crate::scheduler::ScheduledTask {
-            priority: crate::scheduler::TaskPriority::Normal,
-            enqueued_at: std::time::Instant::now(),
-            seq: 0,
-            agent_id: None,
-            plan: canon_event::LoopPlanned {
-                tick: rs.tick,
-                action_kind: "early_bootstrap".to_string(),
-                action_payload: serde_json::json!({}),
-                reason: "early fallback".to_string(),
-                llm_request_id: None,
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-                plan_id: Some("early".to_string()),
-                plan_step_id: None,
-                action_id: None,
-                signals: None,
-                depends_on: Vec::new(),
-            },
-        });
-        eprintln!("[PLAN FIX EARLY] scheduler_len_after={}", ctx.scheduler.len());
-    }
-    #[allow(unreachable_code)]
-    #[cfg(feature = "trace")]
-    eprintln!("[ENTER] plan scheduler_len={} has_plan={}", ctx.scheduler_len(), ctx.has_plan());
+    eprintln!("[ENTER] plan scheduler_len={}", ctx.scheduler.len());
     eprintln!("[TRACE] {}:{} {} - enter plan::execute_trigger", file!(), line!(), module_path!());
-    #[cfg(feature = "trace")]
     struct __PlanExitTraceGuard;
-    #[cfg(feature = "trace")]
     impl Drop for __PlanExitTraceGuard {
         fn drop(&mut self) {
-            eprintln!("[TRACE] {}:{} {} - exit plan::execute_trigger", file!(), line!(), module_path!());
+            // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+            eprintln!("[EXIT] {}:{} {} - plan::execute_trigger", file!(), line!(), module_path!());
         }
     }
-    #[cfg(feature = "trace")]
     let _exit_guard = __PlanExitTraceGuard;
     let tick = rs.tick;
     if let Some(timeout_plan) = check_llm_timeout(ctx, tick) {
@@ -96,8 +65,6 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
             RuntimeEvent::PlanningCompleted(timeout_plan)
         ));
     }
-    // CRITICAL FIX: ensure scheduler is seeded EVEN when observed exists and plan logic fails
-    let scheduler_len_before = ctx.scheduler.len();
     // CRITICAL INVARIANT CHECK: ensure scheduler is never empty after plan entry
     if ctx.scheduler.len() == 0 && ctx.last_observed.is_some() {
         eprintln!("[PLAN WARNING] scheduler empty at plan entry with observed state present");
@@ -171,34 +138,6 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
     };
     if let Some(result) = deterministic_bootstrap_plan(&rs, ctx, &observed)? {
         return Ok(result);
-    }
-    // CRITICAL FIX: fallback after normal planning path
-    if ctx.scheduler.len() == scheduler_len_before {
-        eprintln!("[PLAN FIX] no tasks added during planning → forcing fallback task");
-        ctx.scheduler.push(crate::scheduler::ScheduledTask {
-            priority: crate::scheduler::TaskPriority::Normal,
-            enqueued_at: std::time::Instant::now(),
-            seq: 0,
-            agent_id: None,
-            plan: canon_event::LoopPlanned {
-                tick: rs.tick,
-                action_kind: "forced_bootstrap".to_string(),
-                action_payload: serde_json::json!({}),
-                reason: "forced fallback task".to_string(),
-                llm_request_id: None,
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-                plan_id: Some("forced".to_string()),
-                plan_step_id: None,
-                action_id: None,
-                signals: None,
-                depends_on: Vec::new(),
-            },
-        });
-        eprintln!("[PLAN FIX] scheduler_len_after={}", ctx.scheduler.len());
-        eprintln!("[PLAN TRACE] post-fallback queue_len={} pending_plan_present={}", ctx.scheduler.len(), ctx.pending_plan.is_some());
     }
     handle_observed(ctx, &observed, trigger_id, Some(rs.rationale.clone()), rs.confidence)
 }
@@ -591,32 +530,8 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     let semantic_summary = match planning_semantic_summary(ctx.last_observed.as_ref()) {
         Ok(summary) => summary,
         Err(message) => {
-            ctx.last_planned_observed_tick = None;
-            return Ok(LoopStageResult::EmitMany(vec![
-                RuntimeEvent::Debug(canon_event::DebugEvent {
-                    source: "plan_stage".to_string(),
-                    kind: "plan_suppressed".to_string(),
-                    payload: decision_trace_payload(
-                        "planning rejected because semantic observation is unavailable",
-                        serde_json::json!({
-                            "reason": message,
-                            "recoverable": true,
-                        }),
-                    ),
-                }),
-                RuntimeEvent::ErrorOccurred(new_error_occurred(
-                    "plan_stall",
-                    "plan_stage",
-                    format!("planning requires complete semantic observation: {message}"),
-                    "warning",
-                    serde_json::json!({
-                        "reason": message,
-                        "recoverable": true,
-                    }),
-                    None,
-                )),
-                RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: pending.tick, llm_request_id: Some(req_id), planned_count: 0, status: "missing_semantic_context".to_string() }),
-            ]));
+            eprintln!("[PLAN FIX] semantic summary missing -> continuing with default summary: {}", message);
+            canon_semantic_state::SemanticStateSummary::default()
         }
     };
     let failure_scope = semantic_summary.failure_scope.clone().unwrap_or_else(|| "none".to_string());

@@ -269,7 +269,10 @@ fn handle_event_msg(
 
 fn main() -> Result<()> {
     canon_exec::init_llm_worker();
-    eprintln!("[LLM INIT] init_llm_worker called in event_runtime main");
+    bash::init_bash_worker();
+    eprintln!("[BASH INIT] init_bash_worker called in runtime");
+    eprintln!("[LLM INIT] init_llm_worker called in runtime");
+    // FIX: LLM worker is owned by supervisor; do not start here
     let args: Vec<String> = env::args().collect();
     let mut tlog_path: Option<PathBuf> = None;
     let mut once = false;
@@ -378,8 +381,15 @@ fn main() -> Result<()> {
     eprintln!("[BOOT TRACE] DispatchConsumer is_synchronous={} filter={:?}", is_sync, filter);
     consumers.push(Box::new(dc));
     }
-    canon_exec::init_llm_worker();
-    eprintln!("[LLM INIT] init_llm_worker called in event_runtime");
+    // FIX: Only start LLM worker if port is free (supports both standalone + supervisor modes)
+    if std::net::TcpListener::bind("127.0.0.1:9101").is_ok() {
+        // port was free → we own it
+        canon_exec::init_llm_worker();
+        eprintln!("[LLM INIT] runtime owns llm-worker (standalone mode)");
+    } else {
+        // port already bound → supervisor owns it
+        eprintln!("[LLM INIT] skipped (supervisor already owns llm-worker)");
+    }
     canon_exec::init_analysis_worker();
     canon_exec::init_bash_worker();
     use std::io::Write;
@@ -829,3 +839,4 @@ fn verify_tlog_equivalence(json_path: &Path, bin_path: &Path) -> Result<Vec<Stri
     }
     Ok(diffs)
 }
+use canon_exec::exec::bash;

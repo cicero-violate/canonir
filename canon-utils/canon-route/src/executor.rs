@@ -17,10 +17,9 @@ use canon_runtime_supervisor::judgment_loop::RouteController;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
-// GLOBAL dedup state (persists across executor instances)
+// GLOBAL dedup state (required because executor is recreated per loop tick)
 static GLOBAL_LAST_DECISION: OnceLock<Mutex<Option<canon_invariant::Decision>>> = OnceLock::new();
 static GLOBAL_LAST_SCHED_LEN: OnceLock<Mutex<Option<usize>>> = OnceLock::new();
 
@@ -68,59 +67,16 @@ impl RouteExecutor {
     }
 
     fn try_dispatch_route(&mut self, trigger_event: &RuntimeEvent) {
-        #[cfg(feature = "trace")]
-        eprintln!("[TRACE] {}:{} {} - enter executor::try_dispatch_route", file!(), line!(), module_path!());
+        // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+        eprintln!("[ENTER] {}:{} {} - executor::try_dispatch_route", file!(), line!(), module_path!());
         if self.dispatch_in_progress {
             eprintln!("[TRACE ERROR] {}:{} {} dispatch_in_progress blocked decision path", file!(), line!(), module_path!());
             self.reroute_requested = true;
+            // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+            eprintln!("[EXIT] {}:{} {} - executor::try_dispatch_route (early return: dispatch_in_progress)", file!(), line!(), module_path!());
             return;
         }
 
-        // FIX: if we just completed planning, force immediate routing
-        if let RuntimeEvent::PlanningCompleted(p) = trigger_event {
-            eprintln!("[ROUTE EXEC TRACE] forcing RouteSelected after PlanningCompleted");
-            if let Some(emitter) = &self.emitter {
-                emitter.emit_with_parents(
-                    RuntimeEvent::RouteSelected(RouteSelected {
-                        tick: p.tick,
-                        suggested_route: "Act".to_string(),
-                        prompt: "".to_string(),
-                        approved_route: "Act".to_string(),
-                        rationale: "auto-route from planning".to_string(),
-                        confidence: Some(1.0),
-                        gate_note: "auto".to_string(),
-                        gate_rules_fired: vec![],
-                        gate_changed: false,
-                        gate_should_stop: false,
-                        model_json: "".to_string(),
-                    }),
-                    vec![self.current_trigger.clone().unwrap_or_else(|| EventId::new("route_exec"))],
-                    file!(),
-                    line!(),
-                );
-
-                // 🔥 CRITICAL FIX: immediately emit RequestDispatch so execution progresses
-                emitter.emit_with_parents(
-                    RuntimeEvent::RequestDispatch(canon_event::RequestDispatch {
-                        agent_id: "planner".to_string(),
-                        dispatch_id: format!("auto-dispatch-{}", p.tick),
-                        parent_request_id: "".to_string(),
-                        task_prompt: "".to_string(),
-                        task_kind: "Act".to_string(),
-                        deps: vec![],
-                        workspace_scope: None,
-                        dispatched: false,
-                    }),
-                    vec![self.current_trigger.clone().unwrap_or_else(|| EventId::new("route_exec"))],
-                    file!(),
-                    line!(),
-                );
-
-                // 🔥 CRITICAL FIX: unblock dispatch so next stage can proceed
-                self.dispatch_in_progress = false;
-                return;
-            }
-        }
         let goal_unfinished = self.ctx.context_ready && self.ctx.mission_goal_spec.is_some() && !self.ctx.finish_ready && self.ctx.scheduler_len == 0 && self.ctx.planned_pending == 0;
 
         // correlation id for decision ↔ route tracing
@@ -142,22 +98,6 @@ impl RouteExecutor {
         eprintln!("[ROUTE TRACE DEEP] ctx.scheduler_len={} ctx.planned_pending={} dispatch_in_progress={}", self.ctx.scheduler_len, self.ctx.planned_pending, self.dispatch_in_progress);
 
         eprintln!("[ROUTE TRACE] scheduler_len={} decision={:?} last_decision={:?}", self.ctx.scheduler_len, decision, self.last_decision);
-
-        // If we have work but decision is not Act, force Act to ensure execution progresses
-        if self.ctx.scheduler_len > 0 && decision != canon_invariant::Decision::Act {
-            eprintln!("[ROUTE FIX] overriding decision -> Act (scheduler_len={})", self.ctx.scheduler_len);
-            // FORCE decision variable itself (not just last_decision) so downstream dispatch uses Act
-            let decision = canon_invariant::Decision::Act;
-            self.last_decision = Some(decision);
-        }
-        // CRITICAL FIX: if scheduler has work but no route emitted, force RouteSelected
-        if self.ctx.scheduler_len > 0 && self.last_route_selected.is_none() {
-            eprintln!("[ROUTE FIX] scheduler_len={} but no route → forcing Act (via decision override)", self.ctx.scheduler_len);
-            // Instead of constructing RouteSelected (complex struct), override decision flow
-            let decision = canon_invariant::Decision::Act;
-            self.last_decision = Some(decision);
-            return;
-        }
 
         // NO PROGRESS TICK TRACKING (use field to avoid dead_code)
         if self.ctx.scheduler_len == 0 && self.last_decision == Some(decision) {
@@ -181,8 +121,9 @@ impl RouteExecutor {
             has_plan
         );
 
-        // STRICT DISPATCH DEDUPLICATION (no exceptions)
-        if self.last_decision == Some(decision)
+        // Do not suppress control emission when a route_selected successor is required.
+        if self.pending_required_successor != Some("route_selected")
+            && self.last_decision == Some(decision)
             && self.last_scheduler_len == Some(self.ctx.scheduler_len)
         {
             eprintln!(
@@ -208,6 +149,18 @@ impl RouteExecutor {
         // FIX: remove early override so Plan can execute
         let decision = decision;
 
+        // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+        eprintln!(
+            "[ROUTE TRACE PRE] trace_id={} {}:{} {} decision={:?} scheduler_len={} has_plan={}",
+            trace_id,
+            file!(),
+            line!(),
+            module_path!(),
+            decision,
+            self.ctx.scheduler_len,
+            has_plan
+        );
+
         let route = match decision {
             canon_invariant::Decision::Observe => RouteKind::Observe,
             canon_invariant::Decision::Plan => RouteKind::Plan,
@@ -221,11 +174,6 @@ impl RouteExecutor {
 
         if route == RouteKind::Plan {
             eprintln!("[EXECUTOR] invoking plan stage via control flow fix");
-            // CRITICAL FIX: force scheduler seed directly in executor context
-            if self.ctx.scheduler_len == 0 {
-                eprintln!("[EXECUTOR STALL FIX] seeding scheduler directly");
-                self.ctx.scheduler_len = 1; // minimal seed to unblock Act
-            }
         }
 
         // CRITICAL FIX: do NOT initialize dedup state here — this resets state every tick
@@ -236,13 +184,17 @@ impl RouteExecutor {
         // Suppress the degenerate control recursion:
         // loop_observed -> route_selected(observe) -> loop_observed -> ...
         if matches!(trigger_event, RuntimeEvent::LoopObserved(_)) && route == RouteKind::Observe {
+            // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+            eprintln!("[EXIT] {}:{} {} - executor::try_dispatch_route (early return: observe recursion)", file!(), line!(), module_path!());
             return;
         }
 
         // STRICT: remove ALL dedup bypass/reset logic (no exceptions allowed)
 
         // DISPATCH DEDUP GUARD (prevent identical decision spam)
+        eprintln!("[DEDUP DEBUG ENTRY] decision={:?} scheduler_len={}", decision, self.ctx.scheduler_len);
         {
+            // GLOBAL dedup (executor is recreated per tick)
             let mut last_decision = GLOBAL_LAST_DECISION
                 .get_or_init(|| Mutex::new(None))
                 .lock()
@@ -252,7 +204,16 @@ impl RouteExecutor {
                 .lock()
                 .unwrap();
 
-            if *last_decision == Some(decision)
+            eprintln!(
+                "[DEDUP DEBUG] prev_decision={:?} prev_len={:?} current_decision={:?} current_len={}",
+                *last_decision,
+                *last_len,
+                decision,
+                self.ctx.scheduler_len
+            );
+
+            if self.pending_required_successor != Some("route_selected")
+                && *last_decision == Some(decision)
                 && *last_len == Some(self.ctx.scheduler_len)
             {
                 eprintln!("[DISPATCH SKIP] identical decision with no state change");
@@ -459,27 +420,7 @@ impl EventConsumer for RouteExecutor {
         eprintln!("[ROUTE EXEC TRACE] on_event event={:?} trigger_id={:?} dispatch_in_progress={} scheduler_len={}", event, trigger_id, self.dispatch_in_progress, self.ctx.scheduler_len);
         self.current_trigger = Some(trigger_id.clone());
 
-        // 🔍 DEBUG: confirm PlanningCompleted branch is even reachable
-        if let RuntimeEvent::PlanningCompleted(p) = event {
-            eprintln!("[ROUTE EXEC TRACE] DEBUG: PlanningCompleted branch reached → FORCING DISPATCH");
-
-            return EventOutcome::emit(
-                RuntimeEvent::RequestDispatch(canon_event::RequestDispatch {
-                    agent_id: "planner".to_string(),
-                    dispatch_id: format!("dispatch-{}", p.tick),
-                    parent_request_id: "".to_string(),
-                    task_prompt: "".to_string(),
-                    task_kind: "Act".to_string(),
-                    deps: vec![],
-                    workspace_scope: None,
-                    dispatched: false,
-                }),
-                file!(),
-                line!(),
-            );
-        }
-
-        // (duplicate PlanningCompleted handler removed; handled above)
+        // PlanningCompleted must flow through normal control-state advancement.
         if let Some((feature, reason, context)) = self.should_reject_verifier_sequence(event) {
             self.emit_invariant_violation(&trigger_id, feature, &reason, context);
             return EventOutcome::NoOp("verifier_sequence_invariant_violation");
@@ -487,34 +428,54 @@ impl EventConsumer for RouteExecutor {
         self.advance_control_state(event);
         self.ctx.update_from_event(event, &self.workspace);
 
-        // FIX: ensure PlanningCompleted triggers routing (direct emit)
+        // FIX: only short-circuit PlanningCompleted -> Act when the planning event
+        // itself proves actionable work exists. Otherwise fall through so normal
+        // route state/policy can handle statuses like missing_semantic_context,
+        // goal_complete, invalid_plan, llm_failed, llm_timeout.
         if let RuntimeEvent::PlanningCompleted(p) = event {
+            self.ctx.record_planning_completion(&p.status, Some(p.planned_count));
             eprintln!("[ROUTE EXEC TRACE] PlanningCompleted → checking scheduler before routing");
-
-            if self.ctx.scheduler_len == 0 {
-                eprintln!("[ROUTE EXEC TRACE] skipping RouteSelected: scheduler empty");
-                return EventOutcome::NoOp("route_executor_no_tasks");
+            if p.planned_count > 0 {
+                eprintln!("[ROUTE EXEC TRACE] PlanningCompleted → RETURNING RouteSelected (authoritative)");
+                return EventOutcome::emit(
+                    RuntimeEvent::RouteSelected(RouteSelected {
+                        tick: p.tick,
+                        suggested_route: "Act".to_string(),
+                        prompt: "".to_string(),
+                        approved_route: "Act".to_string(),
+                        rationale: "authoritative route after planning".to_string(),
+                        confidence: Some(1.0),
+                        gate_note: "auto".to_string(),
+                        gate_rules_fired: vec![],
+                        gate_changed: false,
+                        gate_should_stop: false,
+                        model_json: "".to_string(),
+                    }),
+                    file!(),
+                    line!(),
+                );
             }
-
-            eprintln!("[ROUTE EXEC TRACE] PlanningCompleted → RETURNING RouteSelected (authoritative)");
-
-            return EventOutcome::emit(
-                RuntimeEvent::RouteSelected(RouteSelected {
-                    tick: p.tick,
-                    suggested_route: "Act".to_string(),
-                    prompt: "".to_string(),
-                    approved_route: "Act".to_string(),
-                    rationale: "authoritative route after planning".to_string(),
-                    confidence: Some(1.0),
-                    gate_note: "auto".to_string(),
-                    gate_rules_fired: vec![],
-                    gate_changed: false,
-                    gate_should_stop: false,
-                    model_json: "".to_string(),
-                }),
-                file!(),
-                line!(),
-            );
+            if p.status == "missing_semantic_context" {
+                eprintln!("[ROUTE EXEC TRACE] PlanningCompleted missing semantic context → RETURNING RouteSelected(observe)");
+                return EventOutcome::emit(
+                    RuntimeEvent::RouteSelected(RouteSelected {
+                        tick: p.tick,
+                        suggested_route: "observe".to_string(),
+                        prompt: "".to_string(),
+                        approved_route: "observe".to_string(),
+                        rationale: "recover semantic context after zero-task planning".to_string(),
+                        confidence: Some(1.0),
+                        gate_note: "auto".to_string(),
+                        gate_rules_fired: vec![],
+                        gate_changed: false,
+                        gate_should_stop: false,
+                        model_json: "".to_string(),
+                    }),
+                    file!(),
+                    line!(),
+                );
+            }
+            eprintln!("[ROUTE EXEC TRACE] PlanningCompleted has no planned work; falling through to normal route policy");
         }
 
         // RouteSelected emission is synchronous. Downstream consumers can emit successor
@@ -571,7 +532,7 @@ impl EventConsumer for RouteExecutor {
         }
 
         // TODO: replace with scheduler.len() once exposed in RouteContext
-        let event_dispatch_eval = evaluate_route_event_dispatch(event, self.ctx.scheduler_len, self.ctx.pending_tool_result_ids.is_empty());
+        let event_dispatch_eval = evaluate_route_event_dispatch(event, self.ctx.planned_pending, self.ctx.pending_tool_result_ids.is_empty());
         if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::IdleDispatch) {
             if self.pending_request_id.as_deref() == Some("deterministic") && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_)) {
                 self.pending_request_id = None;
@@ -676,11 +637,10 @@ impl EventConsumer for RouteExecutor {
 impl RouteExecutor {
     fn control_successor_for_event(event: &RuntimeEvent) -> Option<&'static str> {
         match event {
-            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
+            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.to_ascii_lowercase().as_str() {
                 "observe" => Some("loop_observed"),
                 "plan" => Some("planning_completed"),
-                // CRITICAL FIX: do not expect loop_acted for Act (bootstrap mode)
-                "act" => None,
+                "act" => Some("loop_acted"),
                 "verify" => Some("loop_verified"),
                 "conclude" => Some("loop_rewarded"),
                 _ => None,
@@ -699,8 +659,7 @@ impl RouteExecutor {
         match route {
             RouteKind::Observe => "loop_observed",
             RouteKind::Plan => "planning_completed",
-            // CRITICAL FIX: avoid requiring loop_acted in synthetic Act deadlock case
-            RouteKind::Act => "",
+            RouteKind::Act => "loop_acted",
             RouteKind::Verify => "loop_verified",
             RouteKind::Conclude => "loop_rewarded",
             RouteKind::Decompose => "planning_completed",
@@ -708,14 +667,6 @@ impl RouteExecutor {
     }
 
     fn advance_control_state(&mut self, event: &RuntimeEvent) {
-        // CRITICAL FIX: if we just emitted an Act route, do NOT require loop_acted
-        if let RuntimeEvent::RouteSelected(rs) = event {
-            if rs.approved_route == "act" {
-                eprintln!("[EXECUTOR FIX] force-clearing pending successor for Act route");
-                self.pending_required_successor = None;
-                return;
-            }
-        }
         let event_kind = canon_event::event_kind_str(event);
         if self.pending_required_successor == Some(event_kind) {
             self.pending_required_successor = None;
@@ -724,13 +675,7 @@ impl RouteExecutor {
             }
         }
         if let Some(expected) = Self::control_successor_for_event(event) {
-            // CRITICAL FIX: never enforce loop_acted (break deadlock globally)
-            if expected == "loop_acted" {
-                eprintln!("[EXECUTOR FIX] suppressing loop_acted successor");
-                self.pending_required_successor = None;
-            } else {
-                self.pending_required_successor = Some(expected);
-            }
+            self.pending_required_successor = Some(expected);
         }
     }
 
@@ -762,8 +707,6 @@ impl RouteExecutor {
             model_json,
         });
 
-        // CRITICAL FIX: immediately clear any successor requirement to prevent tlog loop_acted deadlock
-        self.pending_required_successor = None;
         let RuntimeEvent::RouteSelected(route_payload) = &route_event else {
             unreachable!("route_event must be route_selected");
         };
@@ -783,20 +726,8 @@ impl RouteExecutor {
         emitter.emit_with_parents(route_event, vec![tid.clone()], file!(), line!());
         self.dispatch_in_progress = false;
 
-        // CRITICAL: ensure Plan route triggers actual Plan stage execution (not just event emission)
-        if decision.lane == RouteKind::Plan {
-            eprintln!("[EXECUTOR] invoking plan stage");
-            // NOTE: direct stage invocation placeholder — must be wired to real plan executor
-            // This prevents silent Plan loop where only events are emitted
-        }
         self.last_route_emitted_for_control_id = None;
-        // CRITICAL FIX: skip loop_acted requirement when Act is synthetic (scheduler empty)
-        if decision.lane == RouteKind::Act && self.ctx.scheduler_len == 0 {
-            eprintln!("[EXECUTOR FIX] skipping loop_acted requirement (synthetic Act)");
-            self.pending_required_successor = None;
-        } else {
-            self.pending_required_successor = Some(Self::control_successor_for_route(decision.lane));
-        }
+        self.pending_required_successor = Some(Self::control_successor_for_route(decision.lane));
         let emit_effects = evaluate_route_emit_effects(decision);
         if emit_effects.clear_pending_request {
             self.pending_request_id = None;

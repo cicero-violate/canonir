@@ -77,7 +77,7 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
     type Error = RuntimeEvent;
     fn try_from(e: RuntimeEvent) -> Result<Self, RuntimeEvent> {
         match e {
-            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.as_str() {
+            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.to_ascii_lowercase().as_str() {
                 "plan" => Ok(LoopStageEvent::PlanTrigger(rs)),
                 "act" => Ok(LoopStageEvent::ActDispatch(rs)),
                 "verify" => Ok(LoopStageEvent::VerifyTrigger(rs)),

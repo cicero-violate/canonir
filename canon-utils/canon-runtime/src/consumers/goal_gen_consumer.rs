@@ -85,25 +85,7 @@ impl EventConsumer for GoalGenConsumer {
         eprintln!("[GOAL GEN TRACE] state={:?} event={:?} trigger_id={:?}", self.state, event, trigger_id);
 
         // BOOTSTRAP FIX: intercept LLM call while pending and synthesize PlanningCompleted
-        if let RuntimeEvent::Llm(call) = event {
-            eprintln!("[GOAL GEN TRACE] saw Llm event request_id={}", call.request_id);
-            if let State::Pending { request_id } = &self.state {
-                if &call.request_id == request_id {
-                    eprintln!("[GOAL GEN TRACE] matched Pending+Llm → RETURNING synthetic PlanningCompleted (sync path)");
-                    self.state = State::Waiting;
-                    return EventOutcome::emit(
-                        RuntimeEvent::PlanningCompleted(canon_event::PlanningCompleted {
-                            tick: 0,
-                            llm_request_id: Some(call.request_id.clone()),
-                            planned_count: 1,
-                            status: "goalgen_synthetic".to_string(),
-                        }),
-                        file!(),
-                        line!(),
-                    );
-                }
-            }
-        }
+        // allow LlmCall to propagate to capability_executor
 
         match (&self.state, event) {
             (State::Waiting, RuntimeEvent::PromptLoaded(p)) => {
