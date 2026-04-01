@@ -25,10 +25,7 @@ const MAX_SNIPPET: usize = 3000;
 
 const SYSTEM_INSTRUCTIONS_EXECUTOR: &str = r#"You are the canon mini-agent-executor.
 
-Your job is to execute the highest-priority READY work described in the plan provided to you.
-The planner owns plan structure, DAG reorganization, and priority.
-You should only work on the top 1-5 ready tasks in the current cycle, then yield.
-Do not reorganize the plan yourself unless you are only marking completed items as done.
+Your job is to complete the objective described in the plan provided to you. Read the plan carefully and execute it step by step.
 
 You work inside the canon workspace at /workspace/ai_sandbox/canon. All relative file paths resolve against this workspace root.
 
@@ -97,13 +94,6 @@ to mark it as done. Use apply_patch to replace the task line with a checked vers
 
 Read the plan file first if you need to see its current state before patching.
 Keep the rest of the plan file intact — only change the line(s) you just completed.
-
-Execution discipline:
-- Prefer tasks explicitly marked ready / highest priority by the planner.
-- Do not skip ahead to lower-priority or blocked tasks unless the current ready task is impossible and you have concrete evidence.
-- Keep cycles short: complete at most 1-5 tasks before yielding control.
-- If an apply_patch fails, read the exact file or line range before retrying.
-- Do not repeat the same patch attempt without new evidence from read_file, run_command, or python.
 
 ━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -189,11 +179,9 @@ For each task marked `- [x]` in the plan:
 
 const SYSTEM_INSTRUCTIONS_PLANNER: &str = r#"You are the canon planner agent.
 
-Your job is to continuously reorganize PLANS/mini-agent-plan.md into a DAG-driven execution plan.
-You own priority, dependency ordering, and the ready-work window for the executor.
-On every cycle, re-evaluate the workspace and rewrite the plan so the executor only needs to perform the top 1-5 ready tasks.
+Your job is to review PLANS/mini-agent-plan.md and break down any pending tasks (marked `- [ ]`) into concrete, actionable sub-steps that the executor agent can follow.
 
-You work inside the canon workspace at /workspace/ai_sandbox/canon. Use bash, rg, read_file, python, and diagnostics evidence to review the current project state before reorganizing the plan.
+You work inside the canon workspace at /workspace/ai_sandbox/canon. Use bash or git discovery commands to review the current status of the project. Things have change
 
 Each turn you receive either:
   (a) the initial plan; or
@@ -218,8 +206,8 @@ Every action MUST include a short `rationale` field explaining why this is the n
      writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
      WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
 
-3. apply_patch — update PLANS/mini-agent-plan.md with a reorganized DAG plan, refreshed priorities, and concrete steps
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n line_before_before\n line_before\n - [ ] task to expand\n+  1. sub-step one\n+  2. sub-step two\n line_after\n line_after_after\n*** End Patch","rationale":"Reorganize the plan so ready work, dependencies, and priority are explicit."}
+3. apply_patch — update PLANS/mini-agent-plan.md with expanded steps
+   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/mini-agent-plan.md\n@@\n line_before_before\n line_before\n - [ ] task to expand\n+  1. sub-step one\n+  2. sub-step two\n line_after\n line_after_after\n*** End Patch","rationale":"Expand the pending task into concrete execution steps."}
 
    Rules:
    - Every @@ hunk needs AT LEAST 3 unchanged context lines (space-prefixed) around the change.
@@ -233,24 +221,19 @@ Every action MUST include a short `rationale` field explaining why this is the n
 5. python — run structured planning analysis
    {"action":"python","code":"from pathlib import Path\nprint(sum(1 for _ in Path('canon-utils').glob('**/*.rs')))","cwd":"/workspace/ai_sandbox/canon","rationale":"Use Python to gather structured planning context from the workspace."}
 
-6. done — declare the plan reorganization complete
-   {"action":"done","reason":"reorganized plan into a DAG with refreshed priorities and a 1-5 task ready window","rationale":"Planning is complete and the plan is ready for the next executor cycle."}
+6. done — declare the plan update complete
+   {"action":"done","reason":"expanded N pending tasks into actionable steps","rationale":"Planning is complete and the actionable steps have been written."}
 
 ━━━ PLANNING PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-On every planning cycle:
-1. Read relevant source files, diagnostics, and recent workspace state to understand what changed.
-2. Reorganize PLANS/mini-agent-plan.md into a DAG-style plan with explicit dependencies and priority.
-3. Maintain a READY NOW window containing at most 1-5 executable tasks for the executor.
-4. Move blocked work behind its dependencies instead of leaving it in the ready window.
-5. Rewrite priorities whenever new evidence changes the critical path.
+For each task marked `- [ ]` in the plan:
+1. Read relevant source files to understand what is needed.
+2. Expand the task into 3-5 concrete steps with specific file paths and changes.
+3. Update PLANS/mini-agent-plan.md with the expanded steps using apply_patch.
 
 ━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 - Only modify PLANS/mini-agent-plan.md — never edit source files directly.
-- The planner owns task ordering, dependency structure, and ready-task selection.
-- Prefer rewriting whole plan sections when needed so priority order stays globally coherent.
-- Keep the executor's ready window small: 1-5 tasks maximum.
 - Emit exactly one action per turn.
 - Output format: exactly one JSON object in a ```json code block. No prose outside it.
 "#;
@@ -321,9 +304,6 @@ Rules:
 - Use the `python` action for structured analysis of event logs and project state.
 - Only modify PLANS/diagnostics.md.
 - Rank issues by impact on correctness, convergence, and repairability.
-- Before trusting a trace file like /tmp/runtime.trace, confirm it was updated in the current cycle (mtime, size change, or fresh producer command).
-- Treat empty `rg` / `grep` results on traces as ambiguous: no match, stale file, or incomplete write are all possible.
-- Prefer latest event-log segments under state/event_log/event.tlog.d over ad-hoc temp traces when they disagree.
 - Emit exactly one action per turn.
 - Output format: exactly one JSON object in a ```json code block. No prose outside it.
 "#;
@@ -582,14 +562,6 @@ fn exec_run_command(workspace: &Path, cmd: &str, cwd: &str) -> Result<(bool, Str
                 combined.push('\n');
             }
             combined.push_str(&String::from_utf8_lossy(&output.stderr));
-        }
-        if combined.trim().is_empty() && !output.status.success() {
-            if cmd.contains("rg ") || cmd.contains("grep ") {
-                combined = format!("no matches (exit={})", output.status.code().unwrap_or(-1));
-                if cmd.contains("/tmp/runtime.trace") {
-                    combined.push_str("\ntrace probe returned no matches; file may be stale, missing, or the pattern may not be present yet");
-                }
-            }
         }
 
         Ok((output.status.success(), combined))

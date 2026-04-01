@@ -76,10 +76,7 @@ impl EventConsumer for ForwardConsumer {
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         eprintln!("[DISPATCH TRACE] ForwardConsumer received event={:?} trigger_id={:?}", event, trigger_id);
 
-        // FIX: ensure LoopPlanned propagates to parent bus
-        if let RuntimeEvent::LoopPlanned(_) = event {
-            self.parent.emit_with_parents(event.clone(), vec![trigger_id.clone()], file!(), line!());
-        }
+        // REMOVED: duplicate pre-forward for LoopPlanned (handled in match below)
         // FIX: do NOT force LoopObserved here — must respect invariant ordering
         if let RuntimeEvent::ErrorOccurred(_err) = event {
             eprintln!("[DISPATCH FIX] ErrorOccurred received — no forced observe");
@@ -92,7 +89,12 @@ impl EventConsumer for ForwardConsumer {
             RuntimeEvent::RouteSelected(_) => {
                 forward(&self.parent, event.clone());
             }
-            RuntimeEvent::LoopObserved(_) => {}
+            RuntimeEvent::LoopObserved(_) => {
+                // FIX: forward LoopObserved exactly once to avoid suppressing
+                // legitimate observe recovery while preventing duplication
+                forward(&self.parent, event.clone());
+                return EventOutcome::NoOp("loop_observed_forwarded_once");
+            }
             RuntimeEvent::LoopPlanned(p) => {
                 if let Some(id) = &p.action_id {
                     if let Ok(mut v) = self.actions_taken.lock() {
@@ -109,7 +111,9 @@ impl EventConsumer for ForwardConsumer {
                         v.push(id.clone());
                     }
                 }
+                // forward exactly once
                 forward(&self.parent, event.clone());
+                return EventOutcome::NoOp("loop_acted_forwarded_once");
             }
             RuntimeEvent::PlanningCompleted(_) => {
                 // FIX: do NOT auto-execute — let RouteSelected decide next step
@@ -120,31 +124,18 @@ impl EventConsumer for ForwardConsumer {
             }
             RuntimeEvent::CapabilityCompleted(_) => {
                 // FIX: LLM completes but PlanningCompleted is not reaching here reliably
-                // Force routing so pipeline progresses
-                eprintln!("[DISPATCH TRACE] emitting RouteSelected after CapabilityCompleted");
-                return EventOutcome::emit(
-                    RuntimeEvent::RouteSelected(RouteSelected {
-                        tick: 0,
-                        suggested_route: "Act".to_string(),
-                        prompt: "".to_string(),
-                        approved_route: "Act".to_string(),
-                        rationale: "auto-route after capability".to_string(),
-                        confidence: Some(1.0),
-                        gate_note: "auto".to_string(),
-                        gate_rules_fired: vec![],
-                        gate_changed: false,
-                        gate_should_stop: false,
-                        model_json: "".to_string(),
-                    }),
-                    file!(),
-                    line!(),
-                );
+                // DO NOT force RouteSelected here — routing must be handled by RouteExecutor
+                return EventOutcome::NoOp("capability_completed_passthrough");
             }
             RuntimeEvent::LoopRewarded(r) => {
                 if r.halt {
                     self.halted.store(true, Ordering::Relaxed);
                 }
                 forward(&self.parent, event.clone());
+            }
+            RuntimeEvent::Debug(d) if d.kind == "observe_suppressed_due_to_pending_successor" => {
+                // DROP: legacy suppression signal
+                return EventOutcome::NoOp("dropped_legacy_observe_suppression");
             }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
@@ -359,4 +350,3 @@ impl EventConsumer for DispatchConsumer {
         EventOutcome::NoOp("dispatch_consumer_spawned")
     }
 }
-use canon_event::RouteSelected;

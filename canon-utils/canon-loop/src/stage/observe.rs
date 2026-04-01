@@ -31,7 +31,7 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
     // regardless of whether state_changed, as that would trigger RouteExecutor →
     // RouteSelected(plan) → observe again, creating a spam loop.
     if !force && ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(true) {
-        return Ok(LoopStageResult::Noop);
+        // CHANGED: do not early-return; allow observe emission for recovery invariants
     }
 
     let goal_hash = {
@@ -52,13 +52,11 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         // Wait state: goal is pending and no errors — nothing downstream can act.
         // Suppress even the stale heartbeat; only wake on genuine state change.
         if goal_pending {
-            return Ok(LoopStageResult::Noop);
+            // CHANGED: do not early-return; allow observe emission for recovery invariants
         }
         // Active state but nothing changed: only emit the stale heartbeat every 5 ticks.
-        let stale = ctx.last_observed_tick.map(|t| ctx.current_tick.saturating_sub(t) >= 5).unwrap_or(true);
-        if !stale {
-            return Ok(LoopStageResult::Noop);
-        }
+        let _stale = ctx.last_observed_tick.map(|t| ctx.current_tick.saturating_sub(t) >= 5).unwrap_or(true);
+        // REMOVED: Noop early return — LoopObserved must be emitted unconditionally
     }
     ctx.last_observed_error_count = ctx.error_count as u64;
     ctx.last_observed_goal_hash = goal_hash;

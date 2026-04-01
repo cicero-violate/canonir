@@ -111,16 +111,9 @@ impl EventBus {
 
     // 🔥 CRITICAL FIX: inject fanout directly into existing dispatch path
     #[allow(dead_code)]
-    fn pre_dispatch_fanout(&self, event: &RuntimeEvent, event_id: &EventId) {
-        if let RuntimeEvent::RouteSelected(_) = event {
-            eprintln!("[BUS FIX ACTIVE] pre-dispatch fanout RouteSelected to async consumers");
-            for c in self.consumers.iter() {
-                let _ = c.sender.send(EventMessage {
-                    event: event.clone(),
-                    event_id: event_id.clone(),
-                });
-            }
-        }
+    fn pre_dispatch_fanout(&self, _event: &RuntimeEvent, _event_id: &EventId) {
+        // REMOVED: fanout caused duplicate delivery of control events (including observe chains)
+        // Canonical dispatch path already delivers events; avoid duplicate async broadcast
     }
 
     // 🔥 CRITICAL FIX: ensure RouteSelected reaches BOTH sync + async consumers

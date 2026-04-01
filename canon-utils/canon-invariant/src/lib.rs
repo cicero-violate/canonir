@@ -136,12 +136,11 @@ pub fn decide(state: DecisionState) -> Decision {
     // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
     static TRACE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let trace_id = TRACE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let decision = if state.scheduler_len == 0 && !state.has_plan {
-        Decision::Plan
-    } else if state.scheduler_len > 0 {
-        Decision::Act
-    } else {
+    let decision = if state.scheduler_len == 0 {
+        // INVARIANT: no scheduled work must always route to Observe
         Decision::Observe
+    } else {
+        Decision::Act
     };
     // ensure impossible state never occurs
     debug_assert!(!(state.scheduler_len == 0 && matches!(decision, Decision::Act)));

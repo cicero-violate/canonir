@@ -1,104 +1,104 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- event log segments in state/event_log/event.tlog.d (3 files, ~152MB total)
+- event log segments in state/event_log/event.tlog.d (1 file, ~175KB total)
 - python structured scan (latest):
-  - loop_acted_no_tool=19
-  - act_with_empty_scheduler=9
-  - missing_decision_traces=12852
-  - missing_route_traces=12850
-  - plan_zero_tasks=0
-  - missing_plan_error=0
-- canon-utils source (invariant, route, loop, runtime-supervisor)
+  - loop_observed_missing=24
+  - observe_recovery_missing=0
+  - act_with_empty_scheduler=2
+  - missing_decision_traces=28
+  - missing_route_traces=28
+  - successor_discharge_gaps=10
+  - duplicate_fanout_signals=1
+- canon system focus: canon-route, canon-loop, canon-runtime
 
 ## Ranked Failures
 
 ### 1. Impact: HIGH
-Signal: LoopActed emitted without tool_result (critical invariant violation)
+Signal: Missing DECIDE + ROUTE trace coverage
 Evidence:
-- event logs: loop_acted_no_tool = 19 (severe and persistent)
-Repair Targets:
-- canon-loop/src/stage/act.rs
-  - enforce invariant: LoopActed ⇒ tool_result_id.is_some()
-  - block all emission paths lacking tool_result_id
-  - audit all paths (success, error, retry, fallback)
-
-### 2. Impact: HIGH
-Signal: Missing DECIDE + ROUTE trace emission (observability failure)
-Evidence:
-- missing_decision_traces = 12852
-- missing_route_traces = 12850
+- missing_decision_traces = 28
+- missing_route_traces = 28
+- systematic absence tied to route_selected events
 Repair Targets:
 - canon-invariant/src/lib.rs
-  - emit DECIDE trace with trace_id and structured payload
+  - emit DECIDE trace with trace_id + full decision payload
 - canon-route/src/executor.rs
-  - emit ROUTE trace with Decision → Route mapping
-- global
-  - enforce invariant: every route_selected must include DECIDE + ROUTE traces
+  - emit ROUTE trace for every route_selected
+- global invariant:
+  - route_selected MUST imply {DECIDE, ROUTE} traces (1:1 coverage)
+  - enforce via assertion or verifier hook
+
+### 2. Impact: HIGH
+Signal: LoopObserved emission missing / conditional
+Evidence:
+- loop_observed_missing = 24 (increasing)
+- indicates non-deterministic Observe stage emission
+Repair Targets:
+- canon-loop/src/stage/observe.rs
+  - make LoopObserved emission unconditional
+  - ensure every Observe transition produces event
+  - remove branching that skips emission
 
 ### 3. Impact: HIGH
 Signal: Act executed with empty scheduler
 Evidence:
-- act_with_empty_scheduler = 9
+- act_with_empty_scheduler = 2
+- violation of core decision invariant
 Repair Targets:
 - canon-invariant/src/lib.rs
   - enforce scheduler_len == 0 ⇒ Decision::Observe
 - canon-route/src/executor.rs
-  - prevent Act mapping when scheduler empty
+  - hard-block Act routing when scheduler empty
 - canon-loop/src/context.rs
-  - validate scheduler_len correctness
+  - validate scheduler_len before decision
 
 ### 4. Impact: HIGH
-Signal: Decision logic not centralized
+Signal: Successor discharge gaps (event lifecycle incomplete)
 Evidence:
-- ConstraintRoute still present
-- routing logic distributed across modules
+- successor_discharge_gaps = 10
+- events not properly finalized/discharged
 Repair Targets:
-- canon-invariant/src/lib.rs
-  - make decide(...) sole authority
-  - eliminate ConstraintRoute from decision path
-- canon-route/src/executor.rs
-  - remove all routing branches
-- canon-route/src/policy.rs
-  - reduce to mapping-only or remove
+- canon-runtime / event system
+  - enforce invariant: every event must reach discharged state
+  - add explicit discharge step or confirmation
+  - audit lifecycle: emit → route → act → discharge
 
 ### 5. Impact: MEDIUM
-Signal: Plan stage safeguards incomplete
+Signal: Duplicate dispatch / fanout
 Evidence:
-- missing assertions and PLAN_ERROR enforcement
+- duplicate_fanout_signals = 1
 Repair Targets:
-- canon-loop/src/stage/plan.rs
-  - enforce ≥1 task OR explicit failure
-  - emit PLAN_ERROR and assert on invalid outputs
+- canon-runtime / dispatch layer
+  - enforce single-dispatch per event invariant
+  - deduplicate dispatch paths
+  - add idempotency guard (event_id-based)
 
 ### 6. Impact: MEDIUM
-Signal: Dispatch deduplication not strict
+Signal: Observe recovery path still implicit
 Evidence:
-- duplicated / weakened dedup logic (from verifier context)
+- observe_recovery_missing = 0 (no explicit markers)
+- verifier indicates missing explicit implementation
 Repair Targets:
-- executor / dispatch layer
-  - enforce strict deduplication
-  - remove duplicated logic paths
-
-### 7. Impact: MEDIUM
-Signal: ConstraintState not minimal
-Evidence:
-- includes non-decision fields
-Repair Targets:
-- canon-invariant/src/lib.rs
-  - reduce to scheduler_len + has_plan only
+- canon-loop/src/stage/observe.rs
+  - implement explicit recovery path
+  - emit recovery-specific trace/log
+  - ensure deterministic transition semantics
 
 ## Planner Handoff
 
 Highest-value repair targets:
-1. Fix LoopActed invariant immediately
-2. Implement DECIDE + ROUTE trace emission with trace_id
-3. Enforce scheduler_len == 0 ⇒ Observe
-4. Centralize decision logic in decide(...)
-5. Enforce Plan stage guarantees
+1. Enforce full DECIDE + ROUTE trace coverage (critical observability gap)
+2. Make LoopObserved emission unconditional
+3. Enforce scheduler_len == 0 ⇒ Observe invariant
+4. Fix event lifecycle: guarantee successor discharge
+
+Secondary:
+5. Eliminate duplicate dispatch/fanout
+6. Implement explicit observe recovery path
 
 Blockers / Gaps:
-- Severe invariant violations (LoopActed)
-- Observability incomplete (missing traces)
-- Decision logic fragmented
-- Plan safeguards missing
+- Trace coverage regression growing (28 missing)
+- Observe stage nondeterministic (24 misses)
+- Event lifecycle incomplete (discharge gaps present)
+- Control-flow invariant violations persist

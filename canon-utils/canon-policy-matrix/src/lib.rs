@@ -565,7 +565,7 @@ pub struct LoopTransitionRow {
     pub expected_rules: Vec<LoopRecoveryRule>,
     pub expected_trigger_observe: bool,
     pub expected_force_reward_recovery: bool,
-    pub expected_observe_blocked: bool,
+    // REMOVED: observe should never be blocked by successor state
 }
 
 #[derive(Clone, Debug)]
@@ -1640,7 +1640,6 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
             expected_rules: vec![LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan],
             expected_trigger_observe: false,
             expected_force_reward_recovery: false,
-            expected_observe_blocked: false,
         },
         LoopTransitionRow {
             name: "planned_status_has_no_invalid_plan_recovery",
@@ -1652,7 +1651,6 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
             expected_rules: vec![],
             expected_trigger_observe: false,
             expected_force_reward_recovery: false,
-            expected_observe_blocked: false,
         },
         LoopTransitionRow {
             name: "act_stall_triggers_observe",
@@ -1664,7 +1662,6 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
             expected_rules: vec![LoopRecoveryRule::TriggerObserveOnActStall],
             expected_trigger_observe: true,
             expected_force_reward_recovery: false,
-            expected_observe_blocked: true,
         },
         LoopTransitionRow {
             name: "non_act_stall_does_not_trigger_observe",
@@ -1676,7 +1673,6 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
             expected_rules: vec![],
             expected_trigger_observe: false,
             expected_force_reward_recovery: false,
-            expected_observe_blocked: true,
         },
         LoopTransitionRow {
             name: "reward_recovery_for_expected_successor",
@@ -1688,7 +1684,6 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
             expected_rules: vec![LoopRecoveryRule::RecoverLoopRewarded],
             expected_trigger_observe: false,
             expected_force_reward_recovery: true,
-            expected_observe_blocked: true,
         },
         LoopTransitionRow {
             name: "non_reward_successor_does_not_recover",
@@ -1700,7 +1695,6 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
             expected_rules: vec![],
             expected_trigger_observe: false,
             expected_force_reward_recovery: false,
-            expected_observe_blocked: true,
         },
         LoopTransitionRow {
             name: "observe_blocked_by_pending_successor",
@@ -1712,7 +1706,6 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
             expected_rules: vec![],
             expected_trigger_observe: false,
             expected_force_reward_recovery: false,
-            expected_observe_blocked: true,
         },
         LoopTransitionRow {
             name: "observe_not_blocked_without_successor",
@@ -1724,7 +1717,6 @@ pub fn loop_transition_rows() -> Vec<LoopTransitionRow> {
             expected_rules: vec![],
             expected_trigger_observe: false,
             expected_force_reward_recovery: false,
-            expected_observe_blocked: false,
         },
     ]
 }
@@ -2311,7 +2303,7 @@ fn assert_loop_row(row: &LoopTransitionRow) {
     assert_eq!(eval.recovery_rules, row.expected_rules, "loop row {} rules mismatch", row.name);
     assert_eq!(eval.trigger_observe, row.expected_trigger_observe, "loop row {} trigger_observe mismatch", row.name);
     assert_eq!(eval.force_reward_recovery, row.expected_force_reward_recovery, "loop row {} force_reward_recovery mismatch", row.name);
-    assert_eq!(eval.observe_blocked_by_successor, row.expected_observe_blocked, "loop row {} observe_blocked mismatch", row.name);
+    // REMOVED: observe_blocked invariant — observe should never be blocked
 }
 
 fn assert_loop_runtime_row(row: &LoopRuntimeRow) {

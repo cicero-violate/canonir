@@ -91,7 +91,8 @@ impl RouteContext {
     pub fn record_planning_completion(&mut self, status: &str, planned_count: Option<usize>) {
         if let Some(n) = planned_count {
             self.planned_pending = n;
-            self.scheduler_len = n;
+            // DO NOT mutate scheduler_len here — it must reflect actual executable work,
+            // not planned_count. planned_pending is the source of truth for planning output.
         }
         match status {
             "llm_failed" | "llm_timeout" => {

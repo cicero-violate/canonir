@@ -121,9 +121,8 @@ impl RouteExecutor {
             has_plan
         );
 
-        // Do not suppress control emission when a route_selected successor is required.
-        if self.pending_required_successor != Some("route_selected")
-            && self.last_decision == Some(decision)
+        // STRICT: always apply dedup based purely on decision + scheduler state
+        if self.last_decision == Some(decision)
             && self.last_scheduler_len == Some(self.ctx.scheduler_len)
         {
             eprintln!(
@@ -212,8 +211,7 @@ impl RouteExecutor {
                 self.ctx.scheduler_len
             );
 
-            if self.pending_required_successor != Some("route_selected")
-                && *last_decision == Some(decision)
+            if *last_decision == Some(decision)
                 && *last_len == Some(self.ctx.scheduler_len)
             {
                 eprintln!("[DISPATCH SKIP] identical decision with no state change");
@@ -683,19 +681,32 @@ impl RouteExecutor {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
-        if let Some(expected) = self.pending_required_successor {
-            if expected != "route_selected" {
-                return;
-            }
-        }
+        // REMOVED: suppression based on pending_required_successor
+        // This was blocking legitimate recovery paths (e.g., observe) and causing deadlocks
         if let Some(last) = &self.last_route_selected {
             if last.approved_route == decision.lane.as_str() {
                 return;
             }
         }
+        // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
+        eprintln!(
+            "[ROUTE TRACE] {}:{} {} fn=emit_route_selected decision={:?} scheduler_len={}",
+            file!(),
+            line!(),
+            module_path!(),
+            decision.lane,
+            self.ctx.scheduler_len
+        );
         let route_event = RuntimeEvent::RouteSelected(RouteSelected {
             tick: self.ctx.scheduler_tick,
-            approved_route: decision.lane.as_str().to_string(),
+            approved_route: {
+                // INVARIANT: scheduler_len == 0 must never route to Act
+                if matches!(decision.lane, RouteKind::Act) && self.ctx.scheduler_len == 0 {
+                    "observe".to_string()
+                } else {
+                    decision.lane.as_str().to_string()
+                }
+            },
             suggested_route: decision.suggested_route.as_str().to_string(),
             rationale: decision.rationale.clone(),
             confidence: decision.confidence,

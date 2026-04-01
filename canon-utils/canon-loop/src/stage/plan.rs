@@ -70,60 +70,15 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
         eprintln!("[PLAN WARNING] scheduler empty at plan entry with observed state present");
     }
     let Some(observed) = ctx.last_observed.clone() else {
-        // FORCE BOOTSTRAP: ensure plan produces a valid PlanningCompleted event
-        eprintln!("[PLAN BOOTSTRAP] no observed state → RETURNING minimal PlanningCompleted");
-        // CRITICAL FIX: ensure scheduler is seeded with at least one task
-        ctx.scheduler.push(crate::scheduler::ScheduledTask {
-            priority: crate::scheduler::TaskPriority::Normal,
-            enqueued_at: std::time::Instant::now(),
-            seq: 0,
-            agent_id: None,
-            plan: canon_event::LoopPlanned {
-                tick: rs.tick,
-                action_kind: "bootstrap".to_string(),
-                action_payload: serde_json::json!({}),
-                reason: "bootstrap task".to_string(),
-                llm_request_id: None,
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-                plan_id: Some("bootstrap".to_string()),
-                plan_step_id: None,
-                action_id: None,
-                signals: None,
-                depends_on: Vec::new(),
-            },
-        });
+        // NO BOOTSTRAP: allow zero-task planning → observe recovery
+        eprintln!("[PLAN] no observed state → zero-task PlanningCompleted (observe recovery)");
         let scheduler_len_after = ctx.scheduler.len();
         eprintln!("[PLAN RESULT] scheduler_len_after={}", scheduler_len_after);
         if scheduler_len_after == 0 {
             eprintln!("[PLAN ERROR] no tasks produced");
         }
         if scheduler_len_after == 0 {
-            eprintln!("[PLAN FIX] bootstrap path failed → forcing fallback");
-            ctx.scheduler.push(crate::scheduler::ScheduledTask {
-                priority: crate::scheduler::TaskPriority::Normal,
-                enqueued_at: std::time::Instant::now(),
-                seq: 0,
-                agent_id: None,
-                plan: canon_event::LoopPlanned {
-                    tick: rs.tick,
-                    action_kind: "forced_fallback".to_string(),
-                    action_payload: serde_json::json!({}),
-                    reason: "forced bootstrap fallback".to_string(),
-                    llm_request_id: None,
-                    trace_id: None,
-                    execution_id: None,
-                    span_id: None,
-                    parent_span_id: None,
-                    plan_id: Some("forced_fallback".to_string()),
-                    plan_step_id: None,
-                    action_id: None,
-                    signals: None,
-                    depends_on: Vec::new(),
-                },
-            });
+            // NO FALLBACK: preserve zero-task planning to trigger observe recovery
         }
 
         // CRITICAL FIX: ensure bootstrap path ALSO returns PlanningCompleted synchronously
@@ -132,7 +87,7 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
                 tick: rs.tick,
                 llm_request_id: None,
                 planned_count: ctx.scheduler.len(),
-                status: "bootstrap".to_string(),
+                status: "missing_semantic_context".to_string(),
             })
         ));
     };
