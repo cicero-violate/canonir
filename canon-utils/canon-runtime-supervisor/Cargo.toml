@@ -5,10 +5,14 @@ edition = "2021"
 autotests = false
 autobins = false
 
+[features]
+trace = []
+
 [dependencies]
 anyhow.workspace = true
 canon_decision = { package = "canon-decision", path = "../canon-decision" }
 canon_judgment = { package = "canon-judgment", path = "../canon-judgment" }
+canon_exec = { path = "../canon-exec" }
 serde_json.workspace = true
 # canon_builder = { package = "canon-builder", path = "../canon-builder" }
 notify = "6"
