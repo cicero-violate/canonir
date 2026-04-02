@@ -184,6 +184,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "TURN_STARTED") {
+    sendToOwner(tabId, {
+      type: "TURN_STARTED",
+      tabId,
+      turnId: message.turn_id ?? null,
+      source: message.source ?? null,
+      ts: message.ts ?? Date.now()
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+
   sendResponse({ ok: false });
   return true;
 });

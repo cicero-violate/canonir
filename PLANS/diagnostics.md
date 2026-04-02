@@ -1,96 +1,106 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- event log segments (state/event_log/event.tlog.d)
-- latest python analysis (current cycle)
-- verifier summary (lane_a)
-- prior inspection of canon-loop, canon-route, canon-runtime
+- state/event_log/event.tlog.d (latest)
+- canon-loop (executor.rs, observe.rs)
+- canon-runtime (bus.rs)
+- canon-route (policy.rs)
+- verifier summaries
 
 ## Ranked Failures
 
-### 1. Impact: CRITICAL
-Signal: LoopObserved invariant failure breaks routing entrypoint
+### 1. Impact: HIGH
+Signal: LoopObserved exact-once invariant still violated (unproven and contradicted by logs)
 Evidence:
-- 24,254 missing LoopObserved events (stable across cycles)
-- LoopObserved → RouteSelected is required control-flow edge
-Repair Targets:
-- canon-loop/src/stage/observe.rs
-  - enforce single-exit structure with guaranteed LoopObserved emission
-  - add runtime assertion ensuring emission occurred exactly once
-  - eliminate implicit fallthrough and hidden bypass paths
+- 24,258 missing LoopObserved
+- only 4 LoopObserved emitted
+- explicit duplicate detected (1)
+- no improvement across cycles
 
-### 2. Impact: CRITICAL
-Signal: Decision→Route invariant collapse
+Interpretation:
+- System fails both completeness (missing) and uniqueness (duplicate)
+- No confirmed single authoritative emission or propagation path
+- EventBus changes insufficient to guarantee end-to-end invariant
+
+Repair Targets:
+- canon-loop/src/observe.rs: define single authoritative emission point
+- canon-loop/src/executor.rs: eliminate all alternate or retry emission paths
+- introduce loop_id-scoped invariant: exactly one LoopObserved per loop
+- enforce idempotency at emission boundary (not downstream)
+- add fail-fast: duplicate OR missing LoopObserved aborts execution
+
+---
+
+### 2. Impact: HIGH
+Signal: Decision → Route invariant still broken
 Evidence:
 - 5,167 missing decision traces
-- 5,166 missing route traces
-Repair Targets:
-- canon-route/src/executor.rs
-  - replace debug_assert!(true, ...) with enforced invariant
-  - block route emission if decision trace is missing
+- 5,163 missing route traces
+- no reduction across runs
 
-### 3. Impact: CRITICAL
-Signal: SemanticStateSummary is not sole routing authority
-Evidence:
-- 16 queue-driven routing signals
-- verifier confirms continued use of scheduler_len / planned_pending
 Repair Targets:
-- canon-route policy + executor
-  - remove all scheduler_len / planned_pending dependencies
-  - enforce routing derived exclusively from SemanticStateSummary
+- canon-route: enforce decision_trace as prerequisite for RouteSelected
+- require 1:1 mapping between decision and route
+- block RouteSelected without decision linkage
 
-### 4. Impact: CRITICAL
-Signal: RequestDispatch / synthetic dispatch not fully removed
-Evidence:
-- 461 synthetic dispatch signals
-- verifier explicitly reports incomplete RequestDispatch removal
-Repair Targets:
-- canon-runtime dispatch layer
-  - fully remove RequestDispatch paths
-  - eliminate synthetic fanout and replay-based dispatch
+---
 
-### 5. Impact: CRITICAL
-Signal: Invariants detected but not enforced
+### 3. Impact: HIGH
+Signal: EventBus / dispatch layer still non-canonical
 Evidence:
-- 1,278 invariant/error lines
-- runtime continues execution despite violations
-Repair Targets:
-- canon-invariant
-  - convert invariant violations into fail-fast behavior
-  - halt execution when invariants are violated
+- 3,879 synthetic dispatch signals
+- dispatch occurs outside RouteSelected path
 
-### 6. Impact: HIGH
-Signal: Successor lifecycle incomplete
-Evidence:
-- 2,188 successor_discharge_gaps
 Repair Targets:
-- canon-runtime lifecycle
-  - enforce exactly-once successor discharge
-  - remove lifecycle bypass cases
+- canon-runtime/src/bus.rs: verify removal of all fanout/filter paths
+- enforce strict linear flow: RouteSelected → dispatch only
+- add invariant: dispatch without RouteSelected is illegal
 
-### 7. Impact: HIGH
-Signal: Persistent missing/duplicate patterns
+---
+
+### 4. Impact: HIGH
+Signal: Invariants not enforced (system continues under violation)
 Evidence:
-- "missing": 500 occurrences
-- "duplicate": 2 occurrences
+- 7,418 invariant errors
+
 Repair Targets:
-- runtime control-flow
-  - eliminate early exits and implicit bypass paths
-  - enforce invariant checkpoints on all exits
+- canon-invariant: convert all invariants to fail-fast
+- abort execution immediately on violation
+
+---
+
+### 5. Impact: MEDIUM
+Signal: Residual queue-driven routing signals persist
+Evidence:
+- 16 queue-driven routing signals still present in logs
+
+Repair Targets:
+- audit for indirect routing dependencies (scheduler_len, derived mirrors)
+- confirm SemanticStateSummary is sole runtime authority
+
+---
+
+### 6. Impact: MEDIUM
+Signal: Successor lifecycle gaps
+Evidence:
+- 2,188 successor discharge gaps
+
+Repair Targets:
+- enforce exactly-once successor discharge
+- validate lifecycle at transition boundary
+
+---
 
 ## Planner Handoff
+1. Enforce LoopObserved exact-once invariant at emission source (primary blocker)
+2. Enforce decision → route invariant strictly
+3. Eliminate all non-canonical dispatch paths
+4. Convert invariants to fail-fast
+5. Remove residual queue-driven routing signals
+6. Fix successor lifecycle
 
-Priority order:
-1. Guarantee LoopObserved emission (fix observe control flow)
-2. Enforce decision→route invariant strictly
-3. Remove queue-derived routing inputs (semantic-only authority)
-4. Fully eliminate RequestDispatch and synthetic dispatch
-5. Enforce fail-fast invariant behavior
-6. Fix successor lifecycle completion
-
-Blockers:
-- System is active but not converging (metrics unchanged across cycles)
-- Routing/control flow still partially driven by non-semantic state
-- RequestDispatch removal incomplete (per verifier)
-- Invariants are informational only and not enforced
+## Notes
+- No evidence that recent changes improved system correctness
+- Exact-once LoopObserved remains unproven and contradicted by logs
+- Core issue: lack of single authoritative control-flow path from observe → route → dispatch
 

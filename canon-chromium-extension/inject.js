@@ -7,8 +7,31 @@
   window.__promptInjectionMode     = window.__promptInjectionMode     || "auto";
   window.__promptInjectionQueue    = window.__promptInjectionQueue    || [];
   window.__currentTurnId           = window.__currentTurnId           || null;
+  window.__nextSyntheticTurnId     = window.__nextSyntheticTurnId     || (Date.now() * 1000);
+
+  function nextSyntheticTurnId() {
+    const next = Number(window.__nextSyntheticTurnId || (Date.now() * 1000));
+    window.__nextSyntheticTurnId = next + 1;
+    return next;
+  }
+
+  function ensureActiveTurnId(source) {
+    if (typeof window.__currentTurnId === "number") {
+      return window.__currentTurnId;
+    }
+    const turnId = nextSyntheticTurnId();
+    window.__currentTurnId = turnId;
+    window.postMessage({
+      type: "TURN_STARTED",
+      turn_id: turnId,
+      source,
+      ts: Date.now()
+    }, "*");
+    return turnId;
+  }
 
   function emitInbound(chunk) {
+    ensureActiveTurnId("inbound_chunk");
     const payload = {
       turn_id: window.__currentTurnId,
       chunk,
@@ -22,6 +45,7 @@
   window.WebSocket = function (url, protocols) {
     const ws = protocols ? new __OrigWS(url, protocols) : new __OrigWS(url);
     ws.addEventListener("message", (ev) => {
+      ensureActiveTurnId("websocket_message");
       let data = typeof ev.data === "string"
         ? ev.data
         : ev.data instanceof ArrayBuffer
@@ -58,6 +82,10 @@
       return new Response(null, { status: 204 });
 
     const isTarget = matchesTarget(typeof input === "string" ? input : input?.url);
+    const requestMethod = String(init?.method || input?.method || "GET").toUpperCase();
+    if (isTarget && requestMethod !== "GET") {
+      ensureActiveTurnId("fetch_request");
+    }
     const response = await __origFetch(input, init);
     if (!isTarget || !response.body) return response;
 

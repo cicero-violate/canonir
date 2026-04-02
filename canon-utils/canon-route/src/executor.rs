@@ -39,6 +39,8 @@ pub struct RouteExecutor {
     current_trigger: Option<EventId>,
     // dispatch deduplication state
     last_decision: Option<canon_invariant::Decision>,
+    // STRICT: decision → route invariant tracking
+    last_decision_trace_id: Option<u64>,
     // removed scheduler_len mirror — routing must not depend on queue-derived state
 }
 
@@ -59,6 +61,7 @@ impl RouteExecutor {
             reroute_requested: false,
             current_trigger: None,
             last_decision: None,
+            last_decision_trace_id: None,
             // scheduler_len removed
         }
     }
@@ -119,6 +122,10 @@ impl RouteExecutor {
             decision,
             has_plan
         );
+
+        // HARD INVARIANT: decision_trace must exist before any RouteSelected emission
+        // We enforce this by recording the last decision trace id
+        self.last_decision_trace_id = Some(trace_id);
 
         // STRICT: always apply dedup based purely on decision + scheduler state
         if self.last_decision == Some(decision)
@@ -456,14 +463,8 @@ impl EventConsumer for RouteExecutor {
                     line!(),
                 );
             }
-            let eval = evaluate_route_event_dispatch(
-                &RuntimeEvent::ToolBatchSettled(ToolBatchSettled { tick: self.ctx.scheduler_tick, result_count, any_failed }),
-                true,
-            );
-            if eval.should_dispatch {
-                self.try_dispatch_route(&RuntimeEvent::ToolBatchSettled(ToolBatchSettled { tick: self.ctx.scheduler_tick, result_count, any_failed }));
-                return EventOutcome::NoOp("route_executor_batch_settled");
-            }
+            // CRITICAL FIX: eliminate event-driven dispatch
+            // Routing must only proceed via decision() → RouteSelected
         }
 
         // FIX: remove forced dispatch path to allow natural routing progression
@@ -485,7 +486,6 @@ impl EventConsumer for RouteExecutor {
             return EventOutcome::NoOp(fast_path.noop_reason);
         }
 
-        // planned_pending is the authoritative signal for pending planned work
         let event_dispatch_eval = evaluate_route_event_dispatch(event, true);
         if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::IdleDispatch) {
             if self.pending_request_id.as_deref() == Some("deterministic") && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_)) {
@@ -508,6 +508,9 @@ impl EventConsumer for RouteExecutor {
         }
 
         match event {
+            RuntimeEvent::CapabilityRequested(_) => {
+                return EventOutcome::NoOp("route_executor_capability_requested");
+            }
             RuntimeEvent::CapabilityCompleted(done) => {
                 if Some(&done.request_id) != self.pending_request_id.as_ref() || done.capability != "llm.call" {
                     return EventOutcome::NoOp("route_executor_unrelated_completion");
@@ -641,13 +644,21 @@ impl RouteExecutor {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
+        // HARD INVARIANT: require decision_trace before emitting RouteSelected
+        if self.last_decision_trace_id.is_none() {
+            panic!("RouteSelected emitted without preceding decision_trace");
+        }
+        // STRICT INVARIANT: exactly one RouteSelected per decision (by prompt hash)
+        let current_prompt_hash = hash_str(&decision.prompt);
+        if self.last_route_prompt_hash == Some(current_prompt_hash) {
+            panic!("Duplicate RouteSelected emission detected for identical decision prompt");
+        }
         // REMOVED: suppression based on pending_required_successor
         // This was blocking legitimate recovery paths (e.g., observe) and causing deadlocks
-        if let Some(last) = &self.last_route_selected {
-            if last.approved_route == decision.lane.as_str() {
-                return;
-            }
-        }
+        // CRITICAL FIX: remove executor-level deduplication
+        // Routing must emit exactly once per decision by construction,
+        // not by suppressing duplicate emissions here.
+        // Any duplicate indicates upstream invariant violation.
         // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
         // INVARIANT: every RouteSelected emission MUST have exactly one preceding ROUTE TRACE
         eprintln!(
@@ -683,6 +694,8 @@ impl RouteExecutor {
         };
         self.last_route_prompt_hash = Some(hash_str(&decision.prompt));
         self.last_route_selected = Some(route_payload.clone());
+        // STRICT INVARIANT: consume decision_trace to enforce exactly-one RouteSelected per decision
+        self.last_decision_trace_id = None;
         let tid = self.current_trigger.clone().expect("emit_route_selected_from_decision called without current_trigger set");
         // removed awaiting_control_successor assignment
         eprintln!(

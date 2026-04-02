@@ -110,6 +110,9 @@ impl EventConsumer for AgentRegistryConsumer {
             return EventOutcome::NoOp("agent_registry_poisoned");
         };
         match event {
+            RuntimeEvent::CapabilityRequested(_) => {
+                return EventOutcome::NoOp("agent_registry_capability_requested");
+            }
             RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
                 reg.upsert_card(payload);
                 EventOutcome::NoOp("agent_registered")

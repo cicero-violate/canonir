@@ -83,14 +83,14 @@ struct ServerState {
     /// tabId → frame assembler (parser + buffering).
     tab_assemblers: HashMap<u32, FrameAssembler>,
 
-    /// tabId → oneshot waiting for a completed response.
-    pending: HashMap<u32, oneshot::Sender<String>>,
+    /// (tabId, turnId) → oneshot waiting for a completed response.
+    pending: HashMap<(u32, u64), oneshot::Sender<String>>,
     /// tabId → expected turnId for inbound chunk filtering.
     pending_turn_id: HashMap<u32, u64>,
-    /// tabId → oneshot waiting for TURN submit acknowledgment on normal send_turn flows.
-    pending_send_ack: HashMap<u32, oneshot::Sender<()>>,
-    /// tabId → oneshot waiting for submit acknowledgment.
-    pending_submit: HashMap<u32, oneshot::Sender<()>>,
+    /// (tabId, turnId) → oneshot waiting for TURN submit acknowledgment on normal send_turn flows.
+    pending_send_ack: HashMap<(u32, u64), oneshot::Sender<()>>,
+    /// (tabId, turnId) → oneshot waiting for submit acknowledgment.
+    pending_submit: HashMap<(u32, u64), oneshot::Sender<()>>,
 
     /// reqId → oneshot waiting for TAB_OPENED confirmation.
     pending_open: HashMap<u64, oneshot::Sender<u32>>,
@@ -106,6 +106,9 @@ struct ServerState {
     /// Drained into out_tx the moment a new connection is established,
     /// so no TURN is silently dropped during a reconnect window.
     turn_replay_queue: Vec<Value>,
+
+    /// Assembled responses that arrived without a synchronous waiter.
+    completed_turns: Vec<Value>,
 
     /// Monotonic counter for frame dump filenames.
     frame_counter: u64,
@@ -134,6 +137,7 @@ impl ServerState {
             pending_temp_chat: HashMap::new(),
             live_tabs: std::collections::HashSet::new(),
             turn_replay_queue: Vec::new(),
+            completed_turns: Vec::new(),
             frame_counter: 0,
         }
     }
@@ -181,16 +185,16 @@ impl WsBridge {
     /// If the WS is disconnected the frame is pushed into `turn_replay_queue`
     /// and will be replayed the moment the extension reconnects, so no TURN
     /// is silently lost during the ~1 s reconnect window.
-    pub async fn send_turn(&self, tab_id: u32, url: &str, text: String) -> Result<String, WsBridgeError> {
+    pub async fn send_turn_with_meta(&self, tab_id: u32, url: &str, text: String) -> Result<(String, u64), WsBridgeError> {
         let (tx, rx) = oneshot::channel::<String>();
         let (ack_tx, ack_rx) = oneshot::channel::<()>();
         let turn_id = self.next_turn_id.fetch_add(1, Ordering::Relaxed);
 
         {
             let mut st = self.state.lock().await;
-            st.pending.insert(tab_id, tx);
+            st.pending.insert((tab_id, turn_id), tx);
             st.pending_turn_id.insert(tab_id, turn_id);
-            st.pending_send_ack.insert(tab_id, ack_tx);
+            st.pending_send_ack.insert((tab_id, turn_id), ack_tx);
             if !st.tab_assemblers.contains_key(&tab_id) {
                 let site = SiteType::from_url(url);
                 st.tab_assemblers.insert(tab_id, FrameAssembler::new(site));
@@ -213,25 +217,38 @@ impl WsBridge {
             Ok(Ok(())) => {}
             Ok(Err(_)) => {
                 let mut st = self.state.lock().await;
-                st.pending.remove(&tab_id);
+                st.pending.remove(&(tab_id, turn_id));
                 st.pending_turn_id.remove(&tab_id);
-                st.pending_send_ack.remove(&tab_id);
+                st.pending_send_ack.remove(&(tab_id, turn_id));
                 return Err(WsBridgeError::Cancelled);
             }
             Err(_) => {
                 let mut st = self.state.lock().await;
-                st.pending.remove(&tab_id);
+                st.pending.remove(&(tab_id, turn_id));
                 st.pending_turn_id.remove(&tab_id);
-                st.pending_send_ack.remove(&tab_id);
+                st.pending_send_ack.remove(&(tab_id, turn_id));
                 return Err(WsBridgeError::Timeout);
             }
         }
 
         match tokio::time::timeout(std::time::Duration::from_secs(self.response_timeout_secs), rx).await {
-            Ok(Ok(text)) => Ok(text),
-            Ok(Err(_)) => Err(WsBridgeError::Cancelled),
-            Err(_) => Err(WsBridgeError::Timeout),
+            Ok(Ok(text)) => Ok((text, turn_id)),
+            Ok(Err(_)) => {
+                let mut st = self.state.lock().await;
+                st.pending.remove(&(tab_id, turn_id));
+                Err(WsBridgeError::Cancelled)
+            }
+            Err(_) => {
+                let mut st = self.state.lock().await;
+                st.pending.remove(&(tab_id, turn_id));
+                Err(WsBridgeError::Timeout)
+            }
         }
+    }
+
+    pub async fn send_turn(&self, tab_id: u32, url: &str, text: String) -> Result<String, WsBridgeError> {
+        let (text, _turn_id) = self.send_turn_with_meta(tab_id, url, text).await?;
+        Ok(text)
     }
 
     pub async fn submit_turn(&self, tab_id: u32, url: &str, text: String) -> Result<u64, WsBridgeError> {
@@ -240,7 +257,7 @@ impl WsBridge {
 
         {
             let mut st = self.state.lock().await;
-            st.pending_submit.insert(tab_id, tx);
+            st.pending_submit.insert((tab_id, turn_id), tx);
             st.pending_turn_id.insert(tab_id, turn_id);
             if !st.tab_assemblers.contains_key(&tab_id) {
                 let site = SiteType::from_url(url);
@@ -261,8 +278,18 @@ impl WsBridge {
 
         match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
             Ok(Ok(())) => Ok(turn_id),
-            Ok(Err(_)) => Err(WsBridgeError::Cancelled),
-            Err(_) => Err(WsBridgeError::Timeout),
+            Ok(Err(_)) => {
+                let mut st = self.state.lock().await;
+                st.pending_submit.remove(&(tab_id, turn_id));
+                st.pending_turn_id.remove(&tab_id);
+                Err(WsBridgeError::Cancelled)
+            }
+            Err(_) => {
+                let mut st = self.state.lock().await;
+                st.pending_submit.remove(&(tab_id, turn_id));
+                st.pending_turn_id.remove(&tab_id);
+                Err(WsBridgeError::Timeout)
+            }
         }
     }
 
@@ -329,6 +356,11 @@ impl WsBridge {
             Ok(Err(_)) => Err(WsBridgeError::Cancelled),
             Err(_) => Err(WsBridgeError::Timeout),
         }
+    }
+
+    pub async fn take_completed_turns(&self) -> Vec<Value> {
+        let mut st = self.state.lock().await;
+        std::mem::take(&mut st.completed_turns)
     }
 }
 
@@ -459,10 +491,10 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             let mut st = state.lock().await;
             st.live_tabs.remove(&tab_id);
             st.tab_assemblers.remove(&tab_id);
-            st.pending.remove(&tab_id);
+            st.pending.retain(|(tid, _), _| *tid != tab_id);
             st.pending_turn_id.remove(&tab_id);
-            st.pending_send_ack.remove(&tab_id);
-            st.pending_submit.remove(&tab_id);
+            st.pending_send_ack.retain(|(tid, _), _| *tid != tab_id);
+            st.pending_submit.retain(|(tid, _), _| *tid != tab_id);
             st.pending_new_chat.remove(&tab_id);
         }
 
@@ -494,18 +526,48 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
 
             let mut st = state.lock().await;
             let expected = st.pending_turn_id.get(&tab_id).copied();
+            if expected.is_some() && ack_turn_id.is_none() {
+                return;
+            }
             if let Some(turn_id) = ack_turn_id {
                 if expected != Some(turn_id) {
                     return;
                 }
             }
-            if let Some(tx) = st.pending_send_ack.remove(&tab_id) {
+            let Some(turn_id) = ack_turn_id else {
+                return;
+            };
+            if let Some(tx) = st.pending_send_ack.remove(&(tab_id, turn_id)) {
                 let _ = tx.send(());
                 return;
             }
-            if let Some(tx) = st.pending_submit.remove(&tab_id) {
+            if let Some(tx) = st.pending_submit.remove(&(tab_id, turn_id)) {
                 let _ = tx.send(());
-                st.pending_turn_id.remove(&tab_id);
+                // Keep pending_turn_id alive for submit-only flows so the later
+                // asynchronous INBOUND_MESSAGE can still be matched, assembled,
+                // and surfaced via completed_turns.
+            }
+        }
+
+        "TURN_STARTED" => {
+            let tab_id = match msg.get("tabId").and_then(|v| v.as_u64()) {
+                Some(id) => id as u32,
+                None => return,
+            };
+            let turn_id = match msg.get("turnId").and_then(|v| v.as_u64()) {
+                Some(id) => id,
+                None => return,
+            };
+
+            let mut st = state.lock().await;
+            if st.pending_turn_id.contains_key(&tab_id) {
+                return;
+            }
+            st.pending_turn_id.insert(tab_id, turn_id);
+            if let Some(asm) = st.tab_assemblers.get_mut(&tab_id) {
+                asm.reset();
+            } else {
+                st.tab_assemblers.insert(tab_id, FrameAssembler::new(SiteType::Unknown));
             }
         }
 
@@ -534,21 +596,20 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             }
 
             let expected = st.pending_turn_id.get(&tab_id).copied();
-            if let Some(tid) = inbound_turn_id {
-                if expected != Some(tid) {
-                    return;
-                }
-            } else if expected.is_some() {
-                // Accept chunks that do not include turn_id and bind to expected.
-                inbound_turn_id = expected;
-            }
+            let effective_turn_id = match (inbound_turn_id, expected) {
+                (Some(tid), Some(expected_tid)) if expected_tid != tid => return,
+                (Some(_), None) => return,
+                (None, None) => return,
+                (Some(tid), Some(_)) => Some(tid),
+                (None, Some(expected_tid)) => Some(expected_tid),
+            };
 
             // Dump every inbound frame to disk for parser inspection.
             st.frame_counter += 1;
             let inbound_record = json!({
                 "frame_counter": st.frame_counter,
                 "tab_id": tab_id,
-                "turn_id": inbound_turn_id,
+                "turn_id": effective_turn_id,
                 "expected_turn_id": expected,
                 "chunk": chunk,
             });
@@ -567,12 +628,20 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                 // Dump assembled message for debugging (Gemini/ChatGPT).
                 let assembled_record = json!({
                     "tab_id": tab_id,
-                    "turn_id": inbound_turn_id.or(expected),
+                    "turn_id": effective_turn_id,
                     "text": text,
                 });
                 append_jsonl("./frames/assembled.jsonl", &assembled_record);
-                if let Some(tx) = st.pending.remove(&tab_id) {
-                    let _ = tx.send(text);
+                let resolved = if let Some(eid) = effective_turn_id {
+                    st.pending.remove(&(tab_id, eid)).map(|tx| {
+                        let _ = tx.send(text.clone());
+                    })
+                } else {
+                    None
+                };
+                if resolved.is_none() {
+                    append_jsonl("./frames/completed.jsonl", &assembled_record);
+                    st.completed_turns.push(assembled_record.clone());
                 }
                 st.pending_turn_id.remove(&tab_id);
             }

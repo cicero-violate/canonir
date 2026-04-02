@@ -199,28 +199,14 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
                 },
             });
         }
-        return Ok(LoopStageResult::EmitMany(vec![
+        return Ok(LoopStageResult::Emit(
             RuntimeEvent::PlanningCompleted(PlanningCompleted {
                 tick: 0,
                 llm_request_id: None,
                 planned_count: 1,
                 status: "complete_fallback".to_string(),
-            }),
-            // CRITICAL FIX: immediately emit required successor to satisfy invariant
-            RuntimeEvent::RouteSelected(canon_event::RouteSelected {
-                tick: 0,
-                suggested_route: "Act".to_string(),
-                prompt: "".to_string(),
-                approved_route: "Act".to_string(),
-                rationale: "auto-route after fallback".to_string(),
-                confidence: Some(1.0),
-                gate_changed: false,
-                gate_note: "auto".to_string(),
-                gate_rules_fired: Vec::new(),
-                gate_should_stop: false,
-                model_json: "".to_string()
             })
-        ]));
+        ));
     };
     if pending.request_id != c.request_id {
         ctx.pending_plan = Some(pending);
@@ -240,25 +226,21 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     if goal_placeholder {
         ctx.last_planned_observed_tick = None;
         return Ok(LoopStageResult::EmitMany(vec![
+            // Emit canonical decision_trace + RouteSelected (fallback to observe reacquisition)
+            RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "decision".to_string(),
+                kind: "decision_trace".to_string(),
+                payload: canon_invariant::decision_trace_payload(
+                    "goal_placeholder",
+                    serde_json::json!({ "route": "observe" })
+                ),
+            }),
             RuntimeEvent::PlanningCompleted(PlanningCompleted {
                 tick: pending.tick,
                 llm_request_id: Some(pending.request_id.clone()),
                 planned_count: 0,
                 status: "goal_placeholder".to_string(),
             }),
-            RuntimeEvent::RouteSelected(canon_event::RouteSelected {
-                tick: pending.tick,
-                suggested_route: "Act".to_string(),
-                prompt: "".to_string(),
-                approved_route: "Act".to_string(),
-                rationale: "auto-route after placeholder".to_string(),
-                confidence: Some(1.0),
-                gate_changed: false,
-                gate_note: "auto".to_string(),
-                gate_rules_fired: Vec::new(),
-                gate_should_stop: false,
-                model_json: "".to_string()
-            })
         ]));
     }
     ctx.last_llm_signals = signals.clone();
@@ -832,6 +814,9 @@ fn validate_action_batch(
     planning_preconditions::validate_trend_intent_alignment(actions, &target_root, recent_execution_results, objective_trend_state)?;
     planning_preconditions::validate_development_strategy_alignment(actions, &target_root, semantic_summary, &objective_state, objective_trend_state, Some(effective_primary_strategy))?;
 
+    // TODO: canonical decision→RouteSelected emission must be implemented
+    // in a context where LoopContext (ctx) is available.
+
     Ok(())
 }
 
@@ -910,33 +895,18 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: E
     let semantic_summary = match planning_semantic_summary(Some(observed)) {
         Ok(summary) => summary,
         Err(message) => {
-            return Ok(LoopStageResult::EmitMany(vec![
-                RuntimeEvent::Debug(canon_event::DebugEvent {
-                    source: "plan_stage".to_string(),
-                    kind: "plan_suppressed".to_string(),
-                    payload: decision_trace_payload(
-                        "planning rejected because semantic observation is unavailable",
-                        serde_json::json!({
-                            "reason": message,
-                            "recoverable": true,
-                            "tick": observed.tick,
-                        }),
-                    ),
-                }),
-                RuntimeEvent::ErrorOccurred(new_error_occurred(
-                    "plan_stall",
-                    "plan_stage",
-                    format!("planning requires complete semantic observation: {message}"),
-                    "warning",
+            return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "plan_stage".to_string(),
+                kind: "plan_suppressed".to_string(),
+                payload: decision_trace_payload(
+                    "planning rejected because semantic observation is unavailable",
                     serde_json::json!({
                         "reason": message,
                         "recoverable": true,
                         "tick": observed.tick,
                     }),
-                    None,
-                )),
-                RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: observed.tick, llm_request_id: None, planned_count: 0, status: "missing_semantic_context".to_string() }),
-            ]));
+                ),
+            })));
         }
     };
     let observed_hash = hash_observed(observed, &semantic_summary);

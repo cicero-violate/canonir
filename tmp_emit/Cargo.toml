@@ -1,0 +1,8 @@
+[package]
+name = "tmp_emit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+canon-runtime-events = { path = "../canon-utils/canon-runtime-events" }
+serde_json = "1"

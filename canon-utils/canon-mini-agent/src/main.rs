@@ -1,928 +1,215 @@
 use anyhow::{anyhow, bail, Context, Result};
 use canon_llm::{
     config::{CapabilityConfig, LlmEndpoint},
-    endpoint_worker::{llm_worker_new_tabs, llm_worker_send_request},
+    endpoint_worker::{llm_worker_new_tabs, llm_worker_send_request, llm_worker_send_request_with_req_id},
     tab_management::TabManagerHandle,
     ws_server,
     ws_server::WsBridge,
 };
-use canon_tools_patch::apply_patch;
-use serde_json::json;
-use serde_json::Value;
-use std::io::Write;
-use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use serde_json::{json, Value};
+use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+
+mod prompts;
+mod logging;
+mod tools;
+mod engine;
+
+use engine::process_action_and_execute;
+use logging::{
+    append_action_log_record, append_action_result_log, append_message_log, append_orchestration_trace,
+    compact_log_record, make_command_id, now_ms,
+};
+use prompts::{
+    action_observation, action_rationale, action_result_prompt, diagnostics_cycle_prompt,
+    diagnostics_python_reads_event_logs, executor_cycle_prompt, is_explicit_idle_action,
+    normalize_action, parse_actions, planner_cycle_prompt, system_instructions,
+    truncate, validate_action, verifier_cycle_prompt, AgentPromptKind,
+};
 
 const WORKSPACE: &str = "/workspace/ai_sandbox/canon";
 const SPEC_FILE: &str = "PLANS/SPEC.md";
-const EXECUTOR_A_PLAN_FILE: &str = "PLANS/executor-a.md";
-const EXECUTOR_B_PLAN_FILE: &str = "PLANS/executor-b.md";
-const DIAGNOSTICS_FILE: &str = "PLANS/diagnostics.md";
-const ACTION_LOG_FILE: &str = "/workspace/ai_sandbox/canon/agent_logs/mini_agent_actions.jsonl";
+#[allow(dead_code)]
+const MASTER_PLAN_FILE: &str = "PLAN.md";
+#[allow(dead_code)]
+const VIOLATIONS_FILE: &str = "VIOLATIONS.md";
+const DIAGNOSTICS_FILE: &str = "DIAGNOSTICS.md";
+const ACTION_LOG_FILE: &str = "/workspace/ai_sandbox/canon/agent_logs/actions.jsonl";
 const WS_PORT_DEFAULT: u16 = 9103;
 const MAX_STEPS: usize = 2000;
 const MAX_FULL_READ_LINES: usize = 500;
 const MAX_SNIPPET: usize = 3000;
 
-const SYSTEM_INSTRUCTIONS_EXECUTOR: &str = r#"You are the canon mini-agent-executor.
-
-Your job is to execute the highest-priority READY work described in the lane plan provided to you.
-`PLANS/SPEC.md` is the canonical contract.
-The planner owns `PLANS/executor-a.md` and `PLANS/executor-b.md`.
-The verifier judges code against `PLANS/SPEC.md`.
-You should only work on the top 1-5 ready tasks in the current cycle, then yield.
-Do not reorganize or update `PLANS/SPEC.md`, `PLANS/executor-a.md`, or `PLANS/executor-b.md` yourself.
-Make source changes, run checks, and report evidence in `done.reason`.
-
-Canonical law:
-- `SemanticStateSummary` is the single source of truth for routing and control-flow correctness.
-- `scheduler_len`, `planned_pending`, and other queue-like counters are derived telemetry unless the code proves otherwise.
-- Do not preserve or introduce routing logic that depends on local mirrors when semantic-state facts are available.
-- Prefer changes that make code follow:
-  state -> decision -> transition
-
-You work inside the canon workspace at /workspace/ai_sandbox/canon. All relative file paths resolve against this workspace root.
-
-Each turn you receive either:
-  (a) the initial objective and workspace context; or
-  (b) the result of your last action.
-
-You respond with exactly one action per turn, as a single JSON object wrapped in a `json` code block.
-Available actions:
-- `done`
-- `list_dir`
-- `read_file`
-- `apply_patch`
-- `run_command`
-- `python`
-Every action MUST include:
-- `observation`: what you can see purely from evidence only, as a single string
-- `rationale`: why this is the next best step
-
-```json
-{ "observation": "...", "action": "...", "rationale": "..." }
-```
-
-━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. list_dir — list directory contents
-   {"action":"list_dir","path":"canon-utils","rationale":"Inspect the workspace before making assumptions."}
-
-2. read_file — read a file before editing; output is always line-numbered ("42: code here")
-   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","rationale":"Read the file before editing it."}
-   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120,"rationale":"Read the relevant section before editing it."}
-   With "line":N the output starts at line N and shows up to 250 lines.
-   ⚠ Always read a file before patching it. Never patch from memory.
-   ⚠ read_file output is prefixed with line numbers ("42: code here"). Strip the "N: " prefix when
-     writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
-     WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
-
-3. apply_patch — create or update files
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Add File: path/to/new.rs\n+line one\n+line two\n*** End Patch","rationale":"Apply the concrete code change after reading the target context."}
-
-   To UPDATE an existing file, each @@ hunk needs 3 unchanged context lines around the change:
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn before_before() {}\n fn before() {}\n fn target() {\n-    old_body();\n+    new_body();\n }\n fn after() {}\n*** End Patch","rationale":"Update the file using exact surrounding context from the read."}
-
-   Multiple hunks in one patch — each @@ is a separate location, each needs 3 context lines:
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn aaa() {}\n fn bbb() {}\n fn ccc() {\n+    extra_line();\n }\n fn ddd() {}\n@@\n fn xxx() {}\n fn yyy() {}\n fn zzz() {\n-    old();\n+    new();\n }\n fn www() {}\n*** End Patch","rationale":"Apply multiple verified edits in one patch when the exact anchors are known."}
-
-   WRONG — @@ with only 1 context line per hunk causes anchor-miss failures:
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: src/lib.rs\n@@\n fn ccc() {\n+    extra_line();\n@@\n fn zzz() {\n-    old();\n+    new();\n*** End Patch","rationale":"Example of a bad patch shape that will anchor-miss due to insufficient context."}
-
-   Rules:
-   - Every @@ hunk must have AT LEAST 3 unchanged context lines (space-prefixed) around the edit.
-   - Never use @@ with only 1 context line — the patcher will fail to locate the anchor.
-   - Context lines must be copied EXACTLY from read_file output (minus the "N: " prefix).
-   - *** Add File for new files, *** Update File for existing files.
-   - NEVER use absolute paths inside the patch string.
-
-4. run_command — run shell commands for discovery or verification
-   {"action":"run_command","cmd":"cargo check -p some-crate","cwd":"/workspace/ai_sandbox/canon","rationale":"Validate the target crate after a change."}
-   {"action":"run_command","cmd":"rg -n 'fn foo' canon-utils/some-crate/src/","cwd":"/workspace/ai_sandbox/canon","rationale":"Search the codebase for the relevant symbol before editing."}
-
-5. python — run Python analysis inside the workspace
-   {"action":"python","code":"from pathlib import Path\nprint(len(list(Path('canon-utils').glob('**/*.rs'))))","cwd":"/workspace/ai_sandbox/canon","rationale":"Use Python for structured workspace analysis."}
-
-6. done — declare the objective complete (triggers cargo build --workspace then cargo test --workspace)
-   {"action":"done","reason":"brief evidence summary: files changed, commands run, outcomes, remaining uncertainty","rationale":"Execution work is complete and the verifier now has enough evidence to judge it."}
-   ⚠ done is REJECTED if the build or any test fails — fix all errors first.
-
-━━━ EVIDENCE HANDOFF ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-After completing each task or sub-task from your lane plan, do NOT update `PLANS/SPEC.md`, `PLANS/executor-a.md`, or `PLANS/executor-b.md` yourself.
-Instead, use `done.reason` to report verifier-facing evidence:
-- files changed
-- commands run
-- outcomes / failing checks
-- remaining uncertainty or blockers
-
-Read `PLANS/SPEC.md` and your assigned lane plan when needed for execution context, but leave planning-file mutation to planner.
-
-Execution discipline:
-- Prefer tasks explicitly marked ready / highest priority by the planner.
-- Do not skip ahead to lower-priority or blocked tasks unless the current ready task is impossible and you have concrete evidence.
-- Keep cycles short: complete at most 1-5 tasks before yielding control.
-- If an apply_patch fails, read the exact file or line range before retrying.
-- Do not repeat the same patch attempt without new evidence from read_file, run_command, or python.
-- When touching routing, policy, observe, act, dispatch, or control-flow code, favor semantic-state authority over queue-truth heuristics.
-- If a task conflicts with the canonical law above, execute the canonical law and report the conflict in `done.reason` so planner/verifier can update plan truth.
-
-━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-- Emit exactly one action per turn.
-- Always read a file before patching it.
-- Use list_dir and read_file freely before assuming project state.
-- Use run_command for cargo builds, tests, and shell discovery.
-- Use python for structured analysis when shell pipelines are awkward.
-- Never operate outside /workspace/ai_sandbox/canon.
-- Never modify `PLANS/SPEC.md`, `PLANS/executor-a.md`, `PLANS/executor-b.md`, or `PLANS/diagnostics.md`.
-- Never emit destructive commands (rm -rf, git reset --hard, git clean -f, etc.).
-- Output format: exactly one JSON object in a ```json code block. No prose outside it.
-"#;
-
-const SYSTEM_INSTRUCTIONS_VERIFIER: &str = r#"You are the canon verifier agent.
-
-Your job is to critically review executor evidence against the codebase and judge whether the implementation satisfies `PLANS/SPEC.md`.
-Executor evidence and lane plans are hints only. The canonical truth is the codebase versus `PLANS/SPEC.md`.
-Be skeptical — do not trust executor claims at face value.
-
-Canonical law:
-- `SemanticStateSummary` is the single source of truth for routing and control-flow correctness.
-- `scheduler_len`, `planned_pending`, and other queue-like counters are not authoritative when semantic-state facts exist.
-- A task is NOT verified if it leaves queue-driven routing in place where semantic-state routing was the intended fix.
-
-You work inside the canon workspace at /workspace/ai_sandbox/canon.
-
-Each turn you receive either:
-  (a) the initial plan and instructions; or
-  (b) the result of your last action.
-
-You respond with exactly one action per turn, as a single JSON object wrapped in a `json` code block.
-Available actions:
-- `done`
-- `list_dir`
-- `read_file`
-- `run_command`
-- `python`
-Every action MUST include:
-- `observation`: what you can see purely from evidence only, as a single string
-- `rationale`: why this is the next best step
-
-```json
-{ "observation": "...", "action": "...", "rationale": "..." }
-```
-
-━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. list_dir — explore directory contents
-   {"action":"list_dir","path":"canon-utils","rationale":"Inspect the relevant area before verifying claims about it."}
-
-2. read_file — read a source file; output is line-numbered ("42: code here")
-   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","rationale":"Read the source to verify whether the claimed change exists."}
-   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120,"rationale":"Jump to the relevant section to verify the claimed change."}
-   With "line":N the output starts at line N and shows up to 250 lines.
-   ⚠ read_file output is prefixed with line numbers ("42: code here"). Strip the "N: " prefix when
-     writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
-     WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
-
-3. apply_patch — unavailable in verifier mode
-   Do not use `apply_patch` as verifier.
-   Judge the code against `PLANS/SPEC.md` and report findings in `done.reason`.
-
-4. run_command — run build/test commands to verify correctness
-   {"action":"run_command","cmd":"cargo check -p some-crate","cwd":"/workspace/ai_sandbox/canon","rationale":"Validate the crate implicated by the completed task."}
-   {"action":"run_command","cmd":"cargo test --workspace","cwd":"/workspace/ai_sandbox/canon","rationale":"Verify the claimed completion does not break workspace tests."}
-   {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon","rationale":"Find the implementation or call sites mentioned by the completed task."}
-
-5. python — run focused verification analysis
-   {"action":"python","code":"from pathlib import Path\nprint(Path('PLANS/SPEC.md').exists())","cwd":"/workspace/ai_sandbox/canon","rationale":"Use Python when structured verification logic is easier than shell commands."}
-
-6. done — declare verification complete — DO NOT say done if spec obligations are still unmet
-   {"action":"done","reason":"{\"verified\":false,\"summary\":\"summary of findings: N tasks verified, M incorrect or missing\"}","rationale":"Verification is complete and the findings are summarized."}
-   ⚠ done triggers cargo build --workspace then cargo test --workspace — fix any failures first.
-
-━━━ VERIFICATION PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-For each executor claim:
-1. Use the executor result summary plus `PLANS/SPEC.md` to derive the candidate obligations.
-2. Read the relevant source files to confirm the described change exists.
-3. Run cargo check or cargo test if the task involves code correctness.
-4. Judge whether the code satisfies the spec.
-5. Report verified or unverified status in `done.reason`.
-6. For any routing/control-flow claim, verify whether decisions are derived from semantic state rather than queue-local heuristics.
-
-━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-- Be critical and thorough — verify evidence, not just the claim.
-- Do not mark anything verified unless you have read the actual code or seen passing tests.
-- Do not modify `PLANS/SPEC.md`, `PLANS/executor-a.md`, `PLANS/executor-b.md`, or source files.
-- Emit exactly one action per turn.
-- Reject any claimed completion that still leaves `scheduler_len` or local queue mirrors acting as routing authority when `SemanticStateSummary` is available.
-- When using `done`, the `reason` field must be a compact JSON object string with exactly:
-  - `verified`: boolean
-  - `summary`: string
-- Output format: exactly one JSON object in a ```json code block. No prose outside it.
-"#;
-
-const SYSTEM_INSTRUCTIONS_PLANNER: &str = r#"You are the canon planner agent.
-
-Your job is to read `PLANS/SPEC.md` and continuously derive executor lane plans.
-You own priority, dependency ordering, task allocation, and the ready-work window for each executor.
-On every cycle, re-evaluate the workspace and rewrite `PLANS/executor-a.md` and `PLANS/executor-b.md` so each executor only needs to perform the top 1-5 ready tasks.
-
-Canonical law:
-- `SemanticStateSummary` is the single source of truth for routing and control-flow correctness.
-- `scheduler_len`, `planned_pending`, and similar counters are not root truth for routing.
-- Prioritize work that migrates decision logic to semantic-state authority before local edge patches that preserve queue-truth.
-
-You work inside the canon workspace at /workspace/ai_sandbox/canon. Use bash, rg, read_file, python, and diagnostics evidence to review the current project state before reorganizing the plan.
-
-Each turn you receive either:
-  (a) the initial plan; or
-  (b) the result of your last action.
-
-You respond with exactly one action per turn, as a single JSON object wrapped in a `json` code block.
-Available actions:
-- `done`
-- `list_dir`
-- `read_file`
-- `apply_patch`
-- `run_command`
-- `python`
-Every action MUST include:
-- `observation`: what you can see purely from evidence only, as a single string
-- `rationale`: why this is the next best step
-
-```json
-{ "observation": "...", "action": "...", "rationale": "..." }
-```
-
-━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. list_dir — explore directory contents
-   {"action":"list_dir","path":"canon-utils","rationale":"Inspect the relevant code area before expanding tasks."}
-
-2. read_file — read a source file; output is line-numbered ("42: code here")
-   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","rationale":"Read the source before deriving actionable plan steps."}
-   {"action":"read_file","path":"canon-utils/some-crate/src/lib.rs","line":120,"rationale":"Read the relevant source section before deriving actionable plan steps."}
-   ⚠ read_file output is prefixed with line numbers ("42: code here"). Strip the "N: " prefix when
-     writing patch lines — patch lines must contain ONLY the raw source text, never "42: code here".
-     WRONG:  -42: fn old() {}   RIGHT:  -fn old() {}
-
-3. apply_patch — update `PLANS/executor-a.md` and `PLANS/executor-b.md` with derived lane plans, refreshed priorities, and concrete steps
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Update File: PLANS/executor-a.md\n@@\n line_before_before\n line_before\n - [ ] task to expand\n+  1. sub-step one\n+  2. sub-step two\n line_after\n line_after_after\n*** End Patch","rationale":"Refresh a lane plan so ready work, dependencies, and priority are explicit."}
-
-   Rules:
-   - Every @@ hunk needs AT LEAST 3 unchanged context lines (space-prefixed) around the change.
-   - NEVER chain multiple @@ blocks with only 1 context line each — every anchor needs 3 lines.
-   - WRONG: @@\n - [ ] task\n+  1. sub-step\n@@\n - [ ] task2\n+  1. sub-step
-   - RIGHT: @@\n prev_line\n prev_line2\n - [ ] task\n+  1. sub-step\n next_line\n next_line2
-
-4. run_command — inspect the codebase
-   {"action":"run_command","cmd":"rg -n 'fn foo'","cwd":"/workspace/ai_sandbox/canon","rationale":"Search for implementation details needed to expand the plan accurately."}
-
-5. python — run structured planning analysis
-   {"action":"python","code":"from pathlib import Path\nprint(sum(1 for _ in Path('canon-utils').glob('**/*.rs')))","cwd":"/workspace/ai_sandbox/canon","rationale":"Use Python to gather structured planning context from the workspace."}
-
-6. done — declare the plan reorganization complete
-   {"action":"done","reason":"reorganized plan into a DAG with refreshed priorities and a 1-5 task ready window","rationale":"Planning is complete and the plan is ready for the next executor cycle."}
-
-━━━ PLANNING PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-On every planning cycle:
-1. Read `PLANS/SPEC.md`, diagnostics, relevant source files, and recent workspace state to understand what changed.
-2. Derive `PLANS/executor-a.md` and `PLANS/executor-b.md` from the spec.
-3. Maintain a READY NOW window containing at most 1-5 executable tasks for each executor.
-4. Move blocked work behind its dependencies instead of leaving it in the ready window.
-5. Rewrite priorities whenever new evidence changes the critical path.
-6. If queue-truth and semantic-state authority conflict, prioritize semantic-state authority and move queue-truth cleanup behind it as follow-on work.
-
-━━━ RULES ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-- Only modify `PLANS/executor-a.md` and `PLANS/executor-b.md` — never edit source files or `PLANS/SPEC.md`.
-- The planner owns lane-task ordering, dependency structure, and ready-task selection.
-- Prefer rewriting whole plan sections when needed so priority order stays globally coherent.
-- Keep each executor's ready window small: 1-5 tasks maximum.
-- Prefer root-cause tasks that remove queue-driven routing over local patches that merely suppress symptoms.
-- Emit exactly one action per turn.
-- Output format: exactly one JSON object in a ```json code block. No prose outside it.
-"#;
-
-const SYSTEM_INSTRUCTIONS_DIAGNOSTICS: &str = r#"You are the canon diagnostics agent.
-
-Your job is to scan the canon project state, detect inconsistencies and failures, rank them by impact, and write concrete repair targets for the planner.
-
-Canonical law:
-- `SemanticStateSummary` is the single source of truth for routing and control-flow correctness.
-- `scheduler_len`, `planned_pending`, and similar counters are not authoritative routing truth unless explicitly proven as derived mirrors.
-- A high-impact failure exists whenever queue-local state still drives routing in places that should derive from semantic state.
-
-You must inspect both:
-- the project source tree under /workspace/ai_sandbox/canon
-- the event log segments under /workspace/ai_sandbox/canon/state/event_log/event.tlog.d
-
-Each turn you receive either:
-  (a) the initial instruction; or
-  (b) the result of your last action.
-
-You respond with exactly one action per turn, as a single JSON object wrapped in a `json` code block.
-Available actions:
-- `done`
-- `list_dir`
-- `read_file`
-- `apply_patch`
-- `run_command`
-- `python`
-Every action MUST include:
-- `observation`: what you can see purely from evidence only, as a single string
-- `rationale`: why this is the next best step
-
-```json
-{ "observation": "...", "action": "...", "rationale": "..." }
-```
-
-━━━ TOOLS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-1. list_dir — inspect directories
-   {"action":"list_dir","path":"state/event_log/event.tlog.d","rationale":"Inspect the available event-log segments before diagnosing failures."}
-   {"action":"list_dir","path":"canon-utils","rationale":"Inspect the project layout before targeting diagnostics."}
-
-2. read_file — read source files
-   {"action":"read_file","path":"canon-utils/canon-route/src/policy.rs","line":1,"rationale":"Read a suspected source file to correlate code with observed failures."}
-
-3. python — run Python analysis over project state and event logs
-   {"action":"python","code":"from pathlib import Path\nroot = Path('/workspace/ai_sandbox/canon/state/event_log/event.tlog.d')\nfor path in sorted(root.glob('*.log')):\n    print(path.name, path.stat().st_size)","cwd":"/workspace/ai_sandbox/canon","rationale":"Analyze the event-source logs to find failure signals and inconsistencies."}
-
-4. run_command — run bash for grep/build queries
-   {"action":"run_command","cmd":"rg -n \"invariant|panic|TODO|unreachable!|assert!\" canon-utils state","cwd":"/workspace/ai_sandbox/canon","rationale":"Search the codebase and state for likely failure markers."}
-   {"action":"run_command","cmd":"cargo check --workspace","cwd":"/workspace/ai_sandbox/canon","rationale":"Detect compiler-visible inconsistencies that belong in diagnostics."}
-
-5. apply_patch — write the diagnostics report
-   {"action":"apply_patch","patch":"*** Begin Patch\n*** Add File: PLANS/diagnostics.md\n+# Diagnostics Report\n+...\n*** End Patch","rationale":"Write the ranked diagnostics report after collecting evidence from logs and code."}
-
-6. done — declare diagnostics complete
-   {"action":"done","reason":"diagnostics report written to PLANS/diagnostics.md","rationale":"Diagnostics is complete and the planner handoff has been recorded."}
-
-━━━ DIAGNOSTICS PROCESS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Gather evidence from the event logs and the current codebase, then write PLANS/diagnostics.md with this structure:
-
-# Diagnostics Report
-## Inputs Scanned
-- event log segments reviewed
-- source areas reviewed
-- commands run
-## Ranked Failures
-1. Impact: high|medium|low
-   Signal: what is inconsistent or broken
-   Evidence: exact files, commands, or event-log observations
-   Repair Targets:
-   - concrete file/module/function targets
-   - specific invariants or behaviors to restore
-## Planner Handoff
-- ordered list of the highest-value repair targets
-- blockers or missing evidence
-
-Rules:
-- Always inspect /workspace/ai_sandbox/canon/state/event_log/event.tlog.d on every invocation.
-- Use the `python` action for structured analysis of event logs and project state.
-- Only modify PLANS/diagnostics.md.
-- Rank issues by impact on correctness, convergence, and repairability.
-- Explicitly check whether routing/control-flow still depends on `scheduler_len`, `planned_pending`, or other local queue mirrors instead of `SemanticStateSummary`.
-- Prioritize diagnostics that identify state-authority drift, synthetic dispatch bypasses, and queue-driven control decisions.
-- Before trusting a trace file like /tmp/runtime.trace, confirm it was updated in the current cycle (mtime, size change, or fresh producer command).
-- Treat empty `rg` / `grep` results on traces as ambiguous: no match, stale file, or incomplete write are all possible.
-- Prefer latest event-log segments under state/event_log/event.tlog.d over ad-hoc temp traces when they disagree.
-- Emit exactly one action per turn.
-- Output format: exactly one JSON object in a ```json code block. No prose outside it.
-"#;
-
-// ── Action parsing ─────────────────────────────────────────────────────────────
-
-fn parse_actions(raw: &str) -> Result<Vec<Value>> {
-    if let Some(json_text) = extract_json_fence(raw) {
-        return parse_json_action(json_text).with_context(|| "fenced json block was not a valid action object");
-    }
-    parse_json_action(raw.trim()).with_context(|| format!("response was not a JSON action object: {:?}", &raw.chars().take(200).collect::<String>()))
+#[derive(Clone)]
+struct LaneConfig {
+    index: usize,
+    endpoint: LlmEndpoint,
+    plan_file: String,
+    label: String,
+    tabs: TabManagerHandle,
 }
 
-fn extract_json_fence(text: &str) -> Option<&str> {
-    let start = text.find("```json").or_else(|| text.find("```JSON"))?;
-    let after_newline = start + text[start..].find('\n')?;
-    let rest = &text[after_newline + 1..];
-    let end = rest.find("```")?;
-    Some(rest[..end].trim())
-}
+async fn continue_executor_completion(
+    submitted: &SubmittedExecutorTurn,
+    completion_text: &str,
+    turn_id: u64,
+    endpoint: &LlmEndpoint,
+    bridge: &WsBridge,
+    workspace: &Path,
+    config: &CapabilityConfig,
+    tabs: &TabManagerHandle,
+) -> Result<String> {
+    let role = submitted.actor.as_str();
+    let prompt_kind = "executor";
+    let step = 1usize;
+    let command_id = submitted.command_id.as_str();
 
-fn parse_json_action(text: &str) -> Result<Vec<Value>> {
-    if let Ok(obj) = serde_json::from_str::<Value>(text) {
-        if obj.is_object() && obj.get("action").is_some() {
-            return Ok(vec![obj]);
-        }
-    }
-    if let Ok(arr) = serde_json::from_str::<Vec<Value>>(text) {
-        if arr.len() == 1 && arr[0].is_object() && arr[0].get("action").is_some() {
-            return Ok(arr);
-        }
-        bail!("expected exactly one action object, got array of len {}", arr.len());
-    }
-    bail!("not a JSON action object: {:?}", &text.chars().take(120).collect::<String>())
-}
-
-// ── Patch crate inference ──────────────────────────────────────────────────────
-
-/// Extract the first file path touched by the patch (*** Update File: / *** Add File:).
-fn patch_first_file(patch: &str) -> Option<&str> {
-    for line in patch.lines() {
-        if let Some(rest) = line.strip_prefix("*** Update File:").or_else(|| line.strip_prefix("*** Add File:")) {
-            let path = rest.trim();
-            if !path.is_empty() {
-                return Some(path);
+    let actions = match parse_actions(completion_text) {
+        Ok(actions) => actions,
+        Err(e) => {
+            if let Err(log_err) = append_message_log(
+                role,
+                endpoint,
+                prompt_kind,
+                step,
+                command_id,
+                "llm_parse_error",
+                json!({
+                    "error": e.to_string(),
+                    "raw": truncate(completion_text, MAX_SNIPPET),
+                }),
+            ) {
+                eprintln!("[{role}] step={} action_log_error: {log_err}", step);
             }
+            append_orchestration_trace(
+                "executor_tool_result_forwarded",
+                json!({
+                    "lane_name": submitted.lane_label,
+                    "tab_id": submitted.tab_id,
+                    "turn_id": command_id,
+                    "status": "parse_error",
+                }),
+            );
+            return Err(anyhow!("executor parse_error: {e}"));
         }
-    }
-    None
-}
-
-fn patch_targets<'a>(patch: &'a str) -> Vec<&'a str> {
-    patch
-        .lines()
-        .filter_map(|line| line.strip_prefix("*** Update File:").or_else(|| line.strip_prefix("*** Add File:")))
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .collect()
-}
-
-fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
-    let targets = patch_targets(patch);
-    if targets.is_empty() {
-        return None;
-    }
-
-    let touches_spec = targets.iter().any(|path| *path == SPEC_FILE);
-    let touches_exec_a = targets.iter().any(|path| *path == EXECUTOR_A_PLAN_FILE);
-    let touches_exec_b = targets.iter().any(|path| *path == EXECUTOR_B_PLAN_FILE);
-    let touches_lane = touches_exec_a || touches_exec_b;
-    let touches_diagnostics = targets.iter().any(|path| *path == DIAGNOSTICS_FILE);
-    let touches_other = targets
-        .iter()
-        .any(|path| *path != SPEC_FILE && *path != EXECUTOR_A_PLAN_FILE && *path != EXECUTOR_B_PLAN_FILE && *path != DIAGNOSTICS_FILE);
-
-    match role {
-        "mini_agent" | "executor_a" | "executor_b" => {
-            if touches_spec || touches_lane || touches_diagnostics {
-                Some(
-                    "Executor may not patch `PLANS/SPEC.md`, lane plans, or `PLANS/diagnostics.md`. Execute code/tests only and report evidence in `done.reason`."
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        "verifier" | "verifier_a" | "verifier_b" => {
-            if touches_spec || touches_lane || touches_diagnostics || touches_other {
-                Some(
-                    "Verifier is read-only for `PLANS/SPEC.md`, lane plans, diagnostics, and source files. Judge the code against the spec and report via `done.reason`."
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        "planner" | "mini_planner" => {
-            if touches_spec || touches_diagnostics || touches_other {
-                Some(
-                    "Planner may only patch `PLANS/executor-a.md` and `PLANS/executor-b.md` because planner derives lane plans from the spec."
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        "diagnostics" => {
-            if touches_spec || touches_lane || touches_other {
-                Some(
-                    "Diagnostics may only patch PLANS/diagnostics.md because diagnostics owns ranked failure reporting."
-                        .to_string(),
-                )
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Walk up from `file_path` (workspace-relative) to find the nearest Cargo.toml.
-/// Returns the package name from that manifest, or None if not found.
-fn infer_crate_for_patch(workspace: &Path, file_path: &str) -> Option<String> {
-    let mut dir = workspace.join(file_path);
-    dir.pop(); // start from parent of the file
-    loop {
-        let manifest = dir.join("Cargo.toml");
-        if manifest.exists() {
-            let text = std::fs::read_to_string(&manifest).ok()?;
-            for line in text.lines() {
-                if let Some(rest) = line.strip_prefix("name") {
-                    let name = rest.trim().trim_start_matches('=').trim().trim_matches('"');
-                    if !name.is_empty() {
-                        return Some(name.to_string());
-                    }
-                }
-            }
-        }
-        if dir == workspace {
-            break;
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    None
-}
-
-// ── Patch-anchor auto-read (mirrors harness_repair logic) ─────────────────────
-
-const AUTO_READ_CONTEXT_BEFORE: usize = 20;
-const AUTO_READ_CONTEXT_AFTER: usize = 40;
-
-/// Extract the file path from an apply_patch anchor-miss error.
-/// Matches: "Failed to find expected lines in PATH:\n..."
-fn extract_anchor_fail_path(err_msg: &str) -> Option<String> {
-    let prefix = "Failed to find expected lines in ";
-    for line in err_msg.lines() {
-        if let Some(rest) = line.strip_prefix(prefix) {
-            let path = rest.trim_end_matches(':').trim();
-            if !path.is_empty() {
-                return Some(path.to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Parse the indented anchor lines out of the patch error message.
-fn extract_expected_anchor_lines(err_msg: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut capture = false;
-    for line in err_msg.lines() {
-        if line.starts_with("Failed to find expected lines in ") {
-            capture = true;
-            continue;
-        }
-        if !capture {
-            continue;
-        }
-        if line.trim().is_empty() {
-            if !lines.is_empty() {
-                break;
-            }
-            continue;
-        }
-        if line.starts_with("    ") || line.starts_with('\t') {
-            lines.push(line.trim().to_string());
-            continue;
-        }
-        if !lines.is_empty() {
-            break;
-        }
-    }
-    lines
-}
-
-fn patch_failure_guidance(path: Option<&str>, err_msg: &str) -> String {
-    let mut hints = Vec::new();
-    hints.push("Patch anchor miss: deleted/context lines must match the current file EXACTLY.".to_string());
-    hints.push("Do not abbreviate deleted lines like `-1. Centralize d`; copy exact text from read_file output.".to_string());
-    hints.push("Next step: emit `read_file` for the target file, then build a new patch with at least 3 unchanged context lines.".to_string());
-
-    if let Some(file) = path {
-        if file == DIAGNOSTICS_FILE || file.ends_with(".md") {
-            hints.push("This is a prose/markdown file: prefer rewriting the whole section or the whole file instead of a tiny surgical hunk.".to_string());
-            hints.push("For diagnostics.md, one full-file rewrite is usually more reliable than repeated partial patches.".to_string());
-        }
-    }
-
-    let anchors = extract_expected_anchor_lines(err_msg);
-    if !anchors.is_empty() {
-        hints.push(format!("Failed anchor lines: {}", anchors.join(" | ")));
-    }
-
-    hints.join("\n")
-}
-
-/// Find the file region closest to the failed anchor and return a numbered excerpt.
-fn extract_anchor_context_excerpt(full: &str, err_msg: &str) -> Option<(usize, usize, String)> {
-    let anchor_lines = extract_expected_anchor_lines(err_msg);
-    if anchor_lines.is_empty() {
-        return None;
-    }
-    let file_lines: Vec<&str> = full.lines().collect();
-    let mut best_idx: Option<usize> = None;
-    for anchor in anchor_lines.iter().rev() {
-        let needle = anchor.trim();
-        if needle.len() < 8 {
-            continue;
-        }
-        if let Some(idx) = file_lines.iter().position(|l| l.contains(needle)) {
-            best_idx = Some(idx);
-            break;
-        }
-    }
-    let idx = best_idx?;
-    let start_idx = idx.saturating_sub(AUTO_READ_CONTEXT_BEFORE);
-    let end_idx = (idx + AUTO_READ_CONTEXT_AFTER + 1).min(file_lines.len());
-    let start_line = start_idx + 1;
-    let excerpt = file_lines[start_idx..end_idx].iter().enumerate().map(|(i, l)| format!("{}: {}", start_line + i, l)).collect::<Vec<_>>().join("\n");
-    Some((start_line, end_idx, excerpt))
-}
-
-/// Auto-read the region near the failed anchor, falling back to the full file.
-fn auto_read_for_patch_anchor(workspace: &Path, relative: &str, err_msg: &str) -> Result<String> {
-    let path = safe_join(workspace, relative)?;
-    let full = std::fs::read_to_string(&path).with_context(|| format!("auto-read failed: {}", path.display()))?;
-    if let Some((start, end, excerpt)) = extract_anchor_context_excerpt(&full, err_msg) {
-        return Ok(format!("Current content near likely match of failed anchor in {relative} (lines {start}-{end}):\n{excerpt}"));
-    }
-    // Fallback: first MAX_FULL_READ_LINES lines of the file.
-    let text = full.lines().take(MAX_FULL_READ_LINES).enumerate().map(|(i, l)| format!("{}: {}", i + 1, l)).collect::<Vec<_>>().join("\n");
-    Ok(format!("Current content of {relative}:\n{text}"))
-}
-
-// ── Action executors ───────────────────────────────────────────────────────────
-
-fn exec_list_dir(workspace: &Path, relative: &str) -> Result<String> {
-    let path = safe_join(workspace, relative)?;
-    let mut entries = std::fs::read_dir(&path).with_context(|| format!("list_dir: {}", path.display()))?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
-    entries.sort();
-    Ok(entries.join("\n"))
-}
-
-fn exec_read_file(workspace: &Path, relative: &str, start_line: Option<usize>) -> Result<String> {
-    let path = safe_join(workspace, relative)?;
-    let full = std::fs::read_to_string(&path).with_context(|| format!("read_file: {}", path.display()))?;
-    let lines: Vec<&str> = full.lines().collect();
-    let total = lines.len();
-    let (from, max_lines) = match start_line {
-        Some(n) => (n.saturating_sub(1).min(total), 250),
-        None => (0, MAX_FULL_READ_LINES),
     };
-    let text = lines[from..].iter().take(max_lines).enumerate().map(|(i, l)| format!("{}: {}", from + i + 1, l)).collect::<Vec<_>>().join("\n");
-    let shown = max_lines.min(total.saturating_sub(from));
-    if total > from + shown {
-        Ok(format!("{text}\n(file has {total} lines total; use \"line\":{} to read more)", from + shown + 1))
-    } else {
-        Ok(text)
-    }
-}
 
-fn shell_tokens(cmd: &str) -> Vec<&str> {
-    cmd.split(|c: char| c.is_whitespace() || matches!(c, '|' | '&' | ';' | '(' | ')' | '<' | '>'))
-        .filter(|part| !part.is_empty())
-        .collect()
-}
-
-fn contains_token_pair(cmd: &str, first: &str, second: &str) -> bool {
-    let tokens = shell_tokens(cmd);
-    tokens.windows(2).any(|window| window[0] == first && window[1] == second)
-}
-
-fn starts_direct_debug_binary(cmd: &str) -> bool {
-    let first = shell_tokens(cmd).into_iter().next().unwrap_or("");
-    first.starts_with("./target/debug/") || first.contains("/target/debug/")
-}
-
-fn looks_like_long_running_command(cmd: &str) -> bool {
-    contains_token_pair(cmd, "cargo", "run")
-        || contains_token_pair(cmd, "cargo", "watch")
-        || starts_direct_debug_binary(cmd)
-        || cmd.contains(" --tlog ")
-        || cmd.contains("| tee")
-}
-
-fn exec_run_command(workspace: &Path, cmd: &str, cwd: &str) -> Result<(bool, String)> {
-    let cwd_path = PathBuf::from(cwd);
-    if !cwd_path.is_absolute() {
-        bail!("run_command cwd must be absolute: {cwd}");
-    }
-    if !cwd_path.starts_with(workspace) {
-        bail!("run_command cwd escapes workspace: {cwd}");
-    }
-    ensure_safe_command(cmd)?;
-    // Hybrid execution model:
-    // - long-running commands → spawn (non-blocking)
-    // - short commands → capture output (blocking)
-
-    let is_long_running = looks_like_long_running_command(cmd);
-
-    if is_long_running {
-        let child = Command::new("/bin/bash")
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(&cwd_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .with_context(|| format!("failed to spawn: {cmd}"))?;
-
-        Ok((true, format!("spawned pid={}", child.id())))
-    } else {
-        let output = Command::new("/bin/bash").arg("-c").arg(cmd).current_dir(&cwd_path).output().with_context(|| format!("failed to spawn: {cmd}"))?;
-
-        let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-        if !output.stderr.is_empty() {
-            if !combined.is_empty() {
-                combined.push('\n');
-            }
-            combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    if actions.len() != 1 {
+        let msg = format!("Got {} actions — emit exactly one action per turn.", actions.len());
+        if let Err(log_err) = append_message_log(
+            role,
+            endpoint,
+            prompt_kind,
+            step,
+            command_id,
+            "llm_invalid_action_count",
+            json!({
+                "action_count": actions.len(),
+                "raw": truncate(completion_text, MAX_SNIPPET),
+            }),
+        ) {
+            eprintln!("[{role}] step={} action_log_error: {log_err}", step);
         }
-        if combined.trim().is_empty() && !output.status.success() {
-            if cmd.contains("rg ") || cmd.contains("grep ") {
-                combined = format!("no matches (exit={})", output.status.code().unwrap_or(-1));
-                if cmd.contains("/tmp/runtime.trace") {
-                    combined.push_str("\ntrace probe returned no matches; file may be stale, missing, or the pattern may not be present yet");
-                }
-            }
+        append_orchestration_trace(
+            "executor_tool_result_forwarded",
+            json!({
+                "lane_name": submitted.lane_label,
+                "tab_id": submitted.tab_id,
+                "turn_id": command_id,
+                "status": "invalid_action_count",
+                "action_count": actions.len(),
+            }),
+        );
+        return Err(anyhow!("executor invalid_action_count: {msg}"));
+    }
+
+    let mut action = actions[0].clone();
+    if let Err(e) = normalize_action(&mut action) {
+        let msg = format!(
+            "Invalid action: {e}\nReturn exactly one action with a non-empty `observation`, a non-empty `rationale`, and any required fields."
+        );
+        if let Err(log_err) = append_message_log(
+            role,
+            endpoint,
+            prompt_kind,
+            step,
+            command_id,
+            "llm_invalid_action",
+            json!({
+                "stage": "normalize_action",
+                "error": e.to_string(),
+                "raw": truncate(completion_text, MAX_SNIPPET),
+            }),
+        ) {
+            eprintln!("[{role}] step={} action_log_error: {log_err}", step);
         }
-        if cmd.contains("/tmp/runtime.trace") && (cmd.contains("rg ") || cmd.contains("grep ")) {
-            let trace = PathBuf::from("/tmp/runtime.trace");
-            match std::fs::metadata(&trace) {
-                Ok(meta) => {
-                    combined.push_str(&format!("\ntrace_path=/tmp/runtime.trace trace_size={}B", meta.len()));
-                }
-                Err(_) => {
-                    combined.push_str("\ntrace_path=/tmp/runtime.trace trace_missing=true");
-                }
-            }
+        return Err(anyhow!("executor invalid_action: {msg}"));
+    }
+
+    if let Err(e) = validate_action(&action) {
+        let msg = format!(
+            "Invalid action: {e}\nReturn exactly one action with a non-empty `observation`, a non-empty `rationale`, and any required fields."
+        );
+        if let Err(log_err) = append_message_log(
+            role,
+            endpoint,
+            prompt_kind,
+            step,
+            command_id,
+            "llm_invalid_action",
+            json!({
+                "stage": "validate_action",
+                "error": e.to_string(),
+                "raw": truncate(completion_text, MAX_SNIPPET),
+                "action": action.clone(),
+            }),
+        ) {
+            eprintln!("[{role}] step={} action_log_error: {log_err}", step);
         }
+        return Err(anyhow!("executor invalid_action: {msg}"));
+    }
 
-        Ok((output.status.success(), combined))
+    let (done, out) = process_action_and_execute(
+        role,
+        prompt_kind,
+        endpoint,
+        workspace,
+        step,
+        command_id,
+        &action,
+        false,
+    )?;
+    if done {
+        return Ok(out);
     }
-}
 
-fn exec_python(workspace: &Path, code: &str, cwd: &str) -> Result<(bool, String)> {
-    let cwd_path = PathBuf::from(cwd);
-    if !cwd_path.is_absolute() {
-        bail!("python cwd must be absolute: {cwd}");
-    }
-    if !cwd_path.starts_with(workspace) {
-        bail!("python cwd escapes workspace: {cwd}");
-    }
-    let mut child = Command::new("python3")
-        .arg("-")
-        .current_dir(&cwd_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to spawn python3 in {}", cwd_path.display()))?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(code.as_bytes()).context("failed writing python stdin")?;
-    }
-    let output = child.wait_with_output().context("failed waiting for python3")?;
-    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-    if !output.stderr.is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(&String::from_utf8_lossy(&output.stderr));
-    }
-    Ok((output.status.success(), combined))
-}
+    append_orchestration_trace(
+        "executor_tool_result_forwarded",
+        json!({
+            "lane_name": submitted.lane_label,
+            "tab_id": submitted.tab_id,
+            "command_id": command_id,
+            "action": action.get("action").and_then(|v| v.as_str()),
+            "result_bytes": out.len(),
+        }),
+    );
 
-fn ensure_safe_command(cmd: &str) -> Result<()> {
-    const BLOCKED: &[&str] = &["rm -rf", "git reset --hard", "git clean -f", "dd if=", "mkfs", "shred"];
-    for needle in BLOCKED {
-        if cmd.contains(needle) {
-            bail!("blocked command: {cmd}");
-        }
-    }
-    Ok(())
-}
-
-fn safe_join(workspace: &Path, relative: &str) -> Result<PathBuf> {
-    let p = Path::new(relative);
-    if p.is_absolute() {
-        bail!("absolute paths not allowed: {relative}");
-    }
-    if p.components().any(|c| matches!(c, Component::ParentDir)) {
-        bail!("path traversal not allowed: {relative}");
-    }
-    Ok(workspace.join(p))
-}
-
-fn truncate(s: &str, max: usize) -> &str {
-    let end = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
-    &s[..end]
-}
-
-fn diagnostics_python_reads_event_logs(action: &Value) -> bool {
-    if action.get("action").and_then(|v| v.as_str()) != Some("python") {
-        return false;
-    }
-    let code = action.get("code").and_then(|v| v.as_str()).unwrap_or("");
-    code.contains("state/event_log/event.tlog.d")
-}
-
-fn action_rationale(action: &Value) -> Option<&str> {
-    action.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
-}
-
-fn action_observation(action: &Value) -> Option<&str> {
-    action.get("observation").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
-}
-
-fn default_rationale(kind: &str) -> &'static str {
-    match kind {
-        "list_dir" => "Inspect the workspace before making assumptions.",
-        "read_file" => "Read the current file contents before acting on them.",
-        "apply_patch" => "Apply the concrete change after gathering enough context.",
-        "run_command" => "Run a command to inspect or verify the current state.",
-        "python" => "Use Python for structured analysis that is awkward in shell.",
-        "done" => "The required work appears complete and ready for final checks.",
-        _ => "Take the next most justified step based on the available evidence.",
-    }
-}
-
-fn normalize_action(action: &mut Value) -> Result<()> {
-    let obj = action.as_object_mut().ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
-    let kind = obj.get("action").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("action missing 'action'"))?.to_string();
-    if obj.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).is_none() {
-        obj.insert("rationale".to_string(), Value::String(default_rationale(&kind).to_string()));
-    }
-    if kind == "done" && obj.get("reason").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).is_none() {
-        return Err(anyhow!("done missing 'reason'"));
-    }
-    Ok(())
-}
-
-fn validate_action(action: &Value) -> Result<()> {
-    let obj = action.as_object().ok_or_else(|| anyhow!("action payload must be a JSON object"))?;
-    let kind = obj.get("action").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("action missing 'action'"))?;
-    let observation = obj.get("observation").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("action missing non-empty 'observation'"))?;
-    let rationale = obj.get("rationale").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("action missing non-empty 'rationale'"))?;
-    let _ = (observation, rationale);
-    if kind == "done" {
-        obj.get("reason").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| anyhow!("done missing non-empty 'reason'"))?;
-    }
-    Ok(())
-}
-
-fn is_explicit_idle_action(action: &Value) -> bool {
-    if action.get("action").and_then(|v| v.as_str()) != Some("run_command") {
-        return false;
-    }
-    let cmd = action.get("cmd").and_then(|v| v.as_str()).unwrap_or("").trim();
-    matches!(cmd, "echo idle" | "echo \"idle\"" | "true" | ":")
-}
-
-fn action_command_summary(action: &Value) -> String {
-    let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown");
-    match kind {
-        "run_command" => action.get("cmd").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        "python" => {
-            let code = action.get("code").and_then(|v| v.as_str()).unwrap_or("");
-            let first = code.lines().next().unwrap_or("");
-            format!("python: {}", truncate(first, 160))
-        }
-        "read_file" => {
-            let path = action.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            let line = action.get("line").and_then(|v| v.as_u64());
-            match line {
-                Some(n) => format!("read_file {}:{}", path, n),
-                None => format!("read_file {}", path),
-            }
-        }
-        "list_dir" => format!("list_dir {}", action.get("path").and_then(|v| v.as_str()).unwrap_or("")),
-        "apply_patch" => {
-            let patch = action.get("patch").and_then(|v| v.as_str()).unwrap_or("");
-            patch_first_file(patch).map(|path| format!("apply_patch {}", path)).unwrap_or_else(|| "apply_patch".to_string())
-        }
-        "done" => format!("done {}", action.get("reason").and_then(|v| v.as_str()).unwrap_or("")),
-        _ => kind.to_string(),
-    }
-}
-
-fn append_action_log(role: &str, action: &Value) -> Result<()> {
-    let observation = action_observation(action).unwrap_or("");
-    let rationale = action_rationale(action).unwrap_or("");
-    let record = json!({
-        "ts_ms": canon_llm::endpoint_worker::tab_manager_now_ms(),
-        "agent_type": role,
-        "observation": observation,
-        "action": action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown"),
-        "command_used": action_command_summary(action),
-        "rationale": rationale,
-    });
-    let path = PathBuf::from(ACTION_LOG_FILE);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-    writeln!(file, "{}", serde_json::to_string(&record)?).with_context(|| format!("failed to append {}", path.display()))?;
-    Ok(())
+    run_agent(
+        role,
+        prompt_kind,
+        "",
+        action_result_prompt(Some(submitted.tab_id), Some(turn_id), &out),
+        endpoint,
+        bridge,
+        workspace,
+        config,
+        tabs,
+        false,
+        false,
+        false,
+    )
+    .await
 }
 
 // ── Agent loop ─────────────────────────────────────────────────────────────────
@@ -931,11 +218,20 @@ fn append_action_log(role: &str, action: &Value) -> Result<()> {
 /// Returns the done reason on success, or an error on hard failure.
 /// `check_on_done`: if true, run cargo build + test before accepting done.
 async fn run_agent(
-    role: &str, system_instructions: &str, initial_prompt: String, endpoint: &LlmEndpoint, bridge: &WsBridge, workspace: &Path, _config: &CapabilityConfig, tabs: &TabManagerHandle, submit_only: bool,
-    check_on_done: bool,
+    role: &str, prompt_kind: &str, system_instructions: &str, initial_prompt: String, endpoint: &LlmEndpoint, bridge: &WsBridge, workspace: &Path, _config: &CapabilityConfig, tabs: &TabManagerHandle,
+    submit_only: bool, check_on_done: bool, send_system_prompt: bool,
 ) -> Result<String> {
+    eprintln!(
+        "[{role}] endpoint_id={} url={} prompt_kind={} submit_only={}",
+        endpoint.id,
+        endpoint.url,
+        prompt_kind,
+        submit_only
+    );
     let mut step = 0usize;
     let mut last_result: Option<String> = None;
+    let mut last_tab_id: Option<u32> = None;
+    let mut last_turn_id: Option<u64> = None;
     let mut diagnostics_eventlog_python_done = false;
     let mut idle_streak = 0usize;
 
@@ -945,15 +241,50 @@ async fn run_agent(
         }
 
         let (role_schema, prompt) = if step == 0 {
-            (system_instructions.to_string(), initial_prompt.clone())
+            (
+                if send_system_prompt {
+                    system_instructions.to_string()
+                } else {
+                    String::new()
+                },
+                initial_prompt.clone(),
+            )
         } else {
             let result = last_result.as_deref().unwrap_or("");
-            (String::new(), format!("Action result:\n{}\n\nEmit exactly one action.", truncate(result, MAX_SNIPPET)))
+            (String::new(), action_result_prompt(last_tab_id, last_turn_id, result))
         };
+        let exchange_id = make_command_id(role, prompt_kind, step + 1);
 
         eprintln!("[{role}] step={} prompt_bytes={}", step + 1, prompt.len());
+        if let Err(e) = append_message_log(
+            role,
+            endpoint,
+            prompt_kind,
+            step + 1,
+            &exchange_id,
+            "llm_request",
+            json!({
+                "submit_only": submit_only,
+                "prompt_bytes": prompt.len(),
+                "role_schema_bytes": role_schema.len(),
+                "prompt": truncate(&prompt, MAX_SNIPPET),
+            }),
+        ) {
+            eprintln!("[{role}] step={} action_log_error: {e}", step + 1);
+        }
+        append_orchestration_trace(
+            "llm_message_forwarded",
+            json!({
+                "role": role,
+                "prompt_kind": prompt_kind,
+                "step": step + 1,
+                "endpoint_id": endpoint.id,
+                "submit_only": submit_only,
+                "prompt_bytes": prompt.len(),
+            }),
+        );
 
-        let raw = match llm_worker_send_request(
+        let (req_id, resp) = match llm_worker_send_request_with_req_id(
             bridge,
             &endpoint.id,
             &endpoint.url,
@@ -974,11 +305,86 @@ async fn run_agent(
             Ok(r) => r,
             Err(e) => {
                 eprintln!("[{role}] step={} llm_error: {e}", step + 1);
+                if let Err(log_err) = append_message_log(
+                    role,
+                    endpoint,
+                    prompt_kind,
+                    step + 1,
+                    &exchange_id,
+                    "llm_error",
+                    json!({
+                        "error": e.to_string(),
+                    }),
+                ) {
+                    eprintln!("[{role}] step={} action_log_error: {log_err}", step + 1);
+                }
                 last_result = Some(format!("LLM error: {e}\nReturn exactly one action as a single JSON object in a ```json code block."));
                 step += 1;
                 continue;
             }
         };
+        let _ = req_id;
+        last_tab_id = resp.tab_id;
+        last_turn_id = resp.turn_id;
+        let raw = resp.raw;
+
+        append_orchestration_trace(
+            "llm_message_received",
+            json!({
+                "role": role,
+                "prompt_kind": prompt_kind,
+                "step": step + 1,
+                "endpoint_id": endpoint.id,
+                "submit_only": submit_only,
+                "response_bytes": raw.len(),
+            }),
+        );
+        if let Err(e) = append_message_log(
+            role,
+            endpoint,
+            prompt_kind,
+            step + 1,
+            &exchange_id,
+            "llm_response",
+            json!({
+                "submit_only": submit_only,
+                "response_bytes": raw.len(),
+                "raw": truncate(&raw, MAX_SNIPPET),
+            }),
+        ) {
+            eprintln!("[{role}] step={} action_log_error: {e}", step + 1);
+        }
+
+        if submit_only {
+            if let Ok(mut ack) = serde_json::from_str::<Value>(&raw) {
+                if ack.get("submit_ack").and_then(|v| v.as_bool()) == Some(true) {
+                    ack["command_id"] = Value::String(exchange_id.clone());
+                    eprintln!("[{role}] step={} submit_ack={}", step + 1, raw);
+                    if let Err(e) = append_message_log(
+                        role,
+                        endpoint,
+                        prompt_kind,
+                        step + 1,
+                        &exchange_id,
+                        "llm_submit_ack",
+                        ack.clone(),
+                    ) {
+                        eprintln!("[{role}] step={} action_log_error: {e}", step + 1);
+                    }
+                    append_orchestration_trace(
+                        "llm_message_processed",
+                        json!({
+                            "role": role,
+                            "prompt_kind": prompt_kind,
+                            "step": step + 1,
+                            "endpoint_id": endpoint.id,
+                            "submit_ack": ack,
+                        }),
+                    );
+                    return Ok(ack.to_string());
+                }
+            }
+        }
 
         eprintln!("[{role}] step={} response_bytes={}", step + 1, raw.len());
 
@@ -986,6 +392,20 @@ async fn run_agent(
             Ok(a) => a,
             Err(e) => {
                 eprintln!("[{role}] step={} parse_error: {e}", step + 1);
+                if let Err(log_err) = append_message_log(
+                    role,
+                    endpoint,
+                    prompt_kind,
+                    step + 1,
+                    &exchange_id,
+                    "llm_parse_error",
+                    json!({
+                        "error": e.to_string(),
+                        "raw": truncate(&raw, MAX_SNIPPET),
+                    }),
+                ) {
+                    eprintln!("[{role}] step={} action_log_error: {log_err}", step + 1);
+                }
                 last_result = Some(format!("Parse error: {e}\nReturn exactly one action as a single JSON object in a ```json code block. No prose outside it."));
                 step += 1;
                 continue;
@@ -995,6 +415,20 @@ async fn run_agent(
         if actions.len() != 1 {
             let msg = format!("Got {} actions — emit exactly one action per turn.", actions.len());
             eprintln!("[{role}] step={} {msg}", step + 1);
+            if let Err(log_err) = append_message_log(
+                role,
+                endpoint,
+                prompt_kind,
+                step + 1,
+                &exchange_id,
+                "llm_invalid_action_count",
+                json!({
+                    "action_count": actions.len(),
+                    "raw": truncate(&raw, MAX_SNIPPET),
+                }),
+            ) {
+                eprintln!("[{role}] step={} action_log_error: {log_err}", step + 1);
+            }
             last_result = Some(msg);
             step += 1;
             continue;
@@ -1002,21 +436,62 @@ async fn run_agent(
 
         let mut action = actions[0].clone();
         if let Err(e) = normalize_action(&mut action) {
+            if let Err(log_err) = append_message_log(
+                role,
+                endpoint,
+                prompt_kind,
+                step + 1,
+                &exchange_id,
+                "llm_invalid_action",
+                json!({
+                    "stage": "normalize_action",
+                    "error": e.to_string(),
+                    "raw": truncate(&raw, MAX_SNIPPET),
+                }),
+            ) {
+                eprintln!("[{role}] step={} action_log_error: {log_err}", step + 1);
+            }
             last_result = Some(format!("Invalid action: {e}\nReturn exactly one action with a non-empty `observation`, a non-empty `rationale`, and any required fields."));
             step += 1;
             continue;
         }
         if let Err(e) = validate_action(&action) {
+            if let Err(log_err) = append_message_log(
+                role,
+                endpoint,
+                prompt_kind,
+                step + 1,
+                &exchange_id,
+                "llm_invalid_action",
+                json!({
+                    "stage": "validate_action",
+                    "error": e.to_string(),
+                    "raw": truncate(&raw, MAX_SNIPPET),
+                    "action": action.clone(),
+                }),
+            ) {
+                eprintln!("[{role}] step={} action_log_error: {log_err}", step + 1);
+            }
             last_result = Some(format!("Invalid action: {e}\nReturn exactly one action with a non-empty `observation`, a non-empty `rationale`, and any required fields."));
             step += 1;
             continue;
         }
-        let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown");
-        eprintln!("[{role}] step={} action={kind}", step + 1);
 
-        if let Err(e) = append_action_log(role, &action) {
-            eprintln!("[{role}] step={} action_log_error: {e}", step + 1);
-        }
+        let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        eprintln!("[{role}] step={} action={}", step + 1, kind);
+        append_orchestration_trace(
+            "llm_message_processed",
+            json!({
+                "role": role,
+                "prompt_kind": prompt_kind,
+                "step": step + 1,
+                "endpoint_id": endpoint.id,
+                "action": kind,
+            }),
+        );
+
+        let command_id = exchange_id.clone();
+        action["command_id"] = Value::String(command_id.clone());
 
         if role == "diagnostics" && !diagnostics_eventlog_python_done {
             if diagnostics_python_reads_event_logs(&action) {
@@ -1028,7 +503,7 @@ async fn run_agent(
                 );
                 step += 1;
                 continue;
-            } else if matches!(kind, "apply_patch" | "done") {
+            } else if matches!(kind.as_str(), "apply_patch" | "done") {
                 last_result = Some(
                     "Before writing diagnostics or finishing, run a `python` action that analyzes /workspace/ai_sandbox/canon/state/event_log/event.tlog.d to find errors, inconsistencies, invariant violations, repeated failure patterns, and concrete repair targets. Diagnostics is for finding what is broken."
                         .to_string(),
@@ -1047,110 +522,24 @@ async fn run_agent(
             idle_streak = 0;
         }
 
-        let step_result: Result<(bool, String)> = tokio::task::block_in_place(|| match kind {
-            "done" => {
-                let reason = action.get("reason").and_then(|v| v.as_str()).unwrap_or("complete");
-                if !check_on_done {
-                    return Ok((true, reason.to_string()));
-                }
-                eprintln!("[{role}] step={} done — running cargo build --workspace", step + 1);
-                let (build_ok, build_out) = exec_run_command(workspace, "cargo build --workspace", WORKSPACE).unwrap_or_else(|e| (false, e.to_string()));
-                if !build_ok {
-                    eprintln!("[{role}] step={} cargo build failed — rejecting done", step + 1);
-                    return Ok((false, format!("done rejected: cargo build --workspace failed.\n\n{}", truncate(&build_out, MAX_SNIPPET))));
-                }
-                eprintln!("[{role}] step={} cargo build ok — running cargo test --workspace", step + 1);
-                let (test_ok, test_out) = exec_run_command(workspace, "cargo test --workspace", WORKSPACE).unwrap_or_else(|e| (false, e.to_string()));
-                if test_ok {
-                    eprintln!("[{role}] step={} cargo test ok — accepting done", step + 1);
-                    Ok((true, reason.to_string()))
-                } else {
-                    eprintln!("[{role}] step={} cargo test failed — rejecting done", step + 1);
-                    Ok((false, format!("done rejected: cargo test --workspace failed.\n\n{}", truncate(&test_out, MAX_SNIPPET))))
-                }
-            }
-            "list_dir" => {
-                let path = action.get("path").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("list_dir missing 'path'"))?;
-                let out = exec_list_dir(workspace, path)?;
-                Ok((false, format!("list_dir {path}:\n{out}")))
-            }
-            "read_file" => {
-                let path = action.get("path").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("read_file missing 'path'"))?;
-                let line = action.get("line").and_then(|v| v.as_u64()).map(|n| n as usize);
-                let out = exec_read_file(workspace, path, line)?;
-                eprintln!("[{role}] step={} read_file path={path} bytes={}", step + 1, out.len());
-                Ok((false, format!("read_file {path}:\n{out}")))
-            }
-            "apply_patch" => {
-                let patch = action.get("patch").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("apply_patch missing 'patch'"))?;
-                if let Some(msg) = patch_scope_error(role, patch) {
-                    Ok((false, msg))
-                } else {
-                    match apply_patch(patch, workspace) {
-                        Ok(_) => {
-                            eprintln!("[{role}] step={} apply_patch ok", step + 1);
-                            let check_result = patch_first_file(patch).and_then(|f| infer_crate_for_patch(workspace, f)).map(|krate| {
-                                eprintln!("[{role}] step={} cargo check -p {krate}", step + 1);
-                                exec_run_command(workspace, &format!("cargo check -p {krate}"), WORKSPACE).unwrap_or_else(|e| (false, e.to_string()))
-                            });
-                            match check_result {
-                                Some((ok, out)) => {
-                                    let label = if ok { "cargo check ok" } else { "cargo check failed" };
-                                    eprintln!("[{role}] step={} {label}", step + 1);
-                                    Ok((false, format!("apply_patch ok\n\n{label}:\n{}", truncate(&out, MAX_SNIPPET))))
-                                }
-                                None => Ok((false, "apply_patch ok".to_string())),
-                            }
-                        }
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            eprintln!("[{role}] step={} apply_patch failed: {err_str}", step + 1);
-                            let read_path = extract_anchor_fail_path(&err_str).or_else(|| patch_first_file(patch).map(|s| s.to_string()));
-                            let guidance = patch_failure_guidance(read_path.as_deref(), &err_str);
-                            let mut msg = format!("apply_patch failed: {err_str}\n\n{guidance}");
-                            if let Some(fp) = read_path {
-                                if let Ok(content) = auto_read_for_patch_anchor(workspace, &fp, &err_str) {
-                                    eprintln!("[{role}] step={} auto_read path={fp}", step + 1);
-                                    msg = format!("apply_patch failed: {err_str}\n\n{guidance}\n\n{content}");
-                                }
-                            }
-                            Ok((false, msg))
-                        }
-                    }
-                }
-            }
-            "run_command" => {
-                let cmd = action.get("cmd").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("run_command missing 'cmd'"))?;
-                let cwd = action.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORKSPACE);
-                eprintln!("[{role}] step={} run_command cmd={cmd}", step + 1);
-                let (success, out) = exec_run_command(workspace, cmd, cwd)?;
-                let label = if success { "run_command ok" } else { "run_command failed" };
-                eprintln!("[{role}] step={} {label} output_bytes={}", step + 1, out.len());
-                Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
-            }
-            "python" => {
-                let code = action.get("code").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("python missing 'code'"))?;
-                let cwd = action.get("cwd").and_then(|v| v.as_str()).unwrap_or(WORKSPACE);
-                eprintln!("[{role}] step={} python bytes={}", step + 1, code.len());
-                let (success, out) = exec_python(workspace, code, cwd)?;
-                let label = if success { "python ok" } else { "python failed" };
-                eprintln!("[{role}] step={} {label} output_bytes={}", step + 1, out.len());
-                Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
-            }
-            other => Ok((false, format!("unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, python, or done"))),
-        });
+        let step_result = process_action_and_execute(
+            role,
+            prompt_kind,
+            endpoint,
+            workspace,
+            step + 1,
+            &command_id,
+            &action,
+            check_on_done,
+        )?;
 
         match step_result {
-            Ok((true, reason)) => {
+            (true, reason) => {
                 eprintln!("[{role}] done: {reason}");
                 return Ok(reason);
             }
-            Ok((false, out)) => {
+            (false, out) => {
                 last_result = Some(out);
-            }
-            Err(e) => {
-                eprintln!("[{role}] step={} error: {e}", step + 1);
-                last_result = Some(format!("Error executing action: {e}"));
             }
         }
         step += 1;
@@ -1169,10 +558,323 @@ struct DispatchLaneState {
     latest_verifier_result: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
+struct PendingSubmitState {
+    job: PendingExecutorSubmit,
+    started_ms: u64,
+    command_id: String,
+    endpoint_id: String,
+    tabs: TabManagerHandle,
+}
+
+#[derive(Clone)]
+struct DeferredExecutorCompletion {
+    submitted: SubmittedExecutorTurn,
+    turn_id: u64,
+    tab_id: u32,
+    exec_result: String,
+}
+
+#[derive(Clone)]
 struct DispatchState {
-    lane_a: DispatchLaneState,
-    lane_b: DispatchLaneState,
+    lanes: HashMap<usize, DispatchLaneState>,
+    submitted_turns: std::collections::HashMap<(u32, u64), SubmittedExecutorTurn>,
+    pending_submits: HashMap<usize, PendingSubmitState>,
+    tab_id_to_lane: HashMap<u32, usize>,
+    lane_active_tab: HashMap<usize, u32>,
+    lane_prompt_in_flight: HashMap<usize, bool>,
+    deferred_completions: HashMap<usize, VecDeque<DeferredExecutorCompletion>>,
+    diagnostics_dirty: bool,
+    planner_dirty: bool,
+    diagnostics_text: String,
+    lane_next_submit_at_ms: HashMap<usize, u64>,
+    lane_submit_in_flight: HashMap<usize, bool>,
+}
+
+fn new_dispatch_state(lanes: &[LaneConfig]) -> DispatchState {
+    let mut lanes_state = HashMap::new();
+    let mut lane_prompt_in_flight = HashMap::new();
+    let mut deferred_completions = HashMap::new();
+    let mut lane_next_submit_at_ms = HashMap::new();
+    let mut lane_submit_in_flight = HashMap::new();
+    for lane in lanes {
+        lanes_state.insert(lane.index, DispatchLaneState::default());
+        lane_prompt_in_flight.insert(lane.index, false);
+        deferred_completions.insert(lane.index, VecDeque::new());
+        lane_next_submit_at_ms.insert(lane.index, 0);
+        lane_submit_in_flight.insert(lane.index, false);
+    }
+    DispatchState {
+        lanes: lanes_state,
+        submitted_turns: std::collections::HashMap::new(),
+        pending_submits: HashMap::new(),
+        tab_id_to_lane: HashMap::new(),
+        lane_active_tab: HashMap::new(),
+        lane_prompt_in_flight,
+        deferred_completions,
+        diagnostics_dirty: false,
+        planner_dirty: false,
+        diagnostics_text: String::new(),
+        lane_next_submit_at_ms,
+        lane_submit_in_flight,
+    }
+}
+
+#[derive(Clone)]
+struct SubmittedExecutorTurn {
+    tab_id: u32,
+    lane: usize,
+    lane_label: String,
+    command_id: String,
+    actor: String,
+    endpoint_id: String,
+    tabs: TabManagerHandle,
+}
+
+#[derive(Clone, Debug)]
+struct PendingExecutorSubmit {
+    executor_name: String,
+    executor_display: String,
+    lane_index: usize,
+    lane_plan_file: String,
+    label: String,
+    latest_verify_result: String,
+    executor_role: String,
+}
+
+fn parse_submit_ack(raw: &str) -> Option<(u32, u64, Option<String>)> {
+    let v: Value = serde_json::from_str(raw).ok()?;
+    if v.get("submit_ack").and_then(|x| x.as_bool()) != Some(true) {
+        return None;
+    }
+    let tab_id = v.get("tab_id").and_then(|x| x.as_u64())? as u32;
+    let turn_id = v.get("turn_id").and_then(|x| x.as_u64())?;
+    let command_id = v.get("command_id").and_then(|x| x.as_str()).map(str::to_string);
+    Some((tab_id, turn_id, command_id))
+}
+
+fn append_executor_completion_log(
+    submitted: &SubmittedExecutorTurn,
+    step: usize,
+    turn_id: u64,
+    tab_id: u32,
+    text: &str,
+) -> Result<()> {
+    let parsed = parse_actions(text)
+        .ok()
+        .and_then(|actions| actions.into_iter().next());
+    let observation = parsed
+        .as_ref()
+        .and_then(|action| action_observation(action))
+        .map(str::to_string);
+    let rationale = parsed
+        .as_ref()
+        .and_then(|action| action_rationale(action))
+        .map(str::to_string);
+    let parsed_action = parsed
+        .as_ref()
+        .and_then(|action| action.get("action").and_then(|v| v.as_str()))
+        .map(str::to_string);
+    let parsed_command = parsed
+        .as_ref()
+        .map(|action| {
+            let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown");
+            match kind {
+                "run_command" => action.get("cmd").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                "python" => "python".to_string(),
+                "read_file" => {
+                    let path = action.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                    let line = action.get("line").and_then(|v| v.as_u64());
+                    match line {
+                        Some(n) => format!("read_file {}:{}", path, n),
+                        None => format!("read_file {}", path),
+                    }
+                }
+                "list_dir" => format!("list_dir {}", action.get("path").and_then(|v| v.as_str()).unwrap_or("")),
+                "apply_patch" => "apply_patch".to_string(),
+                "done" => format!("done {}", action.get("reason").and_then(|v| v.as_str()).unwrap_or("")),
+                _ => kind.to_string(),
+            }
+        })
+        .filter(|s| !s.is_empty());
+    let record = compact_log_record(
+        "llm",
+        "completion",
+        Some(&submitted.actor),
+        Some(submitted.lane_label.as_str()),
+        Some(&submitted.endpoint_id),
+        Some(step),
+        Some(turn_id),
+        Some(&submitted.command_id),
+        parsed_action.map(|name| {
+            let summary = parsed_command.clone().unwrap_or_else(|| name.clone());
+            json!({
+                "name": name,
+                "summary": summary,
+            })
+        }),
+        None,
+        observation,
+        rationale,
+        Some(text.to_string()),
+        Some(json!({ "tab_id": tab_id })),
+    );
+    append_action_log_record(&record)
+}
+
+fn parse_completed_turn(value: &Value) -> Option<(u32, u64, String)> {
+    let tab_id = value.get("tab_id").and_then(|x| x.as_u64())? as u32;
+    let turn_id = value.get("turn_id").and_then(|x| x.as_u64())?;
+    let text = value.get("text").and_then(|x| x.as_str())?.to_string();
+    Some((tab_id, turn_id, text))
+}
+
+fn completed_turn_is_done(text: &str) -> bool {
+    parse_actions(text)
+        .ok()
+        .and_then(|actions| actions.into_iter().next())
+        .and_then(|action| action.get("action").and_then(|v| v.as_str()).map(str::to_string))
+        .as_deref()
+        == Some("done")
+}
+
+fn handle_executor_completion(
+    submitted: SubmittedExecutorTurn,
+    tab_id: u32,
+    turn_id: u64,
+    exec_result: String,
+    dispatch_state: &mut DispatchState,
+    lanes: &[LaneConfig],
+    bridge: &WsBridge,
+    workspace: &PathBuf,
+    config: &CapabilityConfig,
+    continuation_joinset: &mut tokio::task::JoinSet<(SubmittedExecutorTurn, u64, Result<String>)>,
+    verifier_queue: &mut VecDeque<(SubmittedExecutorTurn, u64, String)>,
+) -> bool {
+    let lane_cfg = &lanes[submitted.lane];
+    let lane_name = lane_cfg.label.as_str();
+    if *dispatch_state
+        .lane_prompt_in_flight
+        .get(&submitted.lane)
+        .unwrap_or(&false)
+    {
+        dispatch_state
+            .deferred_completions
+            .entry(submitted.lane)
+            .or_default()
+            .push_back(DeferredExecutorCompletion {
+                submitted,
+                turn_id,
+                tab_id,
+                exec_result,
+            });
+        append_orchestration_trace(
+            "executor_completion_deferred",
+            json!({
+                "lane_name": lane_name,
+                "tab_id": tab_id,
+                "turn_id": turn_id,
+            }),
+        );
+        return false;
+    }
+
+    append_orchestration_trace(
+        "llm_message_processed",
+        json!({
+            "tab_id": tab_id,
+            "turn_id": turn_id,
+            "lane_name": lane_name,
+        }),
+    );
+    if let Err(e) = append_executor_completion_log(&submitted, 1, turn_id, tab_id, &exec_result) {
+        eprintln!("[orchestrate] executor_completion_log_error: {e}");
+    }
+    if completed_turn_is_done(&exec_result) {
+        if let Ok(mut actions) = parse_actions(&exec_result) {
+            if let Some(action) = actions.pop() {
+                if let Err(e) = append_action_result_log(
+                    &submitted.actor,
+                    &lane_cfg.endpoint,
+                    "executor",
+                    1,
+                    &submitted.command_id,
+                    &action,
+                    true,
+                    &exec_result,
+                ) {
+                    eprintln!("[orchestrate] executor_done_result_log_error: {e}");
+                }
+            }
+        }
+    }
+    if submitted.tab_id != tab_id {
+        eprintln!(
+            "[orchestrate] completed turn tab mismatch: turn_id={} expected_tab={} actual_tab={}",
+            turn_id, submitted.tab_id, tab_id
+        );
+        let lane = dispatch_lane_mut(dispatch_state, submitted.lane);
+        lane.in_progress_by = None;
+        lane.pending = true;
+        return true;
+    }
+    let final_exec_result = if completed_turn_is_done(&exec_result) {
+        exec_result
+    } else {
+        eprintln!(
+            "[orchestrate] executor turn requires tool execution: lane={} turn_id={}",
+            lane_name,
+            turn_id
+        );
+        append_orchestration_trace(
+            "executor_completion_requires_tool",
+            json!({
+                "lane_name": lane_name,
+                "tab_id": tab_id,
+                "turn_id": turn_id,
+                "endpoint_id": lane_cfg.endpoint.id,
+            }),
+        );
+        let executor_endpoint = lane_cfg.endpoint.clone();
+        let bridge = bridge.clone();
+        let workspace = workspace.clone();
+        let config = config.clone();
+        let exec_result = exec_result.clone();
+        let submitted_clone = submitted.clone();
+        let tabs = submitted.tabs.clone();
+        dispatch_state
+            .lane_prompt_in_flight
+            .insert(submitted.lane, true);
+        continuation_joinset.spawn(async move {
+            let result = continue_executor_completion(
+                &submitted_clone,
+                &exec_result,
+                turn_id,
+                &executor_endpoint,
+                &bridge,
+                &workspace,
+                &config,
+                &tabs,
+            )
+            .await;
+            (submitted_clone, turn_id, result)
+        });
+        return true;
+    };
+    if completed_turn_is_done(&final_exec_result) {
+        verifier_queue.push_back((submitted, turn_id, final_exec_result));
+        true
+    } else {
+        eprintln!(
+            "[orchestrate] executor completion not done: lane={} turn_id={}",
+            lane_name,
+            turn_id
+        );
+        let lane = dispatch_lane_mut(dispatch_state, submitted.lane);
+        lane.in_progress_by = None;
+        lane.pending = true;
+        true
+    }
 }
 
 fn verifier_confirmed(reason: &str) -> bool {
@@ -1184,31 +886,163 @@ fn verifier_confirmed(reason: &str) -> bool {
     false
 }
 
-fn dispatch_lane_mut<'a>(state: &'a mut DispatchState, lane_name: &str) -> &'a mut DispatchLaneState {
-    match lane_name {
-        "lane_a" => &mut state.lane_a,
-        "lane_b" => &mut state.lane_b,
-        other => panic!("unknown lane: {other}"),
-    }
+fn dispatch_lane_mut<'a>(state: &'a mut DispatchState, lane_id: usize) -> &'a mut DispatchLaneState {
+    state
+        .lanes
+        .get_mut(&lane_id)
+        .unwrap_or_else(|| panic!("missing lane state for {:?}", lane_id))
 }
 
-fn claim_next_lane(state: &mut DispatchState, executor_name: &str) -> Option<(&'static str, String, String)> {
-    let order: [&str; 2] = if executor_name == "executor_a" {
-        ["lane_a", "lane_b"]
-    } else {
-        ["lane_b", "lane_a"]
-    };
+fn claim_next_lane(state: &mut DispatchState, lane: &LaneConfig) -> Option<(usize, String)> {
+    let lane_id = lane.index;
+    let lane_state = dispatch_lane_mut(state, lane_id);
+    if lane_state.pending && lane_state.in_progress_by.is_none() && !lane_state.plan_text.trim().is_empty() {
+        lane_state.pending = false;
+        lane_state.in_progress_by = Some(lane.label.clone());
+        return Some((lane_id, lane_state.latest_verifier_result.clone()));
+    }
+    None
+}
 
-    for lane_name in order {
-        let lane = dispatch_lane_mut(state, lane_name);
-        if lane.pending && lane.in_progress_by.is_none() && !lane.plan_text.trim().is_empty() {
-            lane.pending = false;
-            lane.in_progress_by = Some(executor_name.to_string());
-            return Some((if lane_name == "lane_a" { "lane_a" } else { "lane_b" }, lane.plan_text.clone(), lane.latest_verifier_result.clone()));
+fn claim_executor_submit(state: &mut DispatchState, lane: &LaneConfig) -> Option<PendingExecutorSubmit> {
+    let (lane_id, latest_verify_result) = claim_next_lane(state, lane)?;
+    let executor_display = format!("executor {}", lane.label);
+    let executor_role = format!("executor[{}]", lane.label);
+    Some(PendingExecutorSubmit {
+        executor_name: "executor".to_string(),
+        executor_display,
+        lane_index: lane_id,
+        lane_plan_file: lane.plan_file.clone(),
+        label: lane.label.clone(),
+        latest_verify_result,
+        executor_role,
+    })
+}
+
+async fn submit_executor_turn(
+    job: &PendingExecutorSubmit,
+    endpoint: &LlmEndpoint,
+    bridge: &WsBridge,
+    tabs: &TabManagerHandle,
+    send_system_prompt: bool,
+    command_id: &str,
+) -> Result<String> {
+    let exec_prompt = executor_cycle_prompt(
+        job.executor_display.as_str(),
+        job.label.as_str(),
+        job.lane_plan_file.as_str(),
+        &job.latest_verify_result,
+    );
+    let executor_system = system_instructions(AgentPromptKind::Executor);
+    let role_schema = if send_system_prompt {
+        executor_system
+    } else {
+        String::new()
+    };
+    let prompt = exec_prompt;
+    eprintln!(
+        "[{}] step=1 prompt_bytes={}",
+        job.executor_role,
+        prompt.len()
+    );
+    if let Err(e) = append_message_log(
+        &job.executor_role,
+        endpoint,
+        "executor",
+        1,
+        command_id,
+        "llm_request",
+        json!({
+            "submit_only": true,
+            "prompt_bytes": prompt.len(),
+            "role_schema_bytes": role_schema.len(),
+            "prompt": truncate(&prompt, MAX_SNIPPET),
+        }),
+    ) {
+        eprintln!("[{}] step=1 action_log_error: {e}", job.executor_role);
+    }
+    append_orchestration_trace(
+        "llm_message_forwarded",
+        json!({
+            "role": job.executor_role,
+            "prompt_kind": "executor",
+            "step": 1,
+            "endpoint_id": endpoint.id,
+            "submit_only": true,
+            "prompt_bytes": prompt.len(),
+        }),
+    );
+    let raw = llm_worker_send_request(
+        bridge,
+        &endpoint.id,
+        &endpoint.url,
+        endpoint.stateful,
+        &prompt,
+        &role_schema,
+        None,
+        None,
+        false,
+        true,
+        &job.executor_role,
+        tabs,
+        endpoint.max_tabs,
+        true,
+    )
+    .await?;
+    append_orchestration_trace(
+        "llm_message_received",
+        json!({
+            "role": job.executor_role,
+            "prompt_kind": "executor",
+            "step": 1,
+            "endpoint_id": endpoint.id,
+            "submit_only": true,
+            "response_bytes": raw.len(),
+        }),
+    );
+    if let Err(e) = append_message_log(
+        &job.executor_role,
+        endpoint,
+        "executor",
+        1,
+        command_id,
+        "llm_response",
+        json!({
+            "submit_only": true,
+            "response_bytes": raw.len(),
+            "raw": truncate(&raw, MAX_SNIPPET),
+        }),
+    ) {
+        eprintln!("[{}] step=1 action_log_error: {e}", job.executor_role);
+    }
+    if let Ok(mut ack) = serde_json::from_str::<Value>(&raw) {
+        if ack.get("submit_ack").and_then(|v| v.as_bool()) == Some(true) {
+            ack["command_id"] = Value::String(command_id.to_string());
+            eprintln!("[{}] step=1 submit_ack={}", job.executor_role, raw);
+            if let Err(e) = append_message_log(
+                &job.executor_role,
+                endpoint,
+                "executor",
+                1,
+                command_id,
+                "llm_submit_ack",
+                ack.clone(),
+            ) {
+                eprintln!("[{}] step=1 action_log_error: {e}", job.executor_role);
+            }
+            append_orchestration_trace(
+                "llm_message_processed",
+                json!({
+                    "role": job.executor_role,
+                    "prompt_kind": "executor",
+                    "step": 1,
+                    "endpoint_id": endpoint.id,
+                    "submit_ack": ack,
+                }),
+            );
         }
     }
-
-    None
+    Ok(raw)
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -1228,10 +1062,40 @@ async fn main() -> Result<()> {
 
     let workspace = PathBuf::from(WORKSPACE);
     let spec_path = workspace.join(SPEC_FILE);
-    let exec_a_plan_path = workspace.join(EXECUTOR_A_PLAN_FILE);
-    let exec_b_plan_path = workspace.join(EXECUTOR_B_PLAN_FILE);
+    let master_plan_path = workspace.join(MASTER_PLAN_FILE);
+    let violations_path = workspace.join(VIOLATIONS_FILE);
+    let diagnostics_path = workspace.join(DIAGNOSTICS_FILE);
 
     let config = CapabilityConfig::snapshot_store_load().context("failed to load capability_config.toml")?;
+    let mut executor_endpoints: Vec<LlmEndpoint> = config
+        .llm_endpoints
+        .iter()
+        .filter(|e| e.role.as_deref() == Some("executor"))
+        .cloned()
+        .collect();
+    executor_endpoints.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut lanes: Vec<LaneConfig> = executor_endpoints
+        .into_iter()
+        .enumerate()
+        .map(|(index, ep)| LaneConfig {
+            index,
+            plan_file: format!("PLANS/executor-{}.md", ep.id),
+            label: ep.id.clone(),
+            endpoint: ep,
+            tabs: llm_worker_new_tabs(),
+        })
+        .collect();
+    if lanes.is_empty() {
+        bail!("no executor endpoints with role = \"executor\" found in capability_config.toml");
+    }
+    if lanes.len() > 1 {
+        eprintln!(
+            "[canon-mini-agent] temporary single-executor mode: using {} and ignoring {} other executor endpoints",
+            lanes[0].label,
+            lanes.len().saturating_sub(1)
+        );
+        lanes.truncate(1);
+    }
 
     let ws_addr: std::net::SocketAddr = format!("127.0.0.1:{ws_port}").parse()?;
     let bridge = ws_server::spawn(ws_addr, config.response_timeout_secs, Arc::new(OnceLock::new()));
@@ -1240,478 +1104,594 @@ async fn main() -> Result<()> {
     eprintln!("[canon-mini-agent] Chrome extension connected");
 
     let tabs = llm_worker_new_tabs();
-    let tabs_exec_a = llm_worker_new_tabs();
-    let tabs_exec_b = llm_worker_new_tabs();
 
     if orchestrate {
-        const DIAGNOSTICS_LOOP_SECS: u64 = 20;
-        const PLANNER_LOOP_SECS: u64 = 12;
-        const EXECUTOR_LOOP_IDLE_SECS: u64 = 2;
-        const SERVICE_POLL_MS: u64 = 250;
+        const SERVICE_POLL_MS: u64 = 500;
+        const PENDING_SUBMIT_TIMEOUT_MS: u64 = 10_000;
 
         eprintln!("[orchestrate] start_role={start_role}");
 
         let diagnostics_ep = find_endpoint(&config, "diagnostics")?.clone();
         let planner_ep = find_endpoint(&config, "mini_planner")?.clone();
-        let exec_a_ep = find_endpoint(&config, "mini_agent")?.clone();
-        let exec_b_ep = find_endpoint(&config, "executor_b")?.clone();
-        let verifier_ep_a = find_endpoint(&config, "verifier")?.clone();
-        let verifier_ep_b = find_endpoint(&config, "verifier")?.clone();
+        let verifier_ep = find_endpoint(&config, "verifier")?.clone();
 
         let tabs_diagnostics = llm_worker_new_tabs();
         let tabs_planner = llm_worker_new_tabs();
-        let tabs_verify_a = llm_worker_new_tabs();
-        let tabs_verify_b = llm_worker_new_tabs();
+        let tabs_verify = llm_worker_new_tabs();
+        let mut verifier_summary: Vec<String> = vec!["(none yet)".to_string(); lanes.len()];
+        let mut dispatch_state = {
+            let mut state = new_dispatch_state(&lanes);
+            state.planner_dirty = true;
+            state
+        };
+        let mut planner_bootstrapped = false;
+        let mut diagnostics_bootstrapped = false;
+        let mut verifier_bootstrapped = false;
+        let mut submit_joinset: tokio::task::JoinSet<(usize, PendingExecutorSubmit, Result<String>)> =
+            tokio::task::JoinSet::new();
+        let mut continuation_joinset: tokio::task::JoinSet<(SubmittedExecutorTurn, u64, Result<String>)> =
+            tokio::task::JoinSet::new();
+        let mut verifier_joinset: tokio::task::JoinSet<(usize, String)> = tokio::task::JoinSet::new();
+        let mut verifier_queue: VecDeque<(SubmittedExecutorTurn, u64, String)> = VecDeque::new();
 
-        let verifier_summary = Arc::new(tokio::sync::Mutex::new((
-            "(none yet)".to_string(),
-            "(none yet)".to_string(),
-        )));
-        let dispatch_state = Arc::new(tokio::sync::Mutex::new(DispatchState::default()));
+        eprintln!("[orchestrate] pipeline started: planner -> background executors -> verifier/diagnostics -> planner");
 
-        {
-            let bridge = bridge.clone();
-            let workspace = workspace.clone();
-            let config = config.clone();
-            let tabs_diagnostics = tabs_diagnostics.clone();
-            let diagnostics_ep = diagnostics_ep.clone();
-            let verifier_summary = verifier_summary.clone();
-            tokio::spawn(async move {
-                let mut active: Option<tokio::task::JoinHandle<Result<String>>> = None;
-                loop {
-                    if let Some(handle) = active.as_ref() {
-                        if handle.is_finished() {
-                            let finished = active.take().unwrap();
-                            match finished.await {
-                                Ok(Ok(result)) => eprintln!("[orchestrate] diagnostics loop ok bytes={}", result.len()),
-                                Ok(Err(err)) => eprintln!("[orchestrate] diagnostics loop error: {err:#}"),
-                                Err(err) => eprintln!("[orchestrate] diagnostics loop join error: {err}"),
-                            }
-                        }
-                    }
+        loop {
+            let mut cycle_progress = false;
 
-                    if active.is_none() {
-                        let bridge = bridge.clone();
-                        let workspace = workspace.clone();
-                        let config = config.clone();
-                        let tabs_diagnostics = tabs_diagnostics.clone();
-                        let diagnostics_ep = diagnostics_ep.clone();
-                        let verifier_summary = verifier_summary.clone();
-                        active = Some(tokio::spawn(async move {
-                            let summary_text = {
-                                let guard = verifier_summary.lock().await;
-                                format!("lane_a={}\nlane_b={}", guard.0, guard.1)
-                            };
-                            let prompt = format!(
-                                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\n\
-Always inspect state/event_log/event.tlog.d and the relevant canon system files.\n\
-Prioritize canon-route, canon-loop, canon-runtime, and canon-mini-agent when control flow or prompt contracts are implicated.\n\n\
-Latest verifier summary:\n{summary_text}\n\n\
-Use {SPEC_FILE} as the canonical contract, not lane plans.\n\
-Infer failures from code, logs, runtime state, and verifier findings.\n\
-Focus on route/control-flow correctness, event successor discharge, duplicate fanout, scheduler-state drift, and prompt-shell mismatches.\n\n\
-Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin."
-                            );
-                            let result = run_agent(
-                                "diagnostics",
-                                SYSTEM_INSTRUCTIONS_DIAGNOSTICS,
-                                prompt,
-                                &diagnostics_ep,
-                                &bridge,
-                                &workspace,
-                                &config,
-                                &tabs_diagnostics,
-                                false,
-                                false,
-                            )
-                            .await?;
-                            tokio::time::sleep(std::time::Duration::from_secs(DIAGNOSTICS_LOOP_SECS)).await;
-                            Ok(result)
-                        }));
-                    }
-
-                    tokio::time::sleep(std::time::Duration::from_millis(SERVICE_POLL_MS)).await;
-                }
-            });
-        }
-
-        {
-            let bridge = bridge.clone();
-            let workspace = workspace.clone();
-            let config = config.clone();
-            let tabs_planner = tabs_planner.clone();
-            let planner_ep = planner_ep.clone();
-            let spec_path = spec_path.clone();
-            let verifier_summary = verifier_summary.clone();
-            let exec_a_plan_path = exec_a_plan_path.clone();
-            let exec_b_plan_path = exec_b_plan_path.clone();
-            let dispatch_state = dispatch_state.clone();
-            tokio::spawn(async move {
-                let mut active: Option<tokio::task::JoinHandle<Result<(String, String, String)>>> = None;
-                loop {
-                    if let Some(handle) = active.as_ref() {
-                        if handle.is_finished() {
-                            let finished = active.take().unwrap();
-                            match finished.await {
-                                Ok(Ok((result, exec_a_plan, exec_b_plan))) => {
-                                    eprintln!("[orchestrate] planner loop ok bytes={}", result.len());
-                                    let mut guard = dispatch_state.lock().await;
-
-                                    let lane_a_changed = guard.lane_a.plan_text != exec_a_plan;
-                                    guard.lane_a.plan_text = exec_a_plan;
-                                    if guard.lane_a.in_progress_by.is_none()
-                                        && (lane_a_changed || !verifier_confirmed(&guard.lane_a.latest_verifier_result))
-                                    {
-                                        guard.lane_a.pending = !guard.lane_a.plan_text.trim().is_empty();
-                                    }
-
-                                    let lane_b_changed = guard.lane_b.plan_text != exec_b_plan;
-                                    guard.lane_b.plan_text = exec_b_plan;
-                                    if guard.lane_b.in_progress_by.is_none()
-                                        && (lane_b_changed || !verifier_confirmed(&guard.lane_b.latest_verifier_result))
-                                    {
-                                        guard.lane_b.pending = !guard.lane_b.plan_text.trim().is_empty();
+            if dispatch_state.planner_dirty {
+                let summary_text = lanes
+                    .iter()
+                    .map(|lane| format!("{}={}", lane.label, verifier_summary[lane.index]))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let lane_plan_list = lanes
+                    .iter()
+                    .map(|lane| lane.plan_file.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let planner_prompt = planner_cycle_prompt(&summary_text, &lane_plan_list);
+                append_orchestration_trace(
+                    "llm_message_forwarded",
+                    json!({
+                        "from": "orchestrator",
+                        "to": "planner",
+                        "phase": "planner",
+                    }),
+                );
+                let planner_system = system_instructions(AgentPromptKind::Planner);
+                let result = run_agent(
+                    "planner",
+                    "planner",
+                    &planner_system,
+                    planner_prompt,
+                    &planner_ep,
+                    &bridge,
+                    &workspace,
+                    &config,
+                    &tabs_planner,
+                    false,
+                    false,
+                    !planner_bootstrapped,
+                )
+                .await;
+                match result {
+                    Ok(result) => {
+                        eprintln!("[orchestrate] planner ok bytes={}", result.len());
+                        for lane in &lanes {
+                            let mut plan_text = std::fs::read_to_string(workspace.join(&lane.plan_file)).unwrap_or_default();
+                            if plan_text.trim().is_empty() {
+                                let legacy_path = match lane.index {
+                                    0 => Some("PLANS/executor-a.md"),
+                                    1 => Some("PLANS/executor-b.md"),
+                                    _ => None,
+                                };
+                                if let Some(legacy) = legacy_path {
+                                    let legacy_text = std::fs::read_to_string(workspace.join(legacy)).unwrap_or_default();
+                                    if !legacy_text.trim().is_empty() {
+                                        eprintln!(
+                                            "[orchestrate] legacy lane plan fallback: {} -> {}",
+                                            legacy,
+                                            lane.plan_file
+                                        );
+                                        plan_text = legacy_text;
                                     }
                                 }
-                                Ok(Err(err)) => eprintln!("[orchestrate] planner loop error: {err:#}"),
-                                Err(err) => eprintln!("[orchestrate] planner loop join error: {err}"),
+                            }
+                            let lane_state = dispatch_lane_mut(&mut dispatch_state, lane.index);
+                            let changed = lane_state.plan_text != plan_text;
+                            lane_state.plan_text = plan_text;
+                            if lane_state.in_progress_by.is_none()
+                                && (changed || !verifier_confirmed(&lane_state.latest_verifier_result))
+                            {
+                                lane_state.pending = !lane_state.plan_text.trim().is_empty();
                             }
                         }
-                    }
 
-                    if active.is_none() {
-                        let bridge = bridge.clone();
-                        let workspace = workspace.clone();
-                        let config = config.clone();
-                        let tabs_planner = tabs_planner.clone();
-                        let planner_ep = planner_ep.clone();
-                        let spec_path = spec_path.clone();
-                        let verifier_summary = verifier_summary.clone();
-                        let exec_a_plan_path = exec_a_plan_path.clone();
-                        let exec_b_plan_path = exec_b_plan_path.clone();
-                        active = Some(tokio::spawn(async move {
-                            let spec = std::fs::read_to_string(&spec_path)
-                                .with_context(|| format!("failed to read {SPEC_FILE}"))?;
-                            let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
-                            let summary_text = {
-                                let guard = verifier_summary.lock().await;
-                                format!("lane_a={}\nlane_b={}", guard.0, guard.1)
-                            };
-                            let planner_prompt = format!(
-                                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nLatest verifier summary:\n{summary_text}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n- Derive lane plans from the spec; do not change spec truth.\n\nCreate or refresh {EXECUTOR_A_PLAN_FILE} and {EXECUTOR_B_PLAN_FILE}. Emit exactly one action to begin."
-                            );
-                            let result = run_agent(
-                                "planner",
-                                SYSTEM_INSTRUCTIONS_PLANNER,
-                                planner_prompt,
-                                &planner_ep,
-                                &bridge,
-                                &workspace,
-                                &config,
-                                &tabs_planner,
-                                false,
-                                false,
-                            )
-                            .await?;
-                            let exec_a_plan = std::fs::read_to_string(&exec_a_plan_path).unwrap_or_default();
-                            let exec_b_plan = std::fs::read_to_string(&exec_b_plan_path).unwrap_or_default();
-                            tokio::time::sleep(std::time::Duration::from_secs(PLANNER_LOOP_SECS)).await;
-                            Ok((result, exec_a_plan, exec_b_plan))
-                        }));
+                        dispatch_state.planner_dirty = false;
+                        cycle_progress = true;
                     }
-
-                    tokio::time::sleep(std::time::Duration::from_millis(SERVICE_POLL_MS)).await;
+                    Err(err) => {
+                        eprintln!("[orchestrate] planner error: {err:#}");
+                    }
                 }
-            });
-        }
+                planner_bootstrapped = true;
+            }
 
-        {
-            let bridge = bridge.clone();
-            let workspace = workspace.clone();
-            let config = config.clone();
-            let tabs_exec_a = tabs_exec_a.clone();
-            let tabs_verify_a = tabs_verify_a.clone();
-            let exec_a_ep = exec_a_ep.clone();
-            let verifier_ep_a = verifier_ep_a.clone();
-            let spec_path = spec_path.clone();
-            let verifier_summary = verifier_summary.clone();
-            let dispatch_state = dispatch_state.clone();
-            tokio::spawn(async move {
-                loop {
-                    let (lane_name, lane_plan, latest_verify_result) = {
-                        let mut guard = dispatch_state.lock().await;
-                        match claim_next_lane(&mut guard, "executor_a") {
-                            Some(claim) => claim,
-                            None => {
-                                drop(guard);
-                                tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                                continue;
+            let now = now_ms();
+            if !dispatch_state.pending_submits.is_empty() {
+                let mut timed_out = Vec::new();
+                for (lane_id, pending) in dispatch_state.pending_submits.iter() {
+                    if now.saturating_sub(pending.started_ms) >= PENDING_SUBMIT_TIMEOUT_MS {
+                        timed_out.push(*lane_id);
+                    }
+                }
+                for lane_id in timed_out {
+                    if let Some(pending) = dispatch_state.pending_submits.remove(&lane_id) {
+                        eprintln!(
+                            "[orchestrate] pending submit timeout: lane={} command_id={}",
+                            lanes[lane_id].label,
+                            pending.command_id
+                        );
+                        append_orchestration_trace(
+                            "executor_submit_timeout",
+                            json!({
+                                "lane_name": lanes[lane_id].label,
+                                "command_id": pending.command_id,
+                            }),
+                        );
+                    }
+                   dispatch_state.lane_submit_in_flight.insert(lane_id, false);
+                   let lane = dispatch_lane_mut(&mut dispatch_state, lane_id);
+                    lane.in_progress_by = None;
+                    lane.pending = true;
+                }
+            }
+            for lane in &lanes {
+                let in_flight = *dispatch_state
+                    .lane_submit_in_flight
+                    .get(&lane.index)
+                    .unwrap_or(&false);
+                let next_at = *dispatch_state
+                    .lane_next_submit_at_ms
+                    .get(&lane.index)
+                    .unwrap_or(&0);
+                if in_flight || next_at > now {
+                    continue;
+                }
+                if let Some(job) = claim_executor_submit(&mut dispatch_state, lane) {
+                    let lane_index = lane.index;
+                    let endpoint = lane.endpoint.clone();
+                    let bridge = bridge.clone();
+                    let tabs = lane.tabs.clone();
+                    let command_id = make_command_id(&job.executor_role, "executor", 1);
+                    dispatch_state.pending_submits.insert(
+                        lane_index,
+                        PendingSubmitState {
+                            job: job.clone(),
+                            started_ms: now_ms(),
+                            command_id: command_id.clone(),
+                            endpoint_id: endpoint.id.clone(),
+                            tabs: tabs.clone(),
+                        },
+                    );
+                   dispatch_state.lane_submit_in_flight.insert(lane_index, true);
+                   submit_joinset.spawn(async move {
+                        let result = submit_executor_turn(
+                            &job,
+                            &endpoint,
+                            &bridge,
+                            &tabs,
+                            true,
+                            &command_id,
+                        )
+                        .await;
+                        (lane_index, job, result)
+                    });
+                }
+            }
+
+            while let Some(joined) = submit_joinset.try_join_next() {
+                match joined {
+                    Ok((lane_id, job, result)) => {
+                        match result {
+                            Ok(exec_result) => {
+                                if let Some((tab_id, turn_id, command_id)) = parse_submit_ack(&exec_result) {
+                                    let Some(pending) = dispatch_state.pending_submits.remove(&lane_id) else {
+                                        eprintln!(
+                                            "[orchestrate] submit ack without pending submit: lane={} tab_id={} turn_id={}",
+                                            lanes[lane_id].label,
+                                            tab_id,
+                                            turn_id
+                                        );
+                                        continue;
+                                    };
+                                    if now_ms().saturating_sub(pending.started_ms) >= PENDING_SUBMIT_TIMEOUT_MS {
+                                        eprintln!(
+                                            "[orchestrate] submit ack arrived after timeout: lane={} tab_id={} turn_id={}",
+                                            lanes[lane_id].label,
+                                            tab_id,
+                                            turn_id
+                                        );
+                                        dispatch_state.lane_submit_in_flight.insert(lane_id, false);
+                                        dispatch_state.lane_prompt_in_flight.insert(lane_id, false);
+                                        continue;
+                                    }
+                                    if let Some(active_tab) = dispatch_state.lane_active_tab.get(&lane_id) {
+                                        if *active_tab != tab_id {
+                                            eprintln!(
+                                                "[orchestrate] submit ack tab mismatch: lane={} active_tab={} ack_tab={}",
+                                                lanes[lane_id].label,
+                                                active_tab,
+                                                tab_id
+                                            );
+                                   dispatch_state.lane_submit_in_flight.insert(lane_id, false);
+                                   let lane = dispatch_lane_mut(&mut dispatch_state, lane_id);
+                                            lane.in_progress_by = None;
+                                            lane.pending = true;
+                                            continue;
+                                        }
+                                    }
+                                    dispatch_state.lane_active_tab.entry(lane_id).or_insert(tab_id);
+                                    dispatch_state
+                                        .tab_id_to_lane
+                                        .entry(tab_id)
+                                        .or_insert(lane_id);
+                                    dispatch_state.submitted_turns.insert(
+                                        (tab_id, turn_id),
+                                        SubmittedExecutorTurn {
+                                            tab_id,
+                                            lane: job.lane_index,
+                                            lane_label: job.label.clone(),
+                                            command_id: command_id.unwrap_or_else(|| pending.command_id.clone()),
+                                            actor: job.executor_role.clone(),
+                                            endpoint_id: pending.endpoint_id.clone(),
+                                            tabs: pending.tabs.clone(),
+                                        },
+                                    );
+                                    dispatch_state.lane_next_submit_at_ms.insert(lane_id, now_ms());
+                                    dispatch_state.lane_submit_in_flight.insert(lane_id, false);
+                                    cycle_progress = true;
+                                } else {
+                                    eprintln!("[orchestrate] {} missing submit_ack: {exec_result}", job.executor_name);
+                                    let lane = dispatch_lane_mut(&mut dispatch_state, job.lane_index);
+                                    lane.in_progress_by = None;
+                                    lane.pending = true;
+                                    dispatch_state.pending_submits.remove(&job.lane_index);
+                   dispatch_state.lane_submit_in_flight.insert(job.lane_index, false);
+                               }
+                           }
+                           Err(err) => {
+                               eprintln!("[orchestrate] {} submit error: {err:#}", job.executor_name);
+                               let lane = dispatch_lane_mut(&mut dispatch_state, job.lane_index);
+                               lane.in_progress_by = None;
+                               lane.pending = true;
+                               dispatch_state.pending_submits.remove(&job.lane_index);
+                               dispatch_state.lane_submit_in_flight.insert(job.lane_index, false);
                             }
                         }
-                    };
+                    }
+                    Err(err) => {
+                        eprintln!("[orchestrate] submit join error: {err:#}");
+                    }
+                }
+            }
 
-                    let spec = match std::fs::read_to_string(&spec_path) {
-                        Ok(spec) => spec,
-                        Err(err) => {
-                            eprintln!("[orchestrate] lane_a spec read error: {err:#}");
-                            let mut guard = dispatch_state.lock().await;
-                            let lane = dispatch_lane_mut(&mut guard, lane_name);
-                            lane.in_progress_by = None;
-                            lane.pending = true;
-                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
+            let completed_turns = bridge.take_completed_turns().await;
+            let mut verifier_changed = false;
+            for item in completed_turns {
+                append_orchestration_trace("llm_message_received", item.clone());
+                let Some((tab_id, turn_id, exec_result)) = parse_completed_turn(&item) else {
+                    continue;
+                };
+                let submitted = if let Some(submitted) =
+                    dispatch_state.submitted_turns.remove(&(tab_id, turn_id))
+                {
+                    submitted
+                } else {
+                    let lane_id = dispatch_state
+                        .tab_id_to_lane
+                        .get(&tab_id)
+                        .copied()
+                        .or_else(|| {
+                            if dispatch_state.pending_submits.len() == 1 {
+                                let (&lane_id, _) = dispatch_state.pending_submits.iter().next()?;
+                                dispatch_state.tab_id_to_lane.insert(tab_id, lane_id);
+                                Some(lane_id)
+                            } else {
+                                None
+                            }
+                        });
+                    let Some(lane_id) = lane_id else {
+                        append_orchestration_trace(
+                            "executor_completion_unmatched",
+                            json!({
+                                "tab_id": tab_id,
+                                "turn_id": turn_id,
+                                "text": truncate(&exec_result, MAX_SNIPPET),
+                            }),
+                        );
+                        continue;
+                    };
+                    if let Some(active_tab) = dispatch_state.lane_active_tab.get(&lane_id) {
+                        if *active_tab != tab_id {
+                            append_orchestration_trace(
+                                "executor_completion_tab_mismatch",
+                                json!({
+                                    "lane_name": lanes[lane_id].label,
+                                    "active_tab": active_tab,
+                                    "tab_id": tab_id,
+                                    "turn_id": turn_id,
+                                }),
+                            );
                             continue;
                         }
-                    };
-                    let (lane_label, lane_plan_file) = if lane_name == "lane_a" {
-                        ("A", EXECUTOR_A_PLAN_FILE)
                     } else {
-                        ("B", EXECUTOR_B_PLAN_FILE)
+                        dispatch_state.lane_active_tab.insert(lane_id, tab_id);
+                    }
+                    let Some(pending) = dispatch_state.pending_submits.remove(&lane_id) else {
+                        append_orchestration_trace(
+                            "executor_completion_unmatched",
+                            json!({
+                                "tab_id": tab_id,
+                                "turn_id": turn_id,
+                                "text": truncate(&exec_result, MAX_SNIPPET),
+                            }),
+                        );
+                        continue;
                     };
-                    let exec_a_prompt = format!(
-                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {lane_plan_file}):\n{lane_plan}\n\nLatest verifier result for lane {lane_label}:\n{latest_verify_result}\n\nYou are executor A, currently assigned to lane {lane_label}. Work only on the highest-priority READY items from this assigned lane plan. Address verifier findings first. Do not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
-                    );
-                    let executor_role = format!("executor_a[{lane_name}]");
-                    let exec_a_result = match run_agent(
-                        &executor_role,
-                        SYSTEM_INSTRUCTIONS_EXECUTOR,
-                        exec_a_prompt,
-                        &exec_a_ep,
+                dispatch_state.lane_submit_in_flight.insert(lane_id, false);
+                dispatch_state.lane_next_submit_at_ms.insert(lane_id, now_ms());
+                SubmittedExecutorTurn {
+                    tab_id,
+                    lane: lane_id,
+                    lane_label: lanes[lane_id].label.clone(),
+                    command_id: pending.command_id,
+                    actor: pending.job.executor_role,
+                    endpoint_id: pending.endpoint_id,
+                    tabs: pending.tabs,
+                }
+            };
+            dispatch_state.lane_prompt_in_flight.insert(submitted.lane, false);
+            if handle_executor_completion(
+                submitted,
+                tab_id,
+                turn_id,
+                exec_result,
+                &mut dispatch_state,
+                &lanes,
+                &bridge,
+                &workspace,
+                &config,
+                &mut continuation_joinset,
+                &mut verifier_queue,
+            ) {
+                cycle_progress = true;
+            }
+        }
+
+            while let Some(joined) = continuation_joinset.try_join_next() {
+                match joined {
+                    Ok((submitted, turn_id, result)) => match result {
+                        Ok(final_exec_result) => {
+                            dispatch_state.lane_prompt_in_flight.insert(submitted.lane, false);
+                            if completed_turn_is_done(&final_exec_result) {
+                                verifier_queue.push_back((submitted, turn_id, final_exec_result));
+                                cycle_progress = true;
+                            } else {
+                                eprintln!(
+                                    "[orchestrate] executor continuation not done: lane={} turn_id={}",
+                                    submitted.lane_label,
+                                    turn_id
+                                );
+                                let lane = dispatch_lane_mut(&mut dispatch_state, submitted.lane);
+                                lane.in_progress_by = None;
+                                lane.pending = true;
+                                cycle_progress = true;
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!(
+                                "[orchestrate] executor continuation error: lane={} err={err:#}",
+                                submitted.lane_label
+                            );
+                            dispatch_state.lane_prompt_in_flight.insert(submitted.lane, false);
+                            let lane = dispatch_lane_mut(&mut dispatch_state, submitted.lane);
+                            lane.in_progress_by = None;
+                            lane.pending = true;
+                            cycle_progress = true;
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("[orchestrate] continuation join error: {err:#}");
+                    }
+                }
+            }
+
+            for lane_id in 0..lanes.len() {
+                let in_flight = *dispatch_state
+                    .lane_prompt_in_flight
+                    .get(&lane_id)
+                    .unwrap_or(&false);
+                if in_flight {
+                    continue;
+                }
+                while let Some(deferred) = dispatch_state
+                    .deferred_completions
+                    .get_mut(&lane_id)
+                    .and_then(|queue| queue.pop_front())
+                {
+                    if handle_executor_completion(
+                        deferred.submitted,
+                        deferred.tab_id,
+                        deferred.turn_id,
+                        deferred.exec_result,
+                        &mut dispatch_state,
+                        &lanes,
                         &bridge,
                         &workspace,
                         &config,
-                        &tabs_exec_a,
+                        &mut continuation_joinset,
+                        &mut verifier_queue,
+                    ) {
+                        cycle_progress = true;
+                    }
+                    let now_in_flight = *dispatch_state
+                        .lane_prompt_in_flight
+                        .get(&lane_id)
+                        .unwrap_or(&false);
+                    if now_in_flight {
+                        break;
+                    }
+                }
+            }
+
+            while let Some((submitted, turn_id, final_exec_result)) = verifier_queue.pop_front() {
+                let lane_plan_file = lanes[submitted.lane].plan_file.clone();
+                let verifier_prompt =
+                    verifier_cycle_prompt(submitted.lane_label.as_str(), lane_plan_file.as_str(), &final_exec_result);
+                append_orchestration_trace(
+                    "llm_message_forwarded",
+                    json!({
+                        "from": format!("executor:{}", submitted.lane_label),
+                        "to": "verifier",
+                        "tab_id": submitted.tab_id,
+                        "turn_id": turn_id,
+                        "lane_name": submitted.lane_label.as_str(),
+                        "lane_plan_file": lane_plan_file,
+                    }),
+                );
+                let verifier_system = system_instructions(AgentPromptKind::Verifier);
+                let verifier_ep = verifier_ep.clone();
+                let bridge = bridge.clone();
+                let workspace = workspace.clone();
+                let config = config.clone();
+                let send_system = !verifier_bootstrapped;
+                verifier_bootstrapped = true;
+                let tabs_verify = tabs_verify.clone();
+                verifier_joinset.spawn(async move {
+                    let verify_result = match run_agent(
+                        "verifier",
+                        "verifier",
+                        &verifier_system,
+                        verifier_prompt,
+                        &verifier_ep,
+                        &bridge,
+                        &workspace,
+                        &config,
+                        &tabs_verify,
                         false,
                         false,
+                        send_system,
                     )
                     .await
                     {
                         Ok(result) => result,
-                        Err(err) => {
-                            eprintln!("[orchestrate] lane_a executor error: {err:#}");
-                            let mut guard = dispatch_state.lock().await;
-                            let lane = dispatch_lane_mut(&mut guard, lane_name);
-                            lane.in_progress_by = None;
-                            lane.pending = true;
-                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                            continue;
-                        }
+                        Err(err) => format!(
+                            "{{\"verified\":false,\"summary\":\"verifier error: {}\"}}",
+                            err.to_string().replace('"', "'")
+                        ),
                     };
-                    let verifier_prompt_a = format!(
-                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nExecutor lane: {lane_label}\nExecutor result summary:\n{exec_a_result}\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nVerify whether the current code satisfies the spec. Executor evidence is only a hint. Emit exactly one action to begin."
-                    );
-                    let verifier_role = format!("verifier_a[{lane_name}]");
-                    match run_agent(
-                        &verifier_role,
-                        SYSTEM_INSTRUCTIONS_VERIFIER,
-                        verifier_prompt_a,
-                        &verifier_ep_a,
-                        &bridge,
-                        &workspace,
-                        &config,
-                        &tabs_verify_a,
-                        false,
-                        false,
-                    )
-                    .await
-                    {
-                        Ok(verify_a_result) => {
-                            {
-                                let mut guard = dispatch_state.lock().await;
-                                let lane = dispatch_lane_mut(&mut guard, lane_name);
-                                lane.latest_verifier_result = verify_a_result.clone();
-                                lane.in_progress_by = None;
-                                lane.pending = !verifier_confirmed(&verify_a_result);
-                            }
-                            {
-                                let mut guard = verifier_summary.lock().await;
-                                if lane_name == "lane_a" {
-                                    guard.0 = verify_a_result;
-                                } else {
-                                    guard.1 = verify_a_result;
-                                }
-                            }
-                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                        }
-                        Err(err) => {
-                            eprintln!("[orchestrate] lane_a verifier error: {err:#}");
-                            let err_text = format!("{{\"verified\":false,\"summary\":\"lane_a verifier error: {}\"}}", err.to_string().replace('"', "'"));
-                            {
-                                let mut guard = dispatch_state.lock().await;
-                                let lane = dispatch_lane_mut(&mut guard, lane_name);
-                                lane.latest_verifier_result = err_text.clone();
-                                lane.in_progress_by = None;
-                                lane.pending = true;
-                            }
-                            {
-                                let mut guard = verifier_summary.lock().await;
-                                if lane_name == "lane_a" {
-                                    guard.0 = err_text;
-                                } else {
-                                    guard.1 = err_text;
-                                }
-                            }
-                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                        }
+                    (submitted.lane, verify_result)
+                });
+            }
+
+            while let Some(joined) = verifier_joinset.try_join_next() {
+                match joined {
+                    Ok((lane_id, verify_result)) => {
+                        let lane = dispatch_lane_mut(&mut dispatch_state, lane_id);
+                        let changed = lane.latest_verifier_result != verify_result;
+                        lane.latest_verifier_result = verify_result.clone();
+                        lane.in_progress_by = None;
+                        lane.pending = !verifier_confirmed(&verify_result);
+                        verifier_changed |= changed;
+                        verifier_summary[lane_id] = verify_result;
+                        cycle_progress = true;
+                    }
+                    Err(err) => {
+                        eprintln!("[orchestrate] verifier join error: {err:#}");
                     }
                 }
-            });
-        }
+            }
 
-        {
-            let bridge = bridge.clone();
-            let workspace = workspace.clone();
-            let config = config.clone();
-            let tabs_exec_b = tabs_exec_b.clone();
-            let tabs_verify_b = tabs_verify_b.clone();
-            let exec_b_ep = exec_b_ep.clone();
-            let verifier_ep_b = verifier_ep_b.clone();
-            let spec_path = spec_path.clone();
-            let verifier_summary = verifier_summary.clone();
-            let dispatch_state = dispatch_state.clone();
-            tokio::spawn(async move {
-                loop {
-                    let (lane_name, lane_plan, latest_verify_result) = {
-                        let mut guard = dispatch_state.lock().await;
-                        match claim_next_lane(&mut guard, "executor_b") {
-                            Some(claim) => claim,
-                            None => {
-                                drop(guard);
-                                tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                                continue;
-                            }
-                        }
-                    };
+            if verifier_changed {
+                dispatch_state.diagnostics_dirty = true;
+            }
 
-                    let spec = match std::fs::read_to_string(&spec_path) {
-                        Ok(spec) => spec,
-                        Err(err) => {
-                            eprintln!("[orchestrate] lane_b spec read error: {err:#}");
-                            let mut guard = dispatch_state.lock().await;
-                            let lane = dispatch_lane_mut(&mut guard, lane_name);
-                            lane.in_progress_by = None;
-                            lane.pending = true;
-                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                            continue;
-                        }
-                    };
-                    let (lane_label, lane_plan_file) = if lane_name == "lane_a" {
-                        ("A", EXECUTOR_A_PLAN_FILE)
-                    } else {
-                        ("B", EXECUTOR_B_PLAN_FILE)
-                    };
-                    let exec_b_prompt = format!(
-                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {lane_plan_file}):\n{lane_plan}\n\nLatest verifier result for lane {lane_label}:\n{latest_verify_result}\n\nYou are executor B, currently assigned to lane {lane_label}. Work only on the highest-priority READY items from this assigned lane plan and avoid duplicating in-flight work. Address verifier findings first. Do not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
-                    );
-                    let executor_role = format!("executor_b[{lane_name}]");
-                    let exec_b_result = match run_agent(
-                        &executor_role,
-                        SYSTEM_INSTRUCTIONS_EXECUTOR,
-                        exec_b_prompt,
-                        &exec_b_ep,
-                        &bridge,
-                        &workspace,
-                        &config,
-                        &tabs_exec_b,
-                        false,
-                        false,
-                    )
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(err) => {
-                            eprintln!("[orchestrate] lane_b executor error: {err:#}");
-                            let mut guard = dispatch_state.lock().await;
-                            let lane = dispatch_lane_mut(&mut guard, lane_name);
-                            lane.in_progress_by = None;
-                            lane.pending = true;
-                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                            continue;
-                        }
-                    };
-                    let verifier_prompt_b = format!(
-                        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nExecutor lane: {lane_label}\nExecutor result summary:\n{exec_b_result}\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nVerify whether the current code satisfies the spec. Executor evidence is only a hint. Emit exactly one action to begin."
-                    );
-                    let verifier_role = format!("verifier_b[{lane_name}]");
-                    match run_agent(
-                        &verifier_role,
-                        SYSTEM_INSTRUCTIONS_VERIFIER,
-                        verifier_prompt_b,
-                        &verifier_ep_b,
-                        &bridge,
-                        &workspace,
-                        &config,
-                        &tabs_verify_b,
-                        false,
-                        false,
-                    )
-                    .await
-                    {
-                        Ok(verify_b_result) => {
-                            {
-                                let mut guard = dispatch_state.lock().await;
-                                let lane = dispatch_lane_mut(&mut guard, lane_name);
-                                lane.latest_verifier_result = verify_b_result.clone();
-                                lane.in_progress_by = None;
-                                lane.pending = !verifier_confirmed(&verify_b_result);
-                            }
-                            {
-                                let mut guard = verifier_summary.lock().await;
-                                if lane_name == "lane_a" {
-                                    guard.0 = verify_b_result;
-                                } else {
-                                    guard.1 = verify_b_result;
-                                }
-                            }
-                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                        }
-                        Err(err) => {
-                            eprintln!("[orchestrate] lane_b verifier error: {err:#}");
-                            let err_text = format!("{{\"verified\":false,\"summary\":\"lane_b verifier error: {}\"}}", err.to_string().replace('"', "'"));
-                            {
-                                let mut guard = dispatch_state.lock().await;
-                                let lane = dispatch_lane_mut(&mut guard, lane_name);
-                                lane.latest_verifier_result = err_text.clone();
-                                lane.in_progress_by = None;
-                                lane.pending = true;
-                            }
-                            {
-                                let mut guard = verifier_summary.lock().await;
-                                if lane_name == "lane_a" {
-                                    guard.0 = err_text;
-                                } else {
-                                    guard.1 = err_text;
-                                }
-                            }
-                            tokio::time::sleep(std::time::Duration::from_secs(EXECUTOR_LOOP_IDLE_SECS)).await;
-                        }
+            if dispatch_state.diagnostics_dirty {
+                let summary_text = lanes
+                    .iter()
+                    .map(|lane| format!("{}={}", lane.label, verifier_summary[lane.index]))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let prompt = diagnostics_cycle_prompt(&summary_text);
+                append_orchestration_trace(
+                    "llm_message_forwarded",
+                    json!({
+                        "from": "verifier",
+                        "to": "diagnostics",
+                        "phase": "diagnostics",
+                    }),
+                );
+                let diagnostics_system = system_instructions(AgentPromptKind::Diagnostics);
+                match run_agent(
+                    "diagnostics",
+                    "diagnostics",
+                    &diagnostics_system,
+                    prompt,
+                    &diagnostics_ep,
+                    &bridge,
+                    &workspace,
+                    &config,
+                    &tabs_diagnostics,
+                    false,
+                    false,
+                    !diagnostics_bootstrapped,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        eprintln!("[orchestrate] diagnostics ok bytes={}", result.len());
+                        let new_diagnostics_text = std::fs::read_to_string(&diagnostics_path).unwrap_or_default();
+                        let diagnostics_changed = dispatch_state.diagnostics_text != new_diagnostics_text;
+                        dispatch_state.diagnostics_text = new_diagnostics_text;
+                        dispatch_state.diagnostics_dirty = false;
+                        dispatch_state.planner_dirty = diagnostics_changed || verifier_changed;
+                        cycle_progress = true;
+                    }
+                    Err(err) => {
+                        eprintln!("[orchestrate] diagnostics error: {err:#}");
                     }
                 }
-            });
-        }
+                diagnostics_bootstrapped = true;
+            }
 
-        eprintln!("[orchestrate] service loops started: diagnostics, planner, free-executor dispatch");
-        std::future::pending::<Result<()>>().await
+            if !cycle_progress {
+                tokio::time::sleep(std::time::Duration::from_millis(SERVICE_POLL_MS)).await;
+            }
+        }
     } else {
         // Single-role mode
-        let (role, instructions) = if is_verifier {
-            ("verifier", SYSTEM_INSTRUCTIONS_VERIFIER)
+        let (role, prompt_kind) = if is_verifier {
+            ("verifier", AgentPromptKind::Verifier)
         } else if is_diagnostics {
-            ("diagnostics", SYSTEM_INSTRUCTIONS_DIAGNOSTICS)
+            ("diagnostics", AgentPromptKind::Diagnostics)
         } else if is_planner {
-            ("mini_planner", SYSTEM_INSTRUCTIONS_PLANNER)
+            ("mini_planner", AgentPromptKind::Planner)
         } else {
-            ("mini_agent", SYSTEM_INSTRUCTIONS_EXECUTOR)
+            ("executor", AgentPromptKind::Executor)
         };
+        let instructions = system_instructions(prompt_kind);
 
         let primary_input_path = if is_verifier || is_planner {
             &spec_path
         } else {
-            &exec_a_plan_path
+            &workspace.join(&lanes[0].plan_file)
         };
         let primary_input_name = if is_verifier || is_planner {
             SPEC_FILE
         } else {
-            EXECUTOR_A_PLAN_FILE
+            lanes[0].plan_file.as_str()
         };
         let primary_input = std::fs::read_to_string(primary_input_path).with_context(|| format!("failed to read {primary_input_name}"))?;
         if primary_input.trim().is_empty() {
@@ -1723,29 +1703,49 @@ Write a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action
         eprintln!("[canon-mini-agent] endpoint id={} url={}", endpoint.id, endpoint.url);
 
         let initial_prompt = if is_verifier {
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nVerify whether the current code satisfies the spec. Emit exactly one action to begin.")
+            format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nWrite violations to {VIOLATIONS_FILE} if any are found. Emit exactly one action to begin."
+            )
         } else if is_diagnostics {
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nUse {SPEC_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin.")
+            let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
+            format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nUse {SPEC_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin."
+            )
         } else if is_planner {
-            let diagnostics = std::fs::read_to_string(workspace.join(DIAGNOSTICS_FILE)).unwrap_or_default();
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nDerive {EXECUTOR_A_PLAN_FILE} and {EXECUTOR_B_PLAN_FILE} from the spec. Emit exactly one action to begin.")
+            let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
+            let diagnostics = std::fs::read_to_string(&diagnostics_path).unwrap_or_default();
+            let lane_plan_list = lanes
+                .iter()
+                .map(|lane| lane.plan_file.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nUpdate {MASTER_PLAN_FILE} and derive lane plans: {lane_plan_list}. Emit exactly one action to begin."
+            )
         } else {
             let spec = std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
-            format!("WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nAssigned lane plan (from {EXECUTOR_A_PLAN_FILE}):\n{primary_input}\n\nDo not modify spec, lane plans, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin.")
+            let master_plan = std::fs::read_to_string(&master_plan_path).unwrap_or_default();
+            let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
+            let diagnostics = std::fs::read_to_string(&diagnostics_path).unwrap_or_default();
+            format!(
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nMaster plan (from {MASTER_PLAN_FILE}):\n{master_plan}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nAssigned lane plan (from {primary_input_name}):\n{primary_input}\n\nDo not modify spec, plan, lane plans, violations, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
+            )
         };
 
-        let submit_only = role == "mini_agent" || role == "executor_a" || role == "executor_b";
+        let submit_only = role == "executor";
         let reason = run_agent(
             role,
-            instructions,
+            if is_verifier { "verifier" } else if is_diagnostics { "diagnostics" } else if is_planner { "planner" } else { "executor" },
+            &instructions,
             initial_prompt,
-            &endpoint,
+            if role == "executor" { &lanes[0].endpoint } else { &endpoint },
             &bridge,
             &workspace,
             &config,
             &tabs,
             submit_only,
             false,
+            true,
         ).await?;
         println!("done: {reason}");
         Ok(())

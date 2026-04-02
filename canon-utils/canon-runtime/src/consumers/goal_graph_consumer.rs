@@ -93,6 +93,9 @@ impl EventConsumer for GoalGraphConsumer {
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         self.graph.apply(event);
         match event {
+            RuntimeEvent::CapabilityRequested(_) => {
+                return EventOutcome::NoOp("goal_graph_capability_requested");
+            }
             RuntimeEvent::GoalNodeCreated(_) | RuntimeEvent::GoalNodeRetracted(_) | RuntimeEvent::GoalNodeRewritten(_) | RuntimeEvent::GoalEdgeDefined(_) => {
                 self.last_checkpoint_seq += 1;
                 return EventOutcome::emit(RuntimeEvent::GoalGraphCheckpointed(GoalGraphCheckpointed { tlog_seq: self.last_checkpoint_seq, checkpointed: true }), file!(), line!());

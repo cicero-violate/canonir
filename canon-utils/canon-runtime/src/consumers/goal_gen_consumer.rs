@@ -77,6 +77,9 @@ impl EventConsumer for GoalGenConsumer {
         // allow LlmCall to propagate to capability_executor
 
         match (&self.state, event) {
+            (_, RuntimeEvent::CapabilityRequested(_)) => {
+                return EventOutcome::NoOp("goal_gen_capability_requested");
+            }
             (State::Waiting, RuntimeEvent::PromptLoaded(p)) => {
                 let content = p.payload.get("content").and_then(|v| v.as_str()).unwrap_or("");
                 if !is_placeholder_goal(content) {

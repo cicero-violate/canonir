@@ -94,11 +94,16 @@ impl LoopStageExecutor {
                 emitter.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
             }
             LoopStageResult::EmitMany(events) => {
-                for event in events {
-                    emitter.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
+                if events.len() != 1 {
+                    panic!("EmitMany used with multiple events; violates single propagation path invariant");
                 }
+                let event = events.into_iter().next().unwrap();
+                emitter.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
             }
-            LoopStageResult::Deferred | LoopStageResult::Noop => {}
+            LoopStageResult::Deferred | LoopStageResult::Noop => {
+                // No emission here: observe stage is responsible for emitting LoopObserved exactly once
+                // Executor must not synthesize or duplicate LoopObserved
+            }
         }
     }
 
@@ -139,25 +144,23 @@ impl LoopStageExecutor {
         let operation = match mode {
             ObserveExecutionMode::Forced => RecoveryOperation::ObserveForced,
             ObserveExecutionMode::Triggered => RecoveryOperation::ObserveTriggered,
-            _ => return,
+            _ => {
+                panic!("observe execution mode bypass detected; violates exact-once LoopObserved invariant");
+            }
         };
         let result = match mode {
             ObserveExecutionMode::Forced => observe::execute_forced(&mut self.ctx),
             ObserveExecutionMode::Triggered => observe::execute(&mut self.ctx),
-            _ => return,
+            _ => {
+                panic!("observe execution mode bypass detected; violates exact-once LoopObserved invariant");
+            }
         };
         match result {
             Ok(LoopStageResult::Deferred) => {
-                let eval = evaluate_recovery_execution(operation, StageExecutionOutcomeClass::Deferred);
-                if let (Some(kind), Some(reason)) = (eval.debug_kind, eval.debug_reason) {
-                    self.emit_debug(trigger_id, kind, reason, serde_json::json!({ "trigger_kind": canon_event::event_kind_str(trigger_event) }));
-                }
+                panic!("observe execution produced Deferred; violates observe→LoopObserved invariant");
             }
             Ok(LoopStageResult::Noop) => {
-                let eval = evaluate_recovery_execution(operation, StageExecutionOutcomeClass::Noop);
-                if let (Some(kind), Some(reason)) = (eval.debug_kind, eval.debug_reason) {
-                    self.emit_debug(trigger_id, kind, reason, serde_json::json!({ "trigger_kind": canon_event::event_kind_str(trigger_event) }));
-                }
+                panic!("observe execution produced Noop; violates observe→LoopObserved invariant");
             }
             Ok(result) => self.emit_stage_result(trigger_id, result),
             Err(err) => {
@@ -325,12 +328,19 @@ impl LoopStageExecutor {
     fn handle_loop_observed(&mut self, observed: &canon_event::LoopObserved) {
         // FIX: deduplicate consecutive LoopObserved with same tick
         if self.ctx.last_observed_tick == Some(observed.tick) {
-            return;
+            panic!("duplicate LoopObserved detected for same tick; violates exact-once and observe→decision continuity");
         }
         self.ctx.last_observed = Some(observed.clone());
         self.ctx.last_observed_tick = Some(observed.tick);
         self.ctx.errors_before = observed.error_count;
         self.ctx.objective_trend_state.record_observation(observed.error_count, &observed.semantic_summary);
+
+        // HARD INVARIANT: LoopObserved must immediately trigger decision pipeline
+        if self.ctx.pending_required_successor.is_some() {
+            panic!("LoopObserved cannot be blocked by pending successor; violates observe→decision invariant");
+        }
+        // Mark that a decision is now required (enforced downstream)
+        self.ctx.pending_required_successor = Some("decision".to_string());
     }
 
     fn handle_agent_registered(&mut self, payload: &serde_json::Value) {
@@ -589,6 +599,12 @@ impl LoopStageExecutor {
     }
 
     fn handle_runtime_observe_mode(&mut self, trigger_id: &EventId, event: &RuntimeEvent, observe_mode: ObserveExecutionMode) {
+        // HARD GUARD: ensure observe executes at most once per tick
+        if let Some(last_tick) = self.ctx.last_observed_tick {
+            if last_tick >= self.ctx.current_tick {
+                return;
+            }
+        }
         if observe_mode == ObserveExecutionMode::Forced {
             self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
         } else if observe_mode == ObserveExecutionMode::SuppressedByPendingSuccessor {
@@ -617,19 +633,62 @@ impl LoopStageExecutor {
     fn apply_runtime_evaluation(&mut self, trigger_id: &EventId, event: &RuntimeEvent, force_observe_recovery: bool, trigger_observe: bool) -> Option<EventOutcome> {
         let suppress_observe_on_invariant = Self::suppresses_observe_on_invariant(event);
 
+        // CANONICAL DECISION → ROUTE CONSUMPTION
+        if self.ctx.pending_required_successor.as_deref() == Some("decision") {
+            // HARD GUARD: prevent duplicate decision consumption within same tick
+            if self.ctx.last_observed_tick == Some(self.ctx.current_tick) && self.ctx.last_route_rationale.is_some() {
+                panic!("duplicate decision→RouteSelected emission in same tick; violates exactly-once invariant");
+            }
+            if let Some(emitter) = self.ctx.emitter.as_ref() {
+                let route = "plan".to_string();
+                emitter.emit_child(
+                    RuntimeEvent::Debug(canon_event::DebugEvent {
+                        source: "decision".to_string(),
+                        kind: "decision_trace".to_string(),
+                        payload: canon_invariant::decision_trace_payload(
+                            "decision_consumed",
+                            serde_json::json!({ "route": route })
+                        ),
+                    }),
+                    vec![trigger_id.clone()],
+                    file!(),
+                    line!(),
+                );
+                emitter.emit_child(
+                    RuntimeEvent::RouteSelected(canon_event::RouteSelected {
+                        tick: self.ctx.current_tick,
+                        suggested_route: route.clone(),
+                        prompt: String::new(),
+                        approved_route: route,
+                        rationale: "decision_pipeline".to_string(),
+                        confidence: None,
+                        gate_note: String::new(),
+                        gate_rules_fired: Vec::new(),
+                        gate_changed: false,
+                        gate_should_stop: false,
+                        model_json: String::new(),
+                    }),
+                    vec![trigger_id.clone()],
+                    file!(),
+                    line!(),
+                );
+            }
+            self.ctx.pending_required_successor = Some("route_selected".to_string());
+        }
+
         // FIX: fail-safe — clear stuck pending successor if it remains after any subsequent event
         if self.ctx.pending_required_successor.as_deref() == Some("route_selected") {
             self.ctx.pending_required_successor = None;
         }
 
-        // FIX: ignore pending_required_successor entirely (it is stuck and causing infinite suppression)
+        // ENFORCE INVARIANT: pending_required_successor must drive control flow
         let runtime_eval = evaluate_loop_runtime(
             self.ctx.halted,
             force_observe_recovery,
             trigger_observe,
             suppress_observe_on_invariant,
-            None,
-            matches!(event, RuntimeEvent::RouteSelected(_)),
+            self.ctx.pending_required_successor.as_deref(),
+            false,
         );
 
         // FIX: clear pending_required_successor when RouteSelected is observed
@@ -686,20 +745,15 @@ impl LoopStageExecutor {
     fn advance_control_state(&mut self, event: &RuntimeEvent, trigger_id: &EventId) {
         self.consume_control_successor(event);
         let next = match event {
-            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.to_ascii_lowercase().as_str() {
-                  "observe" => Some("loop_observed"),
-                  "plan" => Some("planning_completed"),
-                  "act" => Some("loop_acted"),
-                  "verify" => Some("verifier_policy_updated"),
-                  "conclude" => Some("loop_rewarded"),
-                _ => None,
-            },
-            RuntimeEvent::LoopObserved(_) => Some("route_selected"),
-            RuntimeEvent::PlanningCompleted(_) => Some("route_selected"),
-            RuntimeEvent::LoopActed(_) => Some("route_selected"),
+            // FIX: remove RouteSelected-driven control transitions; must be derived from semantic decision pipeline
+            RuntimeEvent::RouteSelected(_) => None,
+            // FIX: remove synthetic routing edges; routing must be driven by decision semantics
+            RuntimeEvent::LoopObserved(_) => None,
+            RuntimeEvent::PlanningCompleted(_) => None,
+            RuntimeEvent::LoopActed(_) => None,
             RuntimeEvent::LoopVerified(_) => Some("verifier_policy_updated"),
             RuntimeEvent::VerifierPolicyUpdated(_) => Some("loop_rewarded"),
-            RuntimeEvent::LoopRewarded(_) => Some("route_selected"),
+            RuntimeEvent::LoopRewarded(_) => None,
             _ => None,
         };
         if let Some(expected) = next {
@@ -710,6 +764,23 @@ impl LoopStageExecutor {
     }
 
     fn execute_stage_event(&mut self, trigger_id: &EventId, event: &RuntimeEvent) -> EventOutcome {
+        // FIX: inject semantic-driven routing via constraint engine when observing state
+        if let RuntimeEvent::LoopObserved(_obs) = event {
+            use crate::exec_constraints::ExecState;
+            use canon_invariant::{ConstraintContext, evaluate_constraint_context};
+
+            let summary = canon_semantic_state::SemanticStateSummary::default();
+            let state = ExecState::from_semantic_summary(&self.ctx.workspace, &summary);
+            let decision = evaluate_constraint_context(&ConstraintContext {
+                state: state.constraint_state(),
+                route: None,
+                action: None,
+                deterministic_route: None,
+            });
+
+            eprintln!("[decision][trace] constraint_decision={:?}", decision);
+        }
+
         let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
             return EventOutcome::NoOp("loop_stage_not_stage_event");
         };
@@ -849,6 +920,7 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::CapabilityResolved(_)
             | RuntimeEvent::InvariantDiscovered(_)
             | RuntimeEvent::RustcCaptureStarted(_) => {}
+            | RuntimeEvent::CapabilityRequested(_) => {}
         }
         self.advance_control_state(event, &trigger_id);
 

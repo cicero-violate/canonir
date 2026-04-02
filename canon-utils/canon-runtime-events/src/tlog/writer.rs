@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::CanonEvent;
 
+#[allow(dead_code)]
 pub(crate) fn emit_canon_event_json(path: &Path, event: &CanonEvent) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

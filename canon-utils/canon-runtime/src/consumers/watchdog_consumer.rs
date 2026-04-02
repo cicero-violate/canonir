@@ -35,6 +35,9 @@ impl EventConsumer for WatchdogConsumer {
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         match event {
+            RuntimeEvent::CapabilityRequested(_) => {
+                return EventOutcome::NoOp("watchdog_capability_requested");
+            }
             RuntimeEvent::Tick(t) => {
                 self.current_tick = t.tick;
                 let stalled: Vec<RuntimeEvent> = STAGE_THRESHOLDS

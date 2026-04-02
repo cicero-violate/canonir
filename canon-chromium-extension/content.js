@@ -39,6 +39,22 @@
   // Page → Background: stream captures
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
+    if (event.data?.type === "TURN_STARTED") {
+      const turnId = event.data.turn_id;
+      if (typeof turnId === "number") {
+        lastTurnId = turnId;
+      }
+      chrome.runtime.sendMessage(
+        {
+          type: "TURN_STARTED",
+          turn_id: typeof turnId === "number" ? turnId : null,
+          source: event.data.source ?? null,
+          ts: event.data.ts ?? Date.now()
+        },
+        () => void chrome.runtime.lastError
+      );
+      return;
+    }
     if (event.data?.type === "INBOUND_MESSAGE") {
       const payload = event.data.payload;
       let patched = payload;

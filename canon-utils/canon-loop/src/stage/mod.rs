@@ -77,14 +77,11 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
     type Error = RuntimeEvent;
     fn try_from(e: RuntimeEvent) -> Result<Self, RuntimeEvent> {
         match e {
-            RuntimeEvent::RouteSelected(rs) => match rs.approved_route.to_ascii_lowercase().as_str() {
-                "plan" => Ok(LoopStageEvent::PlanTrigger(rs)),
-                "act" => Ok(LoopStageEvent::ActDispatch(rs)),
-                "verify" => Ok(LoopStageEvent::VerifyTrigger(rs)),
-                "decompose" => Ok(LoopStageEvent::Decompose(rs)),
-                "conclude" => Ok(LoopStageEvent::Conclude(rs)),
-                "observe" => Ok(LoopStageEvent::Scan(rs)),
-                _ => Err(RuntimeEvent::RouteSelected(rs)),
+            // FIX: RouteSelected must originate from canonical decision() pipeline
+            // Reject direct routing based on event payload to enforce semantic-state authority
+            RuntimeEvent::RouteSelected(rs) => {
+                eprintln!("[route][violation] non-canonical RouteSelected received: {}", rs.approved_route);
+                panic!("RouteSelected must only originate from canonical decision() pipeline");
             },
             RuntimeEvent::CapabilityCompleted(c) => Ok(LoopStageEvent::CapabilityDone(c)),
             RuntimeEvent::CapabilityFailed(f) => Ok(LoopStageEvent::CapabilityFail(f)),

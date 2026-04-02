@@ -43,6 +43,9 @@ impl EventConsumer for HaltDetectorConsumer {
     fn set_emitter(&mut self, _: EventEmitterHandle) {}
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
+        if let RuntimeEvent::CapabilityRequested(_) = event {
+            return EventOutcome::NoOp("dispatch_capability_requested");
+        }
         if let RuntimeEvent::LoopRewarded(r) = event {
             if r.halt {
                 self.halted.store(true, Ordering::Relaxed);
@@ -81,6 +84,10 @@ impl EventConsumer for ForwardConsumer {
 
         // REMOVED: duplicate pre-forward for LoopPlanned (handled in match below)
         // FIX: do NOT force LoopObserved here — must respect invariant ordering
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+        static LOOP_OBSERVED_SEEN_TICKS: once_cell::sync::Lazy<Mutex<HashSet<u64>>> =
+            once_cell::sync::Lazy::new(|| Mutex::new(HashSet::new()));
         if let RuntimeEvent::ErrorOccurred(_err) = event {
             eprintln!("[DISPATCH FIX] ErrorOccurred received — no forced observe");
             return EventOutcome::NoOp("error_passthrough");
@@ -89,14 +96,24 @@ impl EventConsumer for ForwardConsumer {
             parent.emit_with_parents(e, vec![trigger_id.clone()], file!(), line!());
         };
         match event {
+            RuntimeEvent::CapabilityRequested(_) => {
+                return EventOutcome::NoOp("dispatch_capability_requested");
+            }
             RuntimeEvent::RouteSelected(_) => {
                 forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopObserved(_) => {
-                // CRITICAL FIX: do NOT forward LoopObserved here
-                // Forwarding at this layer creates duplicate delivery paths
-                // LoopObserved must propagate only via canonical runtime/bus path
-                return EventOutcome::NoOp("loop_observed_no_forward");
+                if let RuntimeEvent::LoopObserved(o) = event {
+                    let mut seen = LOOP_OBSERVED_SEEN_TICKS.lock().unwrap();
+                    if seen.contains(&o.tick) {
+                        panic!("Duplicate LoopObserved propagation detected for tick {}", o.tick);
+                    }
+                    seen.insert(o.tick);
+                }
+                // CRITICAL FIX: do NOT re-emit LoopObserved
+                // Observe stage is the single source of truth for this event
+                // Forwarding here causes duplicate propagation cycles
+                return EventOutcome::NoOp("loop_observed_consumed_once");
             }
             RuntimeEvent::LoopPlanned(p) => {
                 if let Some(id) = &p.action_id {

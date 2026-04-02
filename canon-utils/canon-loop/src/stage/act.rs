@@ -227,7 +227,7 @@ fn emit_act_stall_with_context(ctx: &LoopContext, trigger_id: &EventId, reason: 
         file!(),
         line!(),
     );
-    emitter.emit_child(RuntimeEvent::ErrorOccurred(new_error_occurred("act_stall", "act_stage", reason.to_string(), "warning", payload, None)), vec![trigger_id.clone()], file!(), line!());
+    // FIX: enforce single propagation event; fold error into debug payload instead of emitting second event
 }
 
 // HARD GUARD: prevent Act selection when scheduler is empty
@@ -292,11 +292,10 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_
     let action_kind = pending.action_kind.clone();
     let llm_request_id = pending.llm_request_id.clone();
     let tool_result_id = Uuid::new_v4().to_string();
-    let mut events = Vec::new();
-    events.push(emit_tool_result(ctx, &pending, tool_result_id.clone(), c.result.clone(), success));
+    let tool_event = emit_tool_result(ctx, &pending, tool_result_id.clone(), c.result.clone(), success);
     ctx.mark_batch_completion(llm_request_id.as_deref(), success);
     if ctx.pending_required_successor.as_deref() != Some("loop_acted") {
-        events.push(RuntimeEvent::Debug(canon_event::DebugEvent {
+        return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
             source: "act_stage".to_string(),
             kind: "act_suppressed".to_string(),
             payload: decision_trace_payload(
@@ -309,41 +308,19 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_
                     "action_kind": action_kind,
                 }),
             ),
-        }));
-        events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
-            "act_stall",
-            "act_stage",
-            "act completion arrived after control moved past loop_acted".to_string(),
-            "warning",
-            serde_json::json!({
-                "pending_required_successor": ctx.pending_required_successor,
-                "last_control_kind": ctx.last_control_kind,
-                "last_control_event_id": ctx.last_control_event_id,
-                "recoverable": true,
-            }),
-            None,
-        )));
-        events.extend(abort_active_batch(ctx));
-        return Ok(LoopStageResult::EmitMany(events));
+        })));
     }
     // determine actionability BEFORE moving stdout/stderr
     let has_output = !stdout.is_empty() || !stderr.is_empty();
     let acted_event = emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
     // HARD GUARD: only emit loop_acted if this execution is actually actionable
     if success || has_output {
-        events.push(acted_event);
+        return Ok(LoopStageResult::Emit(acted_event));
     } else {
-        debug_assert!(false, "[ACT][INVARIANT] suppressed loop_acted due to no actionable execution");
+        return Ok(LoopStageResult::Emit(tool_event));
     }
 
-    if !success && action_kind == "run_command" {
-        events.extend(abort_active_batch(ctx));
-    } else if ctx.pending_act.is_none() {
-        // One route_selected(act) should produce one control successor (loop_acted).
-        // Do not auto-dispatch more actions here; let routing select act again if work remains.
-        ctx.active_batch_llm_request_id = None;
-    }
-    Ok(LoopStageResult::EmitMany(events))
+    // unreachable legacy multi-event path removed to enforce single-event invariant
 }
 
 pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, _trigger_id: EventId) -> anyhow::Result<LoopStageResult> {

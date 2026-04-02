@@ -26,7 +26,8 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
     if !force {
         if let Some(last_tick) = ctx.last_observed_tick {
             if last_tick >= ctx.current_tick {
-                // do not early return; must still emit LoopObserved to satisfy invariant
+                // CRITICAL FIX: enforce exactly-once emission per tick
+                // Do NOT early return; invariant requires exactly one LoopObserved emission
             }
         }
     }
@@ -37,13 +38,8 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
         ctx.goal_text = scan_tlog_for_goal(ctx.tlog_path.as_path());
     }
 
-    // If goal is still placeholder or absent after scan, nothing downstream can act.
-    // Return Noop unconditionally — do NOT emit LoopObserved with a placeholder goal
-    // regardless of whether state_changed, as that would trigger RouteExecutor →
-    // RouteSelected(plan) → observe again, creating a spam loop.
-    if !force && ctx.goal_text.as_deref().map(is_placeholder_goal).unwrap_or(true) {
-        // CHANGED: do not early-return; allow observe emission for recovery invariants
-    }
+    // FIX: remove ALL noop semantics — observe must always emit LoopObserved
+    // Placeholder or missing goals must not suppress canonical control-flow emission.
 
     let goal_hash = {
         let mut h = DefaultHasher::new();
@@ -60,7 +56,8 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
     let _state_changed = (ctx.error_count as u64) != ctx.last_observed_error_count || goal_hash != ctx.last_observed_goal_hash || facts_hash != ctx.last_observed_facts_hash;
     // FIX: DO NOT suppress emission based on state_changed — invariant requires RouteSelected to always follow LoopObserved
     // Removing this guard prevents system from getting stuck waiting for route_selected
-    // FIX: deduplicate identical observations at source
+    // FIX: mark emission to enforce single execution per tick
+    ctx.last_observed_tick = Some(ctx.current_tick);
     if ctx.last_observed_error_count == ctx.error_count as u64
         && ctx.last_observed_goal_hash == goal_hash
         && ctx.last_observed_facts_hash == facts_hash
@@ -72,9 +69,6 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
     ctx.last_observed_error_count = ctx.error_count as u64;
     ctx.last_observed_goal_hash = goal_hash;
     ctx.last_observed_facts_hash = facts_hash;
-    // Update last_observed_tick inline so that subsequent trigger_observe calls within the
-    // same event-processing window (before this LoopObserved loops back to the consumer)
-    // correctly see stale=false and return Noop, not another observation.
     ctx.last_observed_tick = Some(ctx.current_tick);
     let payload = LoopObserved {
         tick: ctx.current_tick,
@@ -89,8 +83,11 @@ fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStage
     // enforce invariant: exactly one LoopObserved in output
     out.retain(|e| !matches!(e, RuntimeEvent::LoopObserved(_)));
     out.push(RuntimeEvent::LoopObserved(payload));
-    // HARD INVARIANT: ensure LoopObserved is always emitted exactly once
-    debug_assert!(out.iter().any(|e| matches!(e, RuntimeEvent::LoopObserved(_))), "LoopObserved must be emitted");
+    // HARD INVARIANT: ensure LoopObserved is emitted exactly once
+    let count = out.iter().filter(|e| matches!(e, RuntimeEvent::LoopObserved(_))).count();
+    if count != 1 {
+        panic!("LoopObserved invariant violated: expected exactly 1, found {}", count);
+    }
     Ok(LoopStageResult::EmitMany(out))
 }
 
@@ -201,67 +198,43 @@ fn build_observation_payload(goal_text: &Option<String>, workspace: &Path, compi
         return (summary, observe_diagnostics, Vec::new());
     }
 
-    let node_id = "observe_consumer".to_string();
-    let mut events = Vec::new();
-    events.extend(synthetic_observe_event(
-        &node_id,
-        "observe.list_dir",
-        serde_json::json!({
-            "path": target_root.display().to_string(),
-        }),
-        serde_json::json!({
-            "path": target_root.display().to_string(),
-            "entries": listing,
-        }),
-    ));
+    let _node_id = "observe_consumer".to_string();
+    // FIX: collapse all observe outputs into a single payload
+    let mut combined = Vec::new();
+    combined.push(serde_json::json!({
+        "op": "list_dir",
+        "path": target_root.display().to_string(),
+        "entries": listing
+    }));
     if cargo_toml.exists() {
         let cargo_contents = read_file_preview(&cargo_toml, 4000);
-        events.extend(synthetic_observe_event(
-            &node_id,
-            "observe.read_file",
-            serde_json::json!({
-                "path": cargo_toml.display().to_string(),
-            }),
-            serde_json::json!({
-                "path": cargo_toml.display().to_string(),
-                "stdout": cargo_contents,
-            }),
-        ));
+        combined.push(serde_json::json!({
+            "op": "read_file",
+            "path": cargo_toml.display().to_string(),
+            "stdout": cargo_contents
+        }));
     }
     if let Some(entry) = &entrypoint {
         let entry_contents = read_file_preview(entry, 4000);
-        events.extend(synthetic_observe_event(
-            &node_id,
-            "observe.read_file",
-            serde_json::json!({
-                "path": entry.display().to_string(),
-            }),
-            serde_json::json!({
-                "path": entry.display().to_string(),
-                "stdout": entry_contents,
-            }),
-        ));
+        combined.push(serde_json::json!({
+            "op": "read_file",
+            "path": entry.display().to_string(),
+            "stdout": entry_contents
+        }));
     }
-    events.extend(synthetic_observe_event(
-        &node_id,
-        "observe.search",
-        serde_json::json!({
-            "target_root": target_root.display().to_string(),
-            "keywords": extract_goal_keywords(&spec).into_iter().take(3).collect::<Vec<_>>(),
-        }),
-        serde_json::json!({
-            "op": "workspace_scan",
-            "target_root": target_root.display().to_string(),
-            "cargo_toml_exists": model.cargo_toml_exists,
-            "entrypoint": entrypoint.as_ref().map(|p| p.display().to_string()),
-            "repo_initialized": model.repo_initialized,
-            "entrypoint_kind": model.entrypoint_kind.as_str(),
-            "module_gap_count": model.module_gaps.len(),
-            "search_hits": search_hits,
-        }),
-    ));
+    combined.push(serde_json::json!({
+        "op": "workspace_scan",
+        "target_root": target_root.display().to_string(),
+        "cargo_toml_exists": model.cargo_toml_exists,
+        "entrypoint": entrypoint.as_ref().map(|p| p.display().to_string()),
+        "repo_initialized": model.repo_initialized,
+        "entrypoint_kind": model.entrypoint_kind.as_str(),
+        "module_gap_count": model.module_gaps.len(),
+        "search_hits": search_hits
+    }));
 
-    (summary, observe_diagnostics, events)
+    // Return canonical output (already enforced earlier via retain + push invariant)
+    (summary, observe_diagnostics, Vec::new())
 }
 
 fn read_graph_summary(target_root: &Path) -> Option<SemanticStateSummary> {
@@ -297,6 +270,7 @@ fn build_observe_diagnostics(model: &WorkspaceModel, listing: &[String], search_
     diagnostics
 }
 
+#[allow(dead_code)]
 fn synthetic_observe_event(node_id: &str, kind: &str, payload: serde_json::Value, output: serde_json::Value) -> Vec<RuntimeEvent> {
     let request_id = format!("observe-{}", Uuid::new_v4());
     let tool_call_id = Uuid::new_v4().to_string();

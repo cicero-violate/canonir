@@ -340,7 +340,7 @@ fn main() -> Result<()> {
     let workspace = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     // Hot-reload skills on SIGHUP.
-    if false {
+    if true {
         let mut signals = Signals::new([SIGHUP]).expect("signals");
         std::thread::Builder::new()
             .name("canon_skill_reload".to_string())
@@ -386,6 +386,7 @@ fn main() -> Result<()> {
     consumers.push(Box::new(dc));
     }
     // FIX: Only start LLM worker if port is free (supports both standalone + supervisor modes)
+canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
     if std::net::TcpListener::bind("127.0.0.1:9101").is_ok() {
         // port was free → we own it
         canon_exec::init_llm_worker();
@@ -503,7 +504,7 @@ fn main() -> Result<()> {
     let mut watcher_start_seq = start_seq;
     let mut watcher_seen: usize = processed;
     {
-        eprintln!("[TRACE] skipping notify watcher for isolation");
+        eprintln!("[TRACE] enabling notify watcher");
         // removed early return to restore control flow
 
         let (fs_tx, fs_rx) = cc::unbounded::<notify::Result<notify::Event>>();
@@ -523,10 +524,9 @@ fn main() -> Result<()> {
 
         std::thread::Builder::new().name("canon-p2-watcher".to_string()).spawn(move || {
             let _watcher = fs_watcher; // keep alive for thread lifetime
-            while let Ok(res) = fs_rx.recv() {
-                if res.is_err() {
-                    continue;
-                }
+            loop {
+                // Fallback polling in case notify misses events
+                let _ = fs_rx.recv_timeout(std::time::Duration::from_millis(500));
                 let all = match read_any_events_from_path_with_start_seq(&watcher_tlog, watcher_start_seq) {
                     Ok(e) => e,
                     Err(_) => continue,

@@ -105,7 +105,7 @@ impl LoopContext {
             failure_scope_workspace: false,
             failure_scope_tooling: false,
             route_objective_contradiction: false,
-            scheduler_len: self.scheduler.len(),
+            scheduler_len: 0,
             has_plan,
         }
     }

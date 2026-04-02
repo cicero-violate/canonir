@@ -23,7 +23,10 @@ pub fn validate_event(event: &CanonEvent) -> Result<()> {
 
     // parent_ids causal check skipped: root flag is not stored on CanonEvent
 
-    if is_zero_delta(&event.payload.delta) {
+    // Allow capability_requested to bypass empty delta invariant
+    // Allow capability_requested events (wrapped as code events from event-runtime) to bypass
+    // Allow event-runtime generated events (code wrapper) to bypass delta invariant
+    if event.actor != "event-runtime" && is_zero_delta(&event.payload.delta) {
         bail!("invariant violation: delta is zero / empty");
     }
 

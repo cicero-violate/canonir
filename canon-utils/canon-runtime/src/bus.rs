@@ -1,6 +1,6 @@
 use crate::hooks::{hook_denied_event, HookChain, HookDecision};
-use canon_event::{Code, DebugEvent, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventMask, EventOutcome, RuntimeEvent, RustcEvent};
-use canon_invariant::{decision_trace_payload, invariant_violation_delta, invariant_violation_state};
+use canon_event::{Code, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventMask, EventOutcome, RuntimeEvent, RustcEvent};
+use canon_invariant::{invariant_violation_delta, invariant_violation_state};
 use crossbeam_channel::{bounded, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -45,18 +45,7 @@ fn is_error_event(event: &RuntimeEvent) -> bool {
     }
 }
 
-fn is_control_event(_event: &RuntimeEvent) -> bool {
-    // FIX: restore control-event separation to prevent async fanout duplication
-    // LoopObserved and other control events should NOT be broadcast to all async consumers
-    match _event {
-        RuntimeEvent::LoopObserved(_)
-        | RuntimeEvent::RouteSelected(_)
-        | RuntimeEvent::LoopActed(_)
-        | RuntimeEvent::LoopPlanned(_)
-        | RuntimeEvent::LoopVerified(_) => true,
-        _ => false,
-    }
-}
+// REMOVED: control-event classification — EventBus must not encode control-flow semantics
 
 // REMOVE: dedupe hack — canonical flow must guarantee single emission upstream
 // Duplicate suppression must not occur in the bus; it hides lifecycle violations
@@ -124,17 +113,7 @@ impl EventBus {
 
     // 🔥 CRITICAL FIX: ensure RouteSelected reaches BOTH sync + async consumers
     #[allow(dead_code)]
-    pub fn fanout_control_event(&mut self, event: &RuntimeEvent, event_id: &EventId) {
-        if let RuntimeEvent::RouteSelected(_) = event {
-            eprintln!("[BUS FIX ACTIVE] fanout RouteSelected to async consumers");
-            for c in self.consumers.iter() {
-                let _ = c.sender.send(EventMessage {
-                    event: event.clone(),
-                    event_id: event_id.clone(),
-                });
-            }
-        }
-    }
+    // REMOVED: fanout_control_event — violates single dispatch path invariant
 
     pub fn register(&mut self, name: String, mut consumer: Box<dyn EventConsumer>, emitter: EventEmitterHandle) {
         eprintln!("[REGISTER ENTRY] name={}", name);
@@ -167,47 +146,23 @@ impl EventBus {
                     thread_name,
                     canon_event::event_kind_str(&msg.event)
                 );
+                // CRITICAL FIX: runtime must NOT deduplicate or suppress LoopObserved
+                // Exact-once invariant must be enforced at observe stage, not bus layer
+                // Removing global suppression to ensure correct end-to-end propagation
                 let parent_id = msg.event_id.clone();
                 let outcome = consumer.on_event(&msg.event, parent_id.clone());
                 hooks.run_post(&msg.event, &outcome);
                 match outcome {
                     EventOutcome::Emit { event, file, line } => {
-                        std::thread::spawn({
-                            let emitter = emitter_for_loop.clone();
-                            let parent = parent_id.clone();
-                            move || {
-                                emitter.emit_with_parents(event, vec![parent], file, line);
-                            }
-                        });
+                        emitter_for_loop.emit_with_parents(event, vec![parent_id.clone()], file, line);
                     }
                     EventOutcome::EmitMany { events, file, line } => {
                         for event in events {
-                            let emitter = emitter_for_loop.clone();
-                            let parent = parent_id.clone();
-                            std::thread::spawn(move || {
-                                emitter.emit_with_parents(event, vec![parent], file, line);
-                            });
+                            emitter_for_loop.emit_with_parents(event, vec![parent_id.clone()], file, line);
                         }
                     }
-                    EventOutcome::NoOp(reason) => {
-                        if is_control_event(&msg.event) {
-                            emitter_for_loop.emit_with_parents(
-                                RuntimeEvent::Debug(DebugEvent {
-                                    source: consumer_name.clone(),
-                                    kind: "control_noop".to_string(),
-                                    payload: decision_trace_payload(
-                                        reason,
-                                        serde_json::json!({
-                                            "event_kind": canon_event::event_kind_str(&msg.event),
-                                            "event_id": parent_id.to_string(),
-                                        }),
-                                    ),
-                                }),
-                                vec![parent_id],
-                                file!(),
-                                line!(),
-                            );
-                        }
+                    EventOutcome::NoOp(_reason) => {
+                        // REMOVED: control-event-specific noop handling — EventBus must not introduce control-flow logic
                     }
                     EventOutcome::Error { event, file, line } => {
                         emitter_for_loop.emit_with_parents(event, vec![parent_id], file, line);
@@ -220,13 +175,7 @@ impl EventBus {
 
     /// Dispatch an event to all matching consumers. Returns the number of consumers that received it.
     pub fn dispatch(&self, event: RuntimeEvent, event_id: EventId) -> usize {
-        // FIX: absolute global guard — allow only ONE loop_observed dispatch ever (debug containment)
-        static LOOP_OBSERVED_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if canon_event::event_kind_str(&event) == "loop_observed" {
-            if LOOP_OBSERVED_SEEN.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                return 0;
-            }
-        }
+        // REMOVED: global LoopObserved suppression — violates invariant (must propagate exactly once upstream, not suppressed here)
 
         // FIX: ensure RouteSelected is never dropped by filters or dispatch short-circuits
         let _is_route_selected = canon_event::event_kind_str(&event) == "route_selected";
@@ -243,9 +192,8 @@ impl EventBus {
                 return 0;
             }
         };
-        // FIX: treat PlanningCompleted as reliable to ensure delivery to async consumers
-        let reliable = is_control_event(&base_event)
-            || matches!(base_event, RuntimeEvent::PlanningCompleted(_));
+        // REMOVED: control-event based reliability — dispatch must not depend on event classification
+        let reliable = true;
         let mut delivered = 0usize;
         let mut noop_reasons: Vec<String> = Vec::new();
         for consumer in &self.sync_consumers {
@@ -289,10 +237,11 @@ impl EventBus {
             }
 
             if let Ok(mut locked) = consumer.consumer.lock() {
-                // FIX: short-circuit ALL further processing for loop_observed after first delivery
-                if canon_event::event_kind_str(&base_event) == "loop_observed" && delivered > 0 {
-                    break;
-                }
+                // REMOVED: loop_observed short-circuit
+                // This created asymmetric delivery between sync and async paths,
+                // allowing duplicate propagation via async consumers.
+                // Exactly-once delivery must be enforced at emission source,
+                // not by partial suppression inside one dispatch path.
                 let outcome = locked.on_event(&base_event, event_id.clone());
                 self.hooks.run_post(&base_event, &outcome);
                 match outcome {
@@ -309,7 +258,7 @@ impl EventBus {
                         }
                     }
                     EventOutcome::NoOp(reason) => {
-                        if is_control_event(&base_event) && should_count_as_noop_violation(&consumer.name, reason) {
+                        if should_count_as_noop_violation(&consumer.name, reason) {
                             noop_reasons.push(format!("{}:{}", consumer.name, reason));
                         }
                     }
@@ -321,7 +270,7 @@ impl EventBus {
             }
         }
         // GUARD: suppress noop_spam if caused by empty scheduler PlanningCompleted
-        if !noop_reasons.is_empty() && is_control_event(&base_event) {
+        if !noop_reasons.is_empty() {
             // DEBUG TRACE: log noop_spam causal chain for diagnosis
             eprintln!(
                 "[NOOP_SPAM_TRACE] event_id={} kind={} reasons={:?}",
@@ -471,7 +420,7 @@ impl EventBus {
                 delivered += 1;
             }
         }
-        if delivered == 0 && is_control_event(&base_event) {
+        if delivered == 0 {
             if let Some(first) = self.sync_consumers.first() {
                 first.emitter.emit_with_parents(
                     RuntimeEvent::Code(Code {

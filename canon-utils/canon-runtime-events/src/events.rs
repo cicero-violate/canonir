@@ -12,6 +12,22 @@ pub const EVENT_SCHEMA_VERSION: &str = "1";
 canon_event_struct!(
     #[impl_shape]
     #[event(class = "Effect")]
+    CapabilityRequested {
+        #[input]
+        request_id: String,
+        #[input]
+        name: String,
+        #[input]
+        args: serde_json::Value,
+        #[delta]
+        #[output]
+        requested: bool,
+    }
+);
+
+canon_event_struct!(
+    #[impl_shape]
+    #[event(class = "Effect")]
     RenameSymbol {
         project: String,
         #[input]
@@ -1100,6 +1116,7 @@ canon_event_enum!(RuntimeEvent {
     GoalGraphCheckpointed(GoalGraphCheckpointed),
     CapabilityInvoked(CapabilityInvoked),
     CapabilityResolved(CapabilityResolved),
+    CapabilityRequested(CapabilityRequested),
 });
 
 // ---------------------------------------------------------------------------
@@ -1160,6 +1177,7 @@ pub fn event_kind_str(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::NodeStarted(_) => "node_started",
         RuntimeEvent::NodeCompleted(_) => "node_completed",
         RuntimeEvent::NodeFailed(_) => "node_failed",
+        RuntimeEvent::CapabilityRequested(_) => "capability_requested",
     }
 }
 

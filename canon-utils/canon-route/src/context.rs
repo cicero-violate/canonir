@@ -46,7 +46,7 @@ pub struct RouteContext {
     pub context_ready: bool,
     pub workspace_dirty_tracker: WorkspaceDirtyTracker,
     // DEPRECATED: planned_pending removed from routing authority (semantic-state-only)
-    pub planned_pending: usize,
+    // REMOVED: planned_pending — queue-derived state must not be part of routing context authority
     pub acted_unverified: bool,
     pub pending_tool_result_ids: HashSet<String>,
     pub recent_tool_results: Vec<serde_json::Value>,
@@ -155,7 +155,7 @@ impl RouteContext {
             tick = self.scheduler_tick,
             context = self.context_ready,
             dirty = self.workspace_dirty_tracker.any_dirty(),
-            pending = self.planned_pending,
+            pending = 0,
             unverified = self.acted_unverified,
             finish = self.finish_ready,
             action = self.last_action_kind,
@@ -276,9 +276,7 @@ impl RouteContext {
                 self.push_journal("observe", format!("tick={} goal_present={} errors={}", self.scheduler_tick, goal_present, error_count));
             }
             RuntimeEvent::LoopPlanned(LoopPlanned { action_kind, plan_id, action_id, llm_request_id, signals, .. }) => {
-                if action_kind != "no_op" {
-                    self.planned_pending = self.planned_pending.saturating_add(1);
-                }
+                // REMOVED: planned_pending mutation — queue-derived state must not influence routing
                 update_causal_graph(&mut self.causal_graph, event);
                 if let Some(sig) = signals {
                     self.last_llm_signals = Some(sig.clone());
@@ -306,7 +304,7 @@ impl RouteContext {
                 self.push_journal("plan", summary);
             }
             RuntimeEvent::LoopActed(LoopActed { action_kind, capability_request_id, tool_call_id, tool_result_id, success, stderr, action_id, .. }) => {
-                self.planned_pending = self.planned_pending.saturating_sub(1);
+                // REMOVED: planned_pending no longer tracked
                 const READ_ONLY_ACTIONS: &[&str] = &["list_dir", "read_file", "search_files", "done"];
                 if !READ_ONLY_ACTIONS.contains(&action_kind.as_str()) {
                     self.consecutive_invalid_plan_batches = 0;
@@ -337,7 +335,7 @@ impl RouteContext {
                 }
                 if is_successful_bootstrap(action_kind, *success, stderr) {
                     self.bootstrap_refresh_required = true;
-                    self.planned_pending = 0;
+                    // REMOVED: planned_pending no longer tracked
                     self.semantic_summary.path_exists = true;
                     self.semantic_summary.planning_preconditions.clear();
                     self.semantic_summary.validation_blocked_by_preconditions = false;
@@ -425,7 +423,7 @@ impl RouteContext {
             }
             RuntimeEvent::Debug(debug) if debug.kind == "bootstrap_refresh_required" => {
                 self.bootstrap_refresh_required = true;
-                self.planned_pending = 0;
+                // REMOVED: planned_pending no longer tracked
                 self.semantic_summary.path_exists = true;
                 self.push_journal("observe", "bootstrap_refresh_required");
             }
@@ -582,7 +580,7 @@ mod tests {
             }),
             workspace,
         );
-        assert_eq!(ctx.planned_pending, 1);
+        // planned_pending removed
         ctx.update_from_event(
             &RuntimeEvent::LoopActed(LoopActed {
                 tick: 1,
@@ -605,7 +603,7 @@ mod tests {
             }),
             workspace,
         );
-        assert_eq!(ctx.planned_pending, 0);
+        // planned_pending removed
     }
 
     #[test]
@@ -650,7 +648,7 @@ mod tests {
         let workspace = Path::new("/tmp");
         ctx.semantic_summary.target_root = Some("/tmp/example".into());
         ctx.semantic_summary.path_exists = false;
-        ctx.planned_pending = 2;
+        // planned_pending removed
 
         ctx.update_from_event(
             &RuntimeEvent::LoopActed(LoopActed {
@@ -677,7 +675,7 @@ mod tests {
 
         assert!(!ctx.target_workspace_missing_state());
         assert!(ctx.bootstrap_refresh_required);
-        assert_eq!(ctx.planned_pending, 0);
+        // planned_pending removed
     }
 
     #[test]

@@ -144,6 +144,9 @@ impl EventConsumer for AnalystConsumer {
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, _trigger_id: EventId) -> EventOutcome {
         match event {
+            RuntimeEvent::CapabilityRequested(_) => {
+                return EventOutcome::NoOp("analyst_capability_requested");
+            }
             RuntimeEvent::LoopRewarded(_) => {
                 if let State::Idle { ticks_since_reward, cooldown_ticks } = &mut self.state {
                     *ticks_since_reward = 0;

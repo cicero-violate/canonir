@@ -7,7 +7,7 @@ goal_file = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md"
 max_iterations = 200
 llm_retry_count = 3
 llm_retry_delay_secs = 5
-response_timeout_secs = 90
+response_timeout_secs = 20
 max_concurrency = 4
 max_nodes = 64
 max_expand_iters = 6
@@ -99,7 +99,7 @@ max_tabs = 1
 id = "mini_agent_chatgpt"
 url = "https://chatgpt.com/gg/69ca500acd888199a32b90339c82fa31"
 role_markdown = "builtin:planner"
-role = "mini_agent"
+role = "executor"
 stateful = true
 max_tabs = 1
 
@@ -115,7 +115,7 @@ max_tabs = 1
 id = "exec_chatgpt_d"
 url = "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02"
 role_markdown = "builtin:exec"
-role = "executor_b"
+role = "executor"
 stateful = true
 max_tabs = 1
 
@@ -170,7 +170,7 @@ max_tabs = 1
 id = "mini_agent_chatgpt"
 url = "https://chatgpt.com/gg/69ca500acd888199a32b90339c82fa31"
 role_markdown = "builtin:planner"
-role = "mini_agent"
+role = "executor"
 stateful = true
 max_tabs = 1
 
@@ -178,7 +178,7 @@ max_tabs = 1
 id = "exec_chatgpt_d"
 url = "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02"
 role_markdown = "builtin:exec"
-role = "executor_b"
+role = "executor"
 stateful = true
 max_tabs = 1
 
@@ -186,6 +186,13 @@ max_tabs = 1
 mini_agent_chatgpt = 100
 
 [llm.roles.mini_agent]
+burst = 1
+
+[llm.roles.executor.weights]
+mini_agent_chatgpt = 50
+exec_chatgpt_d = 50
+
+[llm.roles.executor]
 burst = 1
 
 [llm.endpoints.verifier]

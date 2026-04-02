@@ -435,26 +435,6 @@ impl EventRuntime {
         // Dispatch only — do NOT write to tlog (event is already there).
         let consumer_count = self.bus.dispatch(event.clone(), event_id.clone());
         eprintln!("[REPLAY TRACE] dispatched to {} consumers", consumer_count);
-        // FIX: explicitly satisfy successor invariant at runtime boundary
-        if canon_event::event_kind_str(&event) == "loop_observed" {
-            eprintln!("[RUNTIME FIX] forcing RouteSelected after LoopObserved (final guard)");
-            self.bus.dispatch(
-                RuntimeEvent::RouteSelected(canon_event::RouteSelected {
-                    tick: 0,
-                    suggested_route: "Plan".to_string(),
-                    prompt: "".to_string(),
-                    approved_route: "Plan".to_string(),
-                    rationale: "runtime forced successor".to_string(),
-                    confidence: Some(1.0),
-                    gate_changed: false,
-                    gate_note: "auto".to_string(),
-                    gate_rules_fired: Vec::new(),
-                    gate_should_stop: false,
-                    model_json: "".to_string()
-                }),
-                canon_event::EventId::new(canon_event::new_event_id())
-            );
-        }
         if consumer_count == 0 {
             const SILENT_KINDS: &[&str] = &["debug", "runtime_state_updated", "code", "edit", "analysis", "cargo", "file", "bash", "llm"];
             let kind_str = canon_event::event_kind_str(&event);

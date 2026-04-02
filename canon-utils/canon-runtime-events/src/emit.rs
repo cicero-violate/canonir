@@ -1,4 +1,4 @@
-use crate::tlog::{emit_canon_event_json, BinarySegmentWriter};
+use crate::tlog::BinarySegmentWriter;
 use crate::{CanonEvent, CanonPayload, CanonPayloadMeta, CanonPayloadShape, EventId, EventKind};
 use anyhow::Result;
 use serde_json::Value;
@@ -64,7 +64,10 @@ pub fn write_canon_event_auto(path: &Path, event: &CanonEvent) -> Result<()> {
             cache.get_mut(&dir).unwrap().write_canon_event(event)
         })
     } else {
-        emit_canon_event_json(path, event)
+        // Switch to binary tlog writer instead of JSON writer
+        use crate::tlog::binary::BinarySegmentWriter;
+        let writer = BinarySegmentWriter::open(path)?;
+        writer.write_canon_event(event)
     }
 }
 

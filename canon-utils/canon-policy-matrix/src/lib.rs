@@ -522,7 +522,6 @@ pub struct RouteRowContext {
     pub halted: bool,
     pub context_ready: bool,
     pub consecutive_invalid_plan_batches: u32,
-    pub planned_pending: usize,
     pub pending_tool_results_empty: bool,
     pub bootstrap_refresh_required: bool,
     pub target_workspace_missing: bool,
@@ -923,7 +922,7 @@ pub fn route_transition_rows() -> Vec<RouteTransitionRow> {
         RouteTransitionRow {
             name: "continue_act",
             family: RouteScenarioFamily::ContinueAct,
-            context: RouteRowContext { planned_pending: 2, pending_tool_results_empty: true, ..RouteRowContext::default() },
+            context: RouteRowContext { pending_tool_results_empty: true, ..RouteRowContext::default() },
             state: RouteRowState::default(),
             event: Some(RouteRowEvent::LoopActed { action_kind: "apply_patch" }),
             decision: None,
@@ -933,7 +932,7 @@ pub fn route_transition_rows() -> Vec<RouteTransitionRow> {
         RouteTransitionRow {
             name: "planned_to_act",
             family: RouteScenarioFamily::PlannedToAct,
-            context: RouteRowContext { planned_pending: 3, pending_tool_results_empty: true, ..RouteRowContext::default() },
+            context: RouteRowContext { pending_tool_results_empty: true, ..RouteRowContext::default() },
             state: RouteRowState::default(),
             event: Some(RouteRowEvent::PlanningCompleted { status: "planned", planned_count: 3 }),
             decision: None,
@@ -2102,7 +2101,7 @@ fn assert_route_row(row: &RouteTransitionRow) {
     ctx.halted = row.context.halted;
     ctx.context_ready = row.context.context_ready;
     ctx.consecutive_invalid_plan_batches = row.context.consecutive_invalid_plan_batches;
-    ctx.planned_pending = row.context.planned_pending;
+    // REMOVED: planned_pending no longer part of routing context
     ctx.bootstrap_refresh_required = row.context.bootstrap_refresh_required;
     if row.context.target_workspace_missing {
         ctx.semantic_summary.complete = true;
@@ -2130,7 +2129,7 @@ fn assert_route_dispatch_row(row: &RouteDispatchRow) {
     ctx.halted = row.context.halted;
     ctx.context_ready = row.context.context_ready;
     ctx.consecutive_invalid_plan_batches = row.context.consecutive_invalid_plan_batches;
-    ctx.planned_pending = row.context.planned_pending;
+    // REMOVED: planned_pending no longer part of routing context
     if row.context.target_workspace_missing {
         ctx.semantic_summary.complete = true;
         ctx.semantic_summary.path_exists = false;

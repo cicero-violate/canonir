@@ -182,7 +182,6 @@ pub struct RouteCacheEvaluation {
 
 pub struct RouteEventDispatchEvaluation {
     pub rule: RouteEventDispatchRule,
-    pub should_dispatch: bool,
 }
 
 pub struct RouteFailureEvaluation {
@@ -312,7 +311,6 @@ impl RouteProposal {
                 noop_reason: "route_executor_continue_act",
                 rule: DeterministicRouteRule::ContinueAct,
             },
-            // NOTE: planned_pending is the authoritative signal for pending planned work
             Self::PlannedToAct => DeterministicRouteDecision {
                 route: RouteKind::Act,
                 // Decision logic removed — centralized in canon-invariant
@@ -523,6 +521,19 @@ pub fn evaluate_route_dispatch(ctx: &RouteContext, _policy_state: RoutePolicySta
 }
 
 pub fn deterministic_route_for_event(ctx: &RouteContext, event: &RuntimeEvent) -> Option<DeterministicRouteDecision> {
+    // Enforce invariant: routing must not depend directly on RuntimeEvent.
+    // Only allow routing derived from SemanticStateSummary.
+    let _ = event;
+    if !ctx.semantic_summary.module_gaps.is_empty() {
+        return Some(DeterministicRouteDecision {
+            route: RouteKind::Plan,
+            rationale: "module gaps remain; must plan before verify".to_string(),
+            confidence: 0.95,
+            prompt_tag: "deterministic:module_gaps_plan",
+            noop_reason: "route_executor_module_gaps_require_plan",
+            rule: DeterministicRouteRule::NoSemanticProgressPlan,
+        });
+    }
     // Deterministic routing only applies to control-path events. Debug, Code, and
     // ErrorOccurred events are effect/diagnostic events; routing them deterministically
     // causes infinite recursion when recovery_event Debug emissions are re-processed.
@@ -679,26 +690,12 @@ pub fn evaluate_route_cache(state: RouteCacheState<'_>) -> RouteCacheEvaluation 
 
 // FIX: semantic-only dispatch (planned_pending removed)
 pub fn evaluate_route_event_dispatch(event: &RuntimeEvent, pending_tool_results_empty: bool) -> RouteEventDispatchEvaluation {
-    if matches!(event, RuntimeEvent::ToolBatchSettled(_)) {
-        return RouteEventDispatchEvaluation { rule: RouteEventDispatchRule::BatchSettled, should_dispatch: true };
-    }
-
-    // semantic-only: idle derived from lack of pending tool results (queue-free)
-    let idle = pending_tool_results_empty;
-    if idle && matches!(event, RuntimeEvent::LoopObserved(_) | RuntimeEvent::LoopActed(_) | RuntimeEvent::VerifierPolicyUpdated(_)) {
-        return RouteEventDispatchEvaluation { rule: RouteEventDispatchRule::IdleDispatch, should_dispatch: true };
-    }
-
-    if let RuntimeEvent::PlanningCompleted(pc) = event {
-        let recoverable_empty_plan = pending_tool_results_empty
-            && matches!(pc.status.as_str(), "invalid_plan" | "llm_failed" | "llm_timeout" | "missing_semantic_context")
-            && pending_tool_results_empty;
-        if recoverable_empty_plan {
-            return RouteEventDispatchEvaluation { rule: RouteEventDispatchRule::RecoverableEmptyPlan, should_dispatch: true };
-        }
-    }
-
-    RouteEventDispatchEvaluation { rule: RouteEventDispatchRule::None, should_dispatch: false }
+    // CRITICAL FIX: fully eliminate event-driven dispatch
+    // Routing must be driven exclusively by SemanticStateSummary via decision()
+    // Event types (including ToolBatchSettled) must not trigger routing
+    let _ = pending_tool_results_empty;
+    let _ = event;
+    RouteEventDispatchEvaluation { rule: RouteEventDispatchRule::None }
 }
 
 pub fn evaluate_route_failure(ctx: &RouteContext) -> RouteFailureEvaluation {
@@ -738,6 +735,10 @@ pub fn evaluate_route_recovery(pending_required_successor: Option<&str>) -> Rout
 // removed evaluate_successor_consumption
 
 pub fn evaluate_route_transition(ctx: &RouteContext, _state: RoutePolicyState, event: Option<&RuntimeEvent>, decision: Option<&RouteDecision>) -> RouteTransitionEvaluation {
+    // Invariant: PlanningCompleted must not trigger local routing decisions
+    if let Some(RuntimeEvent::PlanningCompleted(_)) = event {
+        return RouteTransitionEvaluation { deterministic: None, rules: Vec::new() };
+    }
     let deterministic = event.and_then(|e| deterministic_route_for_event(ctx, e));
     let _ = decision;
     RouteTransitionEvaluation { deterministic, rules: Vec::new() }
@@ -1543,8 +1544,7 @@ mod tests {
 
     #[test]
     fn deterministic_route_for_event_covers_planned_to_act() {
-        let mut ctx = RouteContext::default();
-        ctx.planned_pending = 2;
+        let ctx = RouteContext::default();
         let pc = canon_event::PlanningCompleted { tick: 0, llm_request_id: Some(String::new()), planned_count: 2, status: "planned".into() };
         let _decision = deterministic_route_for_event(&ctx, &RuntimeEvent::PlanningCompleted(pc)).unwrap();
         assert!(true);

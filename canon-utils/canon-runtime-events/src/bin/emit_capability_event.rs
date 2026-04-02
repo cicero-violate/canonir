@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use canon_event::canon_emit;
+use canon_event::events;
 use std::env;
 use std::path::PathBuf;
 
@@ -7,7 +8,8 @@ fn default_tlog_path() -> PathBuf {
     if let Ok(path) = env::var("CANON_TLOG_PATH") {
         return PathBuf::from(path);
     }
-    PathBuf::from("/workspace/ai_sandbox/canon/state/event_log/event.tlog.d")
+    // Use the actual segment directory expected by BinarySegmentWriter
+    PathBuf::from("/workspace/ai_sandbox/canon/state/event_log")
 }
 
 fn generate_request_id() -> String {
@@ -53,10 +55,12 @@ fn main() -> Result<()> {
     let args_value: serde_json::Value = serde_json::from_str(&args_json)?;
     let request_id = request_id.unwrap_or_else(generate_request_id);
 
-    let payload = serde_json::json!({
-        "request_id": request_id,
-        "name": name,
-        "args": args_value,
-    });
+    let event = events::CapabilityRequested {
+        request_id,
+        name,
+        args: args_value,
+        requested: true,
+    };
+    let payload = serde_json::to_value(event)?;
     canon_emit!(root; "event-runtime", "capability_requested", payload, &tlog_path)
 }

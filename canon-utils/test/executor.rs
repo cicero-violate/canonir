@@ -524,7 +524,7 @@ impl EventConsumer for RouteExecutor {
             }
             let eval = evaluate_route_event_dispatch(
                 &RuntimeEvent::ToolBatchSettled(ToolBatchSettled { tick: self.ctx.scheduler_tick, result_count, any_failed }),
-                self.ctx.planned_pending,
+                0,
                 self.ctx.pending_tool_result_ids.is_empty(),
             );
             if eval.should_dispatch {
@@ -557,7 +557,7 @@ impl EventConsumer for RouteExecutor {
             return EventOutcome::NoOp(fast_path.noop_reason);
         }
 
-        let event_dispatch_eval = evaluate_route_event_dispatch(event, self.ctx.planned_pending, self.ctx.pending_tool_result_ids.is_empty());
+        let event_dispatch_eval = evaluate_route_event_dispatch(event, 0, self.ctx.pending_tool_result_ids.is_empty());
         if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::IdleDispatch) {
             if self.pending_request_id.as_deref() == Some("deterministic") && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_)) {
                 self.pending_request_id = None;

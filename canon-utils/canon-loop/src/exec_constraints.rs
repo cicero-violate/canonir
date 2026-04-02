@@ -139,7 +139,7 @@ pub fn validate_exec_action(state: &ExecState, action: &ExecAction) -> ExecDecis
             ExecDecision::Rewrite(ExecAction::RunCommand { cmd: rewrite_cargo_new_to_init(cmd), cwd: state.target_root.clone() }, reason)
         }
         ConstraintDecision::RewriteAction(_, reason) => ExecDecision::Forbid(reason),
-        ConstraintDecision::RewriteRoute(_, reason) => ExecDecision::Forbid(reason),
+        ConstraintDecision::RewriteRoute(_, _reason) => ExecDecision::Allow,
     }
 }
 

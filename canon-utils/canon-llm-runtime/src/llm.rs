@@ -109,7 +109,7 @@ async fn llm_client_call_agent_json_inner_with_req_id(
     _tab_cooldown_ms: u64, allow_req_id_mismatch: bool, bust_cache: bool,
 ) -> Result<(Value, u64)> {
     let cache_key = llm_client_cache_key_for(prompt, role_schema);
-    let (req_id, raw) = endpoint_worker::llm_worker_send_request_with_req_id(
+    let (req_id, resp) = endpoint_worker::llm_worker_send_request_with_req_id(
         bridge,
         endpoint_id,
         url,
@@ -126,6 +126,7 @@ async fn llm_client_call_agent_json_inner_with_req_id(
         false,
     )
     .await?;
+    let raw = resp.raw;
     let log_dir = "/workspace/ai_sandbox/canon/canon-utils/state/reports_out/llm_raw";
     let _ = std::fs::create_dir_all(log_dir);
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
