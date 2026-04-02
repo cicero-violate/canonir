@@ -1,6 +1,6 @@
 # SPEC: Canon Control-Flow Stabilization
 
-DO NOT touch this file. /workspace/ai_sandbox/canon/canon-utils/canon-mini-agent/src/main.rs
+DO NOT touch this file. /workspace/ai_sandbox/canon/canon-utils/canon-mini-agent/** !!!!
 
 ## Objective
 Stabilize canonical control flow in `/workspace/ai_sandbox/canon/canon-utils` so that:
