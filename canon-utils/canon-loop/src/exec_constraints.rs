@@ -79,7 +79,6 @@ impl ExecState {
             failure_scope_workspace: self.failure_scope_workspace,
             failure_scope_tooling: self.failure_scope_tooling,
             route_objective_contradiction: false,
-            scheduler_len: 0,
             has_plan: false,
         }
     }

@@ -739,9 +739,10 @@ pub fn evaluate_route_transition(ctx: &RouteContext, _state: RoutePolicyState, e
     if let Some(RuntimeEvent::PlanningCompleted(_)) = event {
         return RouteTransitionEvaluation { deterministic: None, rules: Vec::new() };
     }
-    let deterministic = event.and_then(|e| deterministic_route_for_event(ctx, e));
+    // Enforce SemanticStateSummary-only routing: no event-based routing allowed
+    let _ = ctx;
     let _ = decision;
-    RouteTransitionEvaluation { deterministic, rules: Vec::new() }
+    RouteTransitionEvaluation { deterministic: None, rules: Vec::new() }
 }
 
 fn apply_shared_route_constraint(ctx: &RouteContext, decision: DeterministicRouteDecision) -> Option<DeterministicRouteDecision> {

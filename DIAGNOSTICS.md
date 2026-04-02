@@ -1,70 +1,100 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- state/event_log (flat log structure)
-- expected path state/event_log/event.tlog.d (missing)
+- state/event_log/event.tlog.d (548 segment files)
+- latest stage-signal analysis
 - VIOLATIONS.md
-- python event-log analysis
-- raw log inspection
+- PLANS/SPEC.md
 
 ## Ranked Failures
 
-### 1. Impact: HIGH
-Signal: Logging pipeline broken or misconfigured
+### 1. Impact: CRITICAL
+Signal: Canonical loop is non-atomic and never completes
 Evidence:
-- event.tlog.d directory missing
-- only single flat log present (00000000000000000000.log)
-- log file is empty (no events recorded)
-- python analysis returns empty summaries and patterns
+- decision=30, route=107, dispatch=87, observe=0
+- No LoopObserved events
+- Increasing divergence (route >> decision, dispatch >> decision)
 
 Root Cause:
-- Logging system not writing events OR writing to incorrect format/location
-- Diagnostics pipeline cannot observe runtime behavior
+- Runtime executes partial pipeline fragments without enforcing full-cycle completion
+- Execution exits or diverges before observe stage
 
 Repair Targets:
-- canon-runtime: restore canonical event log structure (event.tlog.d)
-- ensure event emission writes to log segments
-- validate log writer initialization and flush behavior
-- enforce schema-compatible log format
+- canon-runtime: enforce atomic loop execution (state → decision → route → dispatch → observe)
+- remove all early exits prior to observe
+- enforce single loop driver controlling all stages
+- add invariant: every cycle must end with LoopObserved
 
 ---
 
-### 2. Impact: HIGH
-Signal: No observable runtime evidence
+### 2. Impact: CRITICAL
+Signal: Observe stage never executes
 Evidence:
-- zero LoopObserved, routing, or invariant signals
-- empty log despite system execution
+- observe=0 across all logs
 
 Root Cause:
-- instrumentation failure OR logging disabled
+- observe stage unreachable in current execution path
 
 Repair Targets:
-- verify all event emission points (LoopObserved, RouteSelected, etc.)
-- ensure events reach persistence layer
-- add fail-fast if logging is inactive
+- canon-loop::observe: guarantee execution after dispatch
+- emit exactly-once LoopObserved per cycle
+- fail-fast if observe not executed
 
 ---
 
 ### 3. Impact: HIGH
-Signal: Spec compliance unverifiable
+Signal: Pipeline fragmentation and cross-cycle leakage
 Evidence:
-- no event data available to validate invariants
-- verifier reports unresolved violations with no supporting logs
+- route (107) >> decision (30)
+- dispatch (87) >> decision (30)
+
+Root Cause:
+- stages invoked independently or reuse prior-cycle artifacts
 
 Repair Targets:
-- restore logging before attempting further invariant fixes
-- block verification when logs are absent
+- bind decision → route → dispatch to same cycle ID
+- enforce strict 1:1:1 mapping per cycle
+- prevent reuse of stale outputs
+
+---
+
+### 4. Impact: HIGH
+Signal: Dispatch not strictly gated by routing
+Evidence:
+- dispatch significantly exceeds decision count
+
+Root Cause:
+- dispatch bypasses canonical decision→route chain
+
+Repair Targets:
+- require dispatch to reference same-cycle RouteSelected
+- block dispatch without fresh routing
+
+---
+
+### 5. Impact: HIGH
+Signal: Invariant violations accelerating
+Evidence:
+- invariant_errors = 2275 (increasing)
+
+Root Cause:
+- invariants are logged but not enforced
+
+Repair Targets:
+- convert invariants to fail-fast assertions
+- abort execution immediately on violation
 
 ---
 
 ## Planner Handoff
-1. Restore canonical event logging pipeline (event.tlog.d + segment files)
-2. Ensure all runtime events are emitted and persisted
-3. Validate log format compatibility with diagnostics tooling
-4. Add fail-fast guard for missing/empty logs
+1. Enforce atomic canonical loop execution (no partial execution)
+2. Guarantee observe stage execution (LoopObserved exactly-once)
+3. Bind decision→route→dispatch to same cycle
+4. Eliminate dispatch_without_route paths
+5. Convert invariants to fail-fast
 
 ## Notes
-- Current system is effectively unobservable
-- All higher-level diagnostics are blocked until logging is restored
-- This is a foundational failure preventing further debugging
+- scheduler_len removal confirmed complete
+- primary failure remains loop fragmentation and non-completion
+- system degradation continues as invariant violations accumulate
 

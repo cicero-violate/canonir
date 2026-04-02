@@ -11,6 +11,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use std::io::Write;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureMode {
@@ -54,6 +55,13 @@ pub struct GraphArtifactSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphArtifactIndex {
     pub latest_workspace: GraphArtifactSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphArtifactHistoryEntry {
+    #[serde(flatten)]
+    pub summary: GraphArtifactSummary,
+    pub captured_at_ms: u128,
 }
 
 pub fn write_graph_artifact(
@@ -226,11 +234,26 @@ fn update_graph_artifact_index(workspace_root: &Path, summary: &GraphArtifactSum
         index_dir.join("by_crate").join(format!("{}.json", summary.crate_name)),
         serde_json::to_vec_pretty(summary)?,
     )?;
+    append_graph_history(index_dir.join("by_crate"), summary)?;
     fs::write(
         index_dir.join("by_hash").join(format!("{}.json", summary.artifact_id)),
         serde_json::to_vec_pretty(summary)?,
     )?;
     prune_graph_artifacts(&graph_dir, &index_dir)?;
+    Ok(())
+}
+
+fn append_graph_history(by_crate_dir: PathBuf, summary: &GraphArtifactSummary) -> Result<()> {
+    let history_path = by_crate_dir.join(format!("{}.history.jsonl", summary.crate_name));
+    let entry = GraphArtifactHistoryEntry {
+        summary: summary.clone(),
+        captured_at_ms: canon_event::now_millis() as u128,
+    };
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(history_path)?;
+    writeln!(file, "{}", serde_json::to_string(&entry)?)?;
     Ok(())
 }
 
@@ -296,6 +319,9 @@ fn referenced_artifact_ids(index_dir: &Path) -> Result<BTreeSet<String>> {
             let entry = entry?;
             let path = entry.path();
             if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
             let summary = serde_json::from_slice::<GraphArtifactSummary>(&fs::read(path)?)?;

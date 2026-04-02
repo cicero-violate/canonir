@@ -105,7 +105,6 @@ impl LoopContext {
             failure_scope_workspace: false,
             failure_scope_tooling: false,
             route_objective_contradiction: false,
-            scheduler_len: 0,
             has_plan,
         }
     }
@@ -114,7 +113,7 @@ impl LoopContext {
 pub struct LoopContext {
     pub workspace: PathBuf,
     pub tlog_path: PathBuf,
-    pub emitter: Option<EventEmitterHandle>,
+    pub emitter: EventEmitterHandle,
 
     // Observe
     pub goal_text: Option<String>,
@@ -202,11 +201,11 @@ pub struct LoopContext {
 }
 
 impl LoopContext {
-    pub fn new(workspace: PathBuf, tlog_path: PathBuf) -> Self {
+    pub fn new(workspace: PathBuf, tlog_path: PathBuf, emitter: EventEmitterHandle) -> Self {
         Self {
             workspace: workspace.clone(),
             tlog_path,
-            emitter: None,
+            emitter,
             goal_text: None,
             recent_compiler_errors: Vec::new(),
             error_count: 0,
@@ -310,6 +309,9 @@ impl LoopContext {
             observed.semantic_summary.complete = true;
             observed.semantic_summary.failure_class = Some(failure_class.as_str().to_string());
             observed.semantic_summary.failure_scope = Some(failure_scope.as_str().to_string());
+            // CRITICAL: emit LoopObserved event — previously only stored, never emitted
+            let event = canon_event::RuntimeEvent::LoopObserved(observed.clone());
+            self.emitter.emit_with_parents(event, vec![], file!(), line!());
         }
         self.forced_primary_objective = Some(DevelopmentObjectiveKind::ReduceCompilerFailures);
         self.forced_primary_strategy = Some(DevelopmentStrategyKind::SimplifyPlanBatch);

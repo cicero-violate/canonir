@@ -17,6 +17,8 @@ use canon_proc_macros::must_emit;
 use canon_semantic_state::{classify_planned_action_intents, execution_results_for_action, SemanticExecutionResultRecord};
 use std::path::PathBuf;
 use std::time::Instant;
+use std::sync::Arc;
+use canon_event::EventEmitter;
 
 pub struct LoopStageExecutor {
     ctx: LoopContext,
@@ -26,7 +28,12 @@ impl LoopStageExecutor {
     pub fn new(workspace: PathBuf, tlog_path: PathBuf) -> Self {
         // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
         eprintln!("[ENTER] {}:{} {} - LoopStageExecutor::new", file!(), line!(), module_path!());
-        Self { ctx: LoopContext::new(workspace, tlog_path) }
+        struct NullEmitter;
+        impl EventEmitter for NullEmitter {
+            fn emit_with_parents(&self, _event: RuntimeEvent, _parents: Vec<EventId>, _file: &'static str, _line: u32) {}
+        }
+        let emitter = Arc::new(NullEmitter);
+        Self { ctx: LoopContext::new(workspace, tlog_path, emitter) }
     }
 
     pub fn with_agent_id(mut self, id: String) -> Self {
@@ -42,6 +49,13 @@ impl LoopStageExecutor {
         evaluate_harness_repair_loop(&self.ctx.harness_repair_state())
     }
 
+    // CRITICAL: explicit public hook to force observe stage
+
+    // CRITICAL: explicit hook to force observe execution
+    pub fn force_observe(&mut self) {
+        let _ = observe::execute_forced(&mut self.ctx);
+    }
+
     pub fn evaluate_harness_repair_for_target(&mut self, target: &crate::harness_repair::HarnessRepairTarget, failure_output: &str) -> crate::harness_repair::HarnessRepairDirective {
         // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
         eprintln!("[ENTER] {}:{} {} - LoopStageExecutor::evaluate_harness_repair_for_target", file!(), line!(), module_path!());
@@ -54,51 +68,59 @@ impl LoopStageExecutor {
         // removed: successor consumption (handled by invariants)
     }
     fn emit_debug(&mut self, trigger_id: &EventId, kind: &str, reason: &str, payload: serde_json::Value) {
-        if let Some(emitter) = self.ctx.emitter.as_ref() {
-            let debug_payload = decision_trace_payload(reason, payload);
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
+        let emitter = &self.ctx.emitter;
+        let debug_payload = decision_trace_payload(reason, payload);
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
 
-            let mut hasher = DefaultHasher::new();
-            debug_payload.hash(&mut hasher);
-            let debug_hash = hasher.finish();
+        let mut hasher = DefaultHasher::new();
+        debug_payload.hash(&mut hasher);
+        let debug_hash = hasher.finish();
 
-            if self.ctx.last_delta_hash.as_ref() != Some(&debug_hash) {
-                self.ctx.last_delta_hash = Some(debug_hash);
-                emitter.emit_child(
-                    RuntimeEvent::Debug(canon_event::DebugEvent { source: "loop_stage_executor".to_string(), kind: kind.to_string(), payload: debug_payload }),
-                    vec![trigger_id.clone()],
-                    file!(),
-                    line!(),
-                );
-            }
+        if self.ctx.last_delta_hash.as_ref() != Some(&debug_hash) {
+            self.ctx.last_delta_hash = Some(debug_hash);
+            emitter.emit_child(
+                RuntimeEvent::Debug(canon_event::DebugEvent { source: "loop_stage_executor".to_string(), kind: kind.to_string(), payload: debug_payload }),
+                vec![trigger_id.clone()],
+                file!(),
+                line!(),
+            );
         }
     }
 
     fn emit_error(&self, trigger_id: &EventId, kind: &str, message: String, severity: &str, context: serde_json::Value) {
-        if let Some(emitter) = self.ctx.emitter.as_ref() {
-            emitter.emit_child(RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(kind, "loop_stage_executor", message, severity, context, None)), vec![trigger_id.clone()], file!(), line!());
-        }
+        let emitter = &self.ctx.emitter;
+        emitter.emit_child(
+            RuntimeEvent::ErrorOccurred(canon_event::new_error_occurred(
+                kind,
+                "loop_stage_executor",
+                message,
+                severity,
+                context,
+                None,
+            )),
+            vec![trigger_id.clone()],
+            file!(),
+            line!(),
+        );
     }
 
     // removed: should_reject_verifier_sequence (invariant logic moved to validation layer)
 
     // removed: should_reject_planned_action (validation layer responsibility)
 
-    fn emit_stage_result(&self, trigger_id: &EventId, result: LoopStageResult) {
-        let Some(emitter) = self.ctx.emitter.as_ref() else {
-            return;
-        };
+    fn emit_stage_result(&self, _trigger_id: &EventId, result: LoopStageResult) {
+        let emitter = &self.ctx.emitter;
         match result {
             LoopStageResult::Emit(event) => {
-                emitter.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
+                let _ = emitter.emit_located(event.clone(), file!(), line!());
+                emitter.emit_with_parents(event, vec![], file!(), line!());
             }
             LoopStageResult::EmitMany(events) => {
-                if events.len() != 1 {
-                    panic!("EmitMany used with multiple events; violates single propagation path invariant");
+                for event in events {
+                    let _ = emitter.emit_located(event.clone(), file!(), line!());
+                    emitter.emit_with_parents(event, vec![], file!(), line!());
                 }
-                let event = events.into_iter().next().unwrap();
-                emitter.emit_with_parents(event, vec![trigger_id.clone()], file!(), line!());
             }
             LoopStageResult::Deferred | LoopStageResult::Noop => {
                 // No emission here: observe stage is responsible for emitting LoopObserved exactly once
@@ -148,13 +170,8 @@ impl LoopStageExecutor {
                 panic!("observe execution mode bypass detected; violates exact-once LoopObserved invariant");
             }
         };
-        let result = match mode {
-            ObserveExecutionMode::Forced => observe::execute_forced(&mut self.ctx),
-            ObserveExecutionMode::Triggered => observe::execute(&mut self.ctx),
-            _ => {
-                panic!("observe execution mode bypass detected; violates exact-once LoopObserved invariant");
-            }
-        };
+        // CRITICAL: force observe execution to guarantee LoopObserved emission
+        let result = observe::execute_forced(&mut self.ctx);
         match result {
             Ok(LoopStageResult::Deferred) => {
                 panic!("observe execution produced Deferred; violates observe→LoopObserved invariant");
@@ -295,16 +312,15 @@ impl LoopStageExecutor {
         let task = ScheduledTask { priority, enqueued_at: Instant::now(), seq: 0, agent_id: None, plan: planned.clone() };
 
         if !planned.depends_on.is_empty() {
-            if let Some(emitter) = self.ctx.emitter.as_ref() {
-                if let Some(child) = planned.action_id.as_ref() {
-                    for dep in &planned.depends_on {
-                        emitter.emit_child(
-                            RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep.clone(), to_node_id: child.clone(), created: true }),
-                            vec![trigger_id.clone()],
-                            file!(),
-                            line!(),
-                        );
-                    }
+            let emitter = &self.ctx.emitter;
+            if let Some(child) = planned.action_id.as_ref() {
+                for dep in &planned.depends_on {
+                    emitter.emit_child(
+                        RuntimeEvent::GoalEdgeDefined(GoalEdgeDefined { from_node_id: dep.clone(), to_node_id: child.clone(), created: true }),
+                        vec![trigger_id.clone()],
+                        file!(),
+                        line!(),
+                    );
                 }
             }
             self.ctx.dep_tracker.add(task);
@@ -633,13 +649,20 @@ impl LoopStageExecutor {
     fn apply_runtime_evaluation(&mut self, trigger_id: &EventId, event: &RuntimeEvent, force_observe_recovery: bool, trigger_observe: bool) -> Option<EventOutcome> {
         let suppress_observe_on_invariant = Self::suppresses_observe_on_invariant(event);
 
+        // CRITICAL FIX: if observe is requested, do NOT short-circuit execution
+        // Allow fallthrough so execute_stage_event runs and emits LoopObserved
+        if trigger_observe && !suppress_observe_on_invariant {
+            return None;
+        }
+
         // CANONICAL DECISION → ROUTE CONSUMPTION
         if self.ctx.pending_required_successor.as_deref() == Some("decision") {
             // HARD GUARD: prevent duplicate decision consumption within same tick
             if self.ctx.last_observed_tick == Some(self.ctx.current_tick) && self.ctx.last_route_rationale.is_some() {
                 panic!("duplicate decision→RouteSelected emission in same tick; violates exactly-once invariant");
             }
-            if let Some(emitter) = self.ctx.emitter.as_ref() {
+            {
+                let emitter = &self.ctx.emitter;
                 let route = "plan".to_string();
                 emitter.emit_child(
                     RuntimeEvent::Debug(canon_event::DebugEvent {
@@ -763,14 +786,13 @@ impl LoopStageExecutor {
         }
     }
 
-    fn execute_stage_event(&mut self, trigger_id: &EventId, event: &RuntimeEvent) -> EventOutcome {
+    pub fn execute_stage_event(&mut self, trigger_id: &EventId, event: &RuntimeEvent) -> EventOutcome {
         // FIX: inject semantic-driven routing via constraint engine when observing state
-        if let RuntimeEvent::LoopObserved(_obs) = event {
+        if let RuntimeEvent::LoopObserved(obs) = event {
             use crate::exec_constraints::ExecState;
             use canon_invariant::{ConstraintContext, evaluate_constraint_context};
 
-            let summary = canon_semantic_state::SemanticStateSummary::default();
-            let state = ExecState::from_semantic_summary(&self.ctx.workspace, &summary);
+            let state = ExecState::from_semantic_summary(&self.ctx.workspace, &obs.semantic_summary);
             let decision = evaluate_constraint_context(&ConstraintContext {
                 state: state.constraint_state(),
                 route: None,
@@ -779,20 +801,51 @@ impl LoopStageExecutor {
             });
 
             eprintln!("[decision][trace] constraint_decision={:?}", decision);
+            // DO NOT emit RouteSelected here.
+            // Routing must be exclusively handled by canon-route executor.
+            // Only emit decision_trace here; route executor will enforce decision→route invariant.
+            let emitter = &self.ctx.emitter;
+
+            let trace_payload = decision_trace_payload(
+                "constraint_decision",
+                serde_json::json!({ "decision": format!("{:?}", decision) })
+            );
+
+            emitter.emit_with_parents(
+                RuntimeEvent::Debug(canon_event::DebugEvent {
+                    source: "decision".to_string(),
+                    kind: "decision_trace".to_string(),
+                    payload: trace_payload,
+                }),
+                vec![trigger_id.clone()],
+                file!(),
+                line!(),
+            );
         }
 
         let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
             return EventOutcome::NoOp("loop_stage_not_stage_event");
         };
         let res = stage.execute(&mut self.ctx, trigger_id.clone());
-        if self.ctx.emitter.is_none() {
-            return EventOutcome::NoOp("loop_stage_no_emitter");
-        }
+        // emitter is always present (Arc<dyn EventEmitter>)
         match res {
-            Ok(result) => self.emit_stage_result(trigger_id, result),
+            Ok(result) => {
+                match result {
+                    LoopStageResult::EmitMany(events) => {
+                        let emitter = &self.ctx.emitter;
+                        for ev in events {
+                            emitter.emit_with_parents(ev, vec![trigger_id.clone()], file!(), line!());
+                        }
+                        return EventOutcome::EmitMany { events: vec![], file: file!(), line: line!() };
+                    }
+                    _ => self.emit_stage_result(trigger_id, result),
+                }
+            },
             Err(err) => self.emit_error(trigger_id, "loop_stage_execution", err.to_string(), "error", serde_json::json!({ "event": format!("{:?}", event) })),
         }
-        EventOutcome::NoOp("loop_stage_async")
+        // CRITICAL: ensure observe stage executes after every stage execution
+        self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
+        EventOutcome::Emit { event: RuntimeEvent::Debug(canon_event::DebugEvent { source: "loop_stage_executor".to_string(), kind: "stage_progress".to_string(), payload: serde_json::json!({}) }), file: file!(), line: line!() }
     }
 }
 
@@ -810,7 +863,7 @@ impl EventConsumer for LoopStageExecutor {
     }
 
     fn set_emitter(&mut self, emitter: EventEmitterHandle) {
-        self.ctx.emitter = Some(emitter);
+        self.ctx.emitter = emitter;
     }
 
     #[must_emit]
@@ -819,7 +872,8 @@ impl EventConsumer for LoopStageExecutor {
         if let Some(outcome) = self.handle_recovery_event(event, &trigger_id, &recovery_eval) {
             return outcome;
         }
-        let mut trigger_observe = false;
+        // CRITICAL FIX: ensure observe runs at least once per tick to guarantee LoopObserved emission
+        let mut trigger_observe = true;
         let force_observe_recovery = Self::recovery_forces_observe(&recovery_eval);
         match event {
             RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {}

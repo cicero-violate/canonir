@@ -53,7 +53,7 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: E
         return Ok(LoopStageResult::Noop);
     }
     let filtered_batch_id = ctx.active_batch_llm_request_id.clone();
-    let _scheduler_len_before = ctx.scheduler.len();
+    // scheduler_len removed — no quantitative scheduler dependency
     let task = if let Some(batch_id) = filtered_batch_id.as_deref() { ctx.scheduler.pop_for_llm(Some(batch_id)) } else { ctx.scheduler.pop_any() };
     let task = match task {
         Some(task) => task,
@@ -202,12 +202,9 @@ fn proof_debug_event(planned: &LoopPlanned, project: &Path, proof: &GraphProofOu
 }
 
 fn emit_act_stall_with_context(ctx: &LoopContext, trigger_id: &EventId, reason: &str, extra: serde_json::Value) {
-    let Some(emitter) = ctx.emitter.as_ref() else {
-        return;
-    };
+    let emitter = &ctx.emitter;
     let mut payload = serde_json::json!({
         "reason": reason,
-        "scheduler_len": ctx.scheduler.len(),
         "pending_act_present": ctx.pending_act.is_some(),
         "active_batch_llm_request_id": ctx.active_batch_llm_request_id,
         "last_action_kind": ctx.last_action_kind,
@@ -234,14 +231,15 @@ fn emit_act_stall_with_context(ctx: &LoopContext, trigger_id: &EventId, reason: 
 #[allow(dead_code)]
 fn can_execute_act(ctx: &LoopContext) -> bool {
     if ctx.scheduler.is_empty() {
-        if let Some(emitter) = ctx.emitter.as_ref() {
+        {
+            let emitter = &ctx.emitter;
             emitter.emit_child(
                 RuntimeEvent::Debug(canon_event::DebugEvent {
                     source: "act_stage".to_string(),
                     kind: "act_blocked_empty_scheduler".to_string(),
                     payload: serde_json::json!({
                         "reason": "scheduler empty; blocking Act",
-                        "scheduler_len": ctx.scheduler.len(),
+                        "scheduler_empty": ctx.scheduler.is_empty(),
                     }),
                 }),
                 vec![],
@@ -256,13 +254,14 @@ fn can_execute_act(ctx: &LoopContext) -> bool {
 
 pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     // DEBUG: trace Act entry conditions
-    if let Some(emitter) = ctx.emitter.as_ref() {
+    {
+        let emitter = &ctx.emitter;
         emitter.emit_child(
             RuntimeEvent::Debug(canon_event::DebugEvent {
                 source: "act_stage".to_string(),
                 kind: "act_preconditions".to_string(),
                 payload: serde_json::json!({
-                    "scheduler_len": ctx.scheduler.len(),
+                    "scheduler_empty": ctx.scheduler.is_empty(),
                     "pending_act": ctx.pending_act.is_some(),
                 }),
             }),
@@ -488,7 +487,8 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                     }
                     DestructiveCmdPolicy::Warn => {
                         // emit warning
-                        if let Some(emitter) = ctx.emitter.as_ref() {
+                        {
+                            let emitter = &ctx.emitter;
                             emitter.emit_with_parents(
                                 canon_event::RuntimeEvent::Debug(canon_event::DebugEvent {
                                     source: "act_consumer".to_string(),

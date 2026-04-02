@@ -1,28 +1,68 @@
 # Violations
 
-- Routing not fully derived from SemanticStateSummary: residual event-driven conditions (e.g., event-type checks in policy/executor paths) still influence dispatch decisions.
-- Decision → Route invariant not strictly enforced: evidence of RouteSelected emission paths without guaranteed decision_trace linkage.
-- EventBus / consumer pipeline still encodes control-flow semantics indirectly (multi-consumer handling, conditional dispatch), violating linear state→decision→transition model.
-- Exact-once LoopObserved invariant relies on guards/panics across layers rather than a single canonical emission+propagation path.
-- End-to-end proof of single dispatch path (RouteSelected → dispatch) not established; multiple entrypoints (event-triggered dispatch evaluation) still present.
+## 0. scheduler_len removal — RESOLVED
+- Evidence:
+  - Diagnostics confirm removal complete
+  - ConstraintState contains no scheduler_len field
+- Outcome:
+  - Queue-driven routing eliminated
 
-## Additional Violations (from latest evidence)
+## 1. Canonical loop not executing atomically (CRITICAL)
+- Evidence:
+  - decision=30, route=107, dispatch=74, observe=0
+  - route >> decision, dispatch >> decision
+- Issue:
+  - state → decision → route → dispatch → observe not executed as a single atomic cycle
+- Required fix:
+  - enforce single loop driver
+  - guarantee full ordered execution per cycle
 
-- Multi-consumer fanout still present:
-  - Multiple consumers independently process LoopObserved, creating parallel control-flow effects.
-  - Violates requirement for single linear control-flow path.
+## 2. Observe stage not executing (CRITICAL)
+- Evidence:
+  - observe=0 across all logs
+  - no LoopObserved events
+  - executor claim contradicted by diagnostics
+- Issue:
+  - observe stage unreachable in runtime
+- Required fix:
+  - guarantee observe executes after dispatch
+  - emit exactly-once LoopObserved per cycle
+  - fail-fast if skipped
 
-- EventBus has multiple emission paths:
-  - Multiple `emit_with_parents` call sites indicate non-singleton transition emission.
-  - Violates canonical single transition requirement.
+## 3. Pipeline fragmentation / cross-cycle leakage
+- Evidence:
+  - route (107) >> decision (30)
+  - dispatch (74) >> decision (30)
+- Issue:
+  - stages executed independently or reuse stale outputs
+- Required fix:
+  - bind decision → route → dispatch to single cycle ID
+  - enforce strict 1:1:1 mapping
 
-- Control-flow remains event-driven in parts of the system:
-  - Routing and downstream behavior triggered by RuntimeEvent matching instead of semantic-state evaluation.
-  - Violates state → decision → transition principle.
+## 4. Dispatch not gated by routing
+- Evidence:
+  - dispatch significantly exceeds decision count
+- Issue:
+  - dispatch bypasses canonical routing chain
+- Required fix:
+  - require same-cycle RouteSelected before dispatch
+  - block dispatch without fresh route
 
-- End-to-end invariants not proven:
-  - No conclusive runtime evidence showing zero violations for:
-    - LoopObserved exact-once
-    - Decision → Route trace coverage
-    - Successor discharge
-  - System still lacks proof of canonical correctness.
+## 5. Invariants not enforced
+- Evidence:
+  - invariant_errors = 2123 and increasing
+- Issue:
+  - violations logged but not enforced
+- Required fix:
+  - convert invariants to fail-fast
+  - abort execution on violation
+
+## 6. System not spec-compliant
+- Evidence:
+  - missing observe stage
+  - non-atomic pipeline
+  - LoopObserved invariant not satisfied
+- Issue:
+  - canonical control-flow (state → decision → transition) not fulfilled
+- Required fix:
+  - achieve full atomic loop execution with exact invariants

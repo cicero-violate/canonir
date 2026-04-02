@@ -37,9 +37,7 @@ impl WorkspaceDirtyTracker {
 #[derive(Default)]
 pub struct RouteContext {
     pub scheduler_tick: u64,
-    // NEW: expose scheduler length for routing invariants
-    // This is the single source of truth for executable work
-    pub scheduler_len: usize,
+    // scheduler_len removed — no queue-derived state allowed in routing
     pub mission_raw: String,
     pub mission_summary: String,
     pub mission_goal_spec: Option<GoalSpec>,
@@ -414,9 +412,7 @@ impl RouteContext {
                 self.consecutive_invalid_plan_batches = 0;
                 self.last_invalid_plan_reason = None;
                 self.last_invalid_plan_planned_count = None;
-                // INVARIANT: scheduler_len must mirror planned_count exactly (derived, not authoritative)
-                self.scheduler_len = pc.planned_count;
-                eprintln!("[CONTEXT FIX] scheduler_len updated → {}", self.scheduler_len);
+                // scheduler_len removed — no queue-derived state allowed
             }
             RuntimeEvent::PlanningCompleted(pc) => {
                 self.objective_trend_state.record_planning_completion(&pc.status);

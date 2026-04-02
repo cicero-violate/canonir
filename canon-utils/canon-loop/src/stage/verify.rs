@@ -113,7 +113,7 @@ mod tests {
         std::fs::create_dir_all(workspace.join("src")).unwrap();
         std::fs::write(workspace.join("src/main.rs"), "fn main() { println!(\"ok\"); }\n").unwrap();
 
-        let mut ctx = LoopContext::new(workspace.clone(), PathBuf::from("/tmp/test.tlog"));
+        let mut ctx = LoopContext::new(workspace.clone(), PathBuf::from("/tmp/test.tlog"), canon_event::new_noop_emitter());
         ctx.last_acted = Some(canon_event::LoopActed {
             tick: 0,
             action_kind: "run_command".to_string(),

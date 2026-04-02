@@ -36,6 +36,7 @@ const MASTER_PLAN_FILE: &str = "PLAN.md";
 const VIOLATIONS_FILE: &str = "VIOLATIONS.md";
 const DIAGNOSTICS_FILE: &str = "DIAGNOSTICS.md";
 const ACTION_LOG_FILE: &str = "/workspace/ai_sandbox/canon/agent_logs/actions.jsonl";
+const SECONDARY_ACTION_LOG_FILE: &str = "/workspace/ai_sandbox/canon/agent_logs/log.jsonl";
 const WS_PORT_DEFAULT: u16 = 9103;
 const MAX_STEPS: usize = 2000;
 const MAX_FULL_READ_LINES: usize = 500;
@@ -199,7 +200,12 @@ async fn continue_executor_completion(
         role,
         prompt_kind,
         "",
-        action_result_prompt(Some(submitted.tab_id), Some(turn_id), &out),
+        action_result_prompt(
+            Some(submitted.tab_id),
+            Some(turn_id),
+            &out,
+            action.get("action").and_then(|v| v.as_str()),
+        ),
         endpoint,
         bridge,
         workspace,
@@ -232,6 +238,7 @@ async fn run_agent(
     let mut last_result: Option<String> = None;
     let mut last_tab_id: Option<u32> = None;
     let mut last_turn_id: Option<u64> = None;
+    let mut last_action: Option<String> = None;
     let mut diagnostics_eventlog_python_done = false;
     let mut idle_streak = 0usize;
 
@@ -251,7 +258,7 @@ async fn run_agent(
             )
         } else {
             let result = last_result.as_deref().unwrap_or("");
-            (String::new(), action_result_prompt(last_tab_id, last_turn_id, result))
+            (String::new(), action_result_prompt(last_tab_id, last_turn_id, result, last_action.as_deref()))
         };
         let exchange_id = make_command_id(role, prompt_kind, step + 1);
 
@@ -479,6 +486,7 @@ async fn run_agent(
 
         let kind = action.get("action").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
         eprintln!("[{role}] step={} action={}", step + 1, kind);
+        last_action = Some(kind.clone());
         append_orchestration_trace(
             "llm_message_processed",
             json!({
@@ -1320,19 +1328,14 @@ async fn main() -> Result<()> {
                                     if let Some(active_tab) = dispatch_state.lane_active_tab.get(&lane_id) {
                                         if *active_tab != tab_id {
                                             eprintln!(
-                                                "[orchestrate] submit ack tab mismatch: lane={} active_tab={} ack_tab={}",
+                                                "[orchestrate] submit ack tab mismatch: lane={} active_tab={} ack_tab={} (overwriting active tab)",
                                                 lanes[lane_id].label,
                                                 active_tab,
                                                 tab_id
                                             );
-                                   dispatch_state.lane_submit_in_flight.insert(lane_id, false);
-                                   let lane = dispatch_lane_mut(&mut dispatch_state, lane_id);
-                                            lane.in_progress_by = None;
-                                            lane.pending = true;
-                                            continue;
                                         }
                                     }
-                                    dispatch_state.lane_active_tab.entry(lane_id).or_insert(tab_id);
+                                    dispatch_state.lane_active_tab.insert(lane_id, tab_id);
                                     dispatch_state
                                         .tab_id_to_lane
                                         .entry(tab_id)
@@ -1475,20 +1478,10 @@ async fn main() -> Result<()> {
                     Ok((submitted, turn_id, result)) => match result {
                         Ok(final_exec_result) => {
                             dispatch_state.lane_prompt_in_flight.insert(submitted.lane, false);
-                            if completed_turn_is_done(&final_exec_result) {
-                                verifier_queue.push_back((submitted, turn_id, final_exec_result));
-                                cycle_progress = true;
-                            } else {
-                                eprintln!(
-                                    "[orchestrate] executor continuation not done: lane={} turn_id={}",
-                                    submitted.lane_label,
-                                    turn_id
-                                );
-                                let lane = dispatch_lane_mut(&mut dispatch_state, submitted.lane);
-                                lane.in_progress_by = None;
-                                lane.pending = true;
-                                cycle_progress = true;
-                            }
+                            // Continuations only return once the executor has reached `done`,
+                            // and the returned value is the done reason (not the raw action JSON).
+                            verifier_queue.push_back((submitted, turn_id, final_exec_result));
+                            cycle_progress = true;
                         }
                         Err(err) => {
                             eprintln!(

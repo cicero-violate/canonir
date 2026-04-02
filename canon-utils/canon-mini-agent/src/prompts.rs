@@ -385,12 +385,28 @@ pub(crate) fn is_explicit_idle_action(action: &Value) -> bool {
 }
 
 
-pub(crate) fn action_result_prompt(tab_id: Option<u32>, turn_id: Option<u64>, result: &str) -> String {
+fn other_available_actions(last_action: Option<&str>) -> String {
+    let all_actions = "Available actions: list_dir, read_file, apply_patch, run_command, python, done.";
+    match last_action {
+        Some(action) if !action.trim().is_empty() => {
+            format!("{all_actions} You may reuse the recent action: {action}.")
+        }
+        _ => all_actions.to_string(),
+    }
+}
+
+pub(crate) fn action_result_prompt(
+    tab_id: Option<u32>,
+    turn_id: Option<u64>,
+    result: &str,
+    last_action: Option<&str>,
+) -> String {
     let tab_label = tab_id.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string());
     let turn_label = turn_id.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string());
     format!(
-        "TAB_ID: {tab_label}\nTURN_ID: {turn_label}\n\nAction result:\n{}\n\nEmit exactly one action.",
-        truncate(result, MAX_SNIPPET)
+        "TAB_ID: {tab_label}\nTURN_ID: {turn_label}\n\nAction result:\n{}\n\n{}\nEmit exactly one action.",
+        truncate(result, MAX_SNIPPET),
+        other_available_actions(last_action),
     )
 }
 

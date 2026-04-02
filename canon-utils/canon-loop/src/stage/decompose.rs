@@ -14,9 +14,7 @@ pub fn execute(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: EventId) ->
     let Some(goal_text) = goal else {
         return Ok(LoopStageResult::Noop);
     };
-    let Some(emitter) = ctx.emitter.as_ref() else {
-        return Ok(LoopStageResult::Noop);
-    };
+    let emitter = &ctx.emitter;
 
     let request_id = Uuid::new_v4().to_string();
     let prompt = build_decompose_prompt(&goal_text);

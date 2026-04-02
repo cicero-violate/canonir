@@ -53,6 +53,14 @@ impl Callbacks for RustcCaptureCallbacks {
             install_panic_hook();
             let crate_name = self.crate_name.as_deref().unwrap_or("unknown");
             let tlog_path = workspace_root.join("state/event_log/event.tlog");
+            crate::log::append_rustc_warning_with_root(
+                &workspace_root,
+                &format!(
+                    "canon_kernel: capture_mode={} env_CANON_RUSTC_CAPTURE_MODE={:?}",
+                    self.capture_mode.as_str(),
+                    std::env::var("CANON_RUSTC_CAPTURE_MODE").ok()
+                ),
+            );
             let capture_started_id = emit_capture_started(&tlog_path, crate_name, self.capture_mode).ok();
             if let Ok(mut writer) = TlogWriter::open(&tlog_path) {
                 if let Err(err) = writer.write_session(crate_name) {

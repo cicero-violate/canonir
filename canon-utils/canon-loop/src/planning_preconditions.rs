@@ -347,7 +347,6 @@ fn validate_validation_action_constraints(actions: &[canon_event::LoopPlanned], 
             failure_scope_workspace,
             failure_scope_tooling,
             route_objective_contradiction: false,
-            scheduler_len: 0,
             has_plan: false,
         },
         route: None,
@@ -402,7 +401,6 @@ pub fn validate_objective_route_plan_alignment(
             failure_scope_workspace,
             failure_scope_tooling,
             route_objective_contradiction: false,
-            scheduler_len: 0,
             has_plan: false,
         },
         route: match route_choice {
@@ -663,7 +661,6 @@ fn validate_no_actionable_failure(_actions: &[canon_event::LoopPlanned], action_
                 failure_scope_workspace,
                 failure_scope_tooling,
                 route_objective_contradiction: false,
-                scheduler_len: 0,
                 has_plan: false,
             },
             route: None,
@@ -745,7 +742,6 @@ fn validate_repair_action_legality(actions: &[canon_event::LoopPlanned], target_
         failure_scope_workspace,
         failure_scope_tooling,
         route_objective_contradiction: false,
-        scheduler_len: 0,
         has_plan: false,
     };
     for planned in actions {

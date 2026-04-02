@@ -66,18 +66,18 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
         ));
     }
     // CRITICAL INVARIANT CHECK: ensure scheduler is never empty after plan entry
-    if ctx.scheduler.len() == 0 && ctx.last_observed.is_some() {
+    if ctx.scheduler.is_empty() && ctx.last_observed.is_some() {
         eprintln!("[PLAN WARNING] scheduler empty at plan entry with observed state present");
     }
     let Some(observed) = ctx.last_observed.clone() else {
         // NO BOOTSTRAP: allow zero-task planning → observe recovery
         eprintln!("[PLAN] no observed state → zero-task PlanningCompleted (observe recovery)");
-        let scheduler_len_after = ctx.scheduler.len();
+        let scheduler_empty_after = ctx.scheduler.is_empty();
         eprintln!("[PLAN RESULT] no_tasks_produced");
-        if scheduler_len_after == 0 {
+        if scheduler_empty_after {
             eprintln!("[PLAN ERROR] no tasks produced");
         }
-        if scheduler_len_after == 0 {
+        if scheduler_empty_after {
             // NO FALLBACK: preserve zero-task planning to trigger observe recovery
         }
 
@@ -86,7 +86,7 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
             RuntimeEvent::PlanningCompleted(PlanningCompleted {
                 tick: rs.tick,
                 llm_request_id: None,
-                planned_count: ctx.scheduler.len(),
+                planned_count: if ctx.scheduler.is_empty() { 0 } else { 1 },
                 status: "missing_semantic_context".to_string(),
             })
         ));
@@ -848,7 +848,6 @@ fn planning_constraint_state(semantic_summary: &SemanticStateSummary) -> Constra
         failure_scope_workspace,
         failure_scope_tooling,
         route_objective_contradiction: false,
-        scheduler_len: 0,
         has_plan: false,
     }
 }
@@ -1002,7 +1001,8 @@ fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: E
     ctx.last_prompted_goal = observed.goal_text.clone();
     ctx.last_planned_observed_tick = Some(observed.tick);
 
-    if let Some(emitter) = ctx.emitter.as_ref() {
+    {
+        let emitter = &ctx.emitter;
         emitter.emit_with_parents(
             RuntimeEvent::ToolCall(ToolCall {
                 node_id: "plan_consumer".to_string(),
@@ -1078,7 +1078,8 @@ fn check_llm_timeout(ctx: &mut LoopContext, current_tick: u64) -> Option<Plannin
 }
 
 fn emit_tool_result(ctx: &LoopContext, tool_call_id: &str, request_id: &str, success: bool, trigger_id: &EventId) -> anyhow::Result<()> {
-    if let Some(emitter) = ctx.emitter.as_ref() {
+    {
+        let emitter = &ctx.emitter;
         emitter.emit_with_parents(
             RuntimeEvent::ToolResult(ToolResult {
                 node_id: "plan_consumer".to_string(),

@@ -94,14 +94,12 @@ pub struct ConstraintState {
     pub failure_scope_workspace: bool,
     pub failure_scope_tooling: bool,
     pub route_objective_contradiction: bool,
-    pub scheduler_len: usize,
     pub has_plan: bool,
 }
 
 // MINIMAL decision input (SINGLE SOURCE OF TRUTH)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DecisionState {
-    pub scheduler_len: usize,
     pub has_plan: bool,
 }
 
@@ -967,7 +965,6 @@ mod tests {
     fn constraint_engine_rewrites_route_on_state_drift() {
         let decision = evaluate_constraint_context(&ConstraintContext {
             state: ConstraintState {
-                scheduler_len: 0,
                 has_plan: false,
                 semantic_path_exists: false,
                 semantic_cargo_project: false,
@@ -1046,7 +1043,6 @@ mod tests {
         for (real_path_exists, real_cargo_project, action, expected) in reals {
             let decision = evaluate_constraint_context(&ConstraintContext {
                 state: ConstraintState {
-                    scheduler_len: 0,
                     has_plan: false,
                     semantic_path_exists: real_path_exists,
                     semantic_cargo_project: real_cargo_project,
@@ -1395,7 +1391,6 @@ mod tests {
                                 };
                                 let state = match drift {
                                     DriftAxis::Clean => ConstraintState {
-                                        scheduler_len: 0,
                                         has_plan: false,
                                         semantic_path_exists: true,
                                         semantic_cargo_project: false,
@@ -1413,7 +1408,6 @@ mod tests {
                                         route_objective_contradiction: false,
                                     },
                                     DriftAxis::Drifted => ConstraintState {
-                                        scheduler_len: 0,
                                         has_plan: false,
                                         semantic_path_exists: false,
                                         semantic_cargo_project: false,
@@ -1465,7 +1459,6 @@ mod tests {
     impl SyntheticLoopState {
         fn as_constraint_state(self) -> ConstraintState {
             ConstraintState {
-                scheduler_len: 0,
                 has_plan: false,
                 semantic_path_exists: self.semantic_path_exists,
                 semantic_cargo_project: self.semantic_cargo_project,

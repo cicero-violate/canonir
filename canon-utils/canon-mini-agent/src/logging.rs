@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use crate::{ACTION_LOG_FILE, MAX_SNIPPET};
+use crate::{ACTION_LOG_FILE, MAX_SNIPPET, SECONDARY_ACTION_LOG_FILE};
 use crate::prompts::{action_observation, action_rationale, parse_actions, truncate};
 
 fn patch_summary_path(patch: &str) -> Option<&str> {
@@ -60,17 +60,27 @@ fn observation_and_rationale_from_text(text: &str) -> (Option<String>, Option<St
     )
 }
 
+fn append_record_to_path(path: &PathBuf, record: &Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    writeln!(file, "{}", serde_json::to_string(record)?)
+        .with_context(|| format!("failed to append {}", path.display()))?;
+    Ok(())
+}
+
 pub(crate) fn append_action_log_record(record: &Value) -> Result<()> {
     static LOG_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
     let lock = LOG_MUTEX.get_or_init(|| Mutex::new(()));
     let _guard = lock.lock().expect("action log mutex poisoned");
 
-    let path = PathBuf::from(ACTION_LOG_FILE);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-    writeln!(file, "{}", serde_json::to_string(record)?).with_context(|| format!("failed to append {}", path.display()))?;
+    let primary = PathBuf::from(ACTION_LOG_FILE);
+    append_record_to_path(&primary, record)?;
     Ok(())
 }
 
@@ -222,6 +232,56 @@ fn filtered_payload_meta(payload: &Value) -> Option<Value> {
     }
 }
 
+fn inject_action_fields(record: &mut Value, action: &Value) {
+    let Some(obj) = record.as_object_mut() else {
+        return;
+    };
+    let mut insert_if_missing = |key: &str, value: Option<Value>| {
+        if obj.contains_key(key) {
+            return;
+        }
+        if let Some(value) = value.and_then(compact_json) {
+            obj.insert(key.to_string(), value);
+        }
+    };
+    insert_if_missing("action", action.get("action").cloned());
+    insert_if_missing("path", action.get("path").cloned());
+    insert_if_missing("line", action.get("line").cloned());
+}
+
+fn append_secondary_action_log(role: &str, action: &Value) -> Result<()> {
+    static SECONDARY_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    let lock = SECONDARY_MUTEX.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().expect("secondary action log mutex poisoned");
+
+    let mut record = serde_json::Map::new();
+    record.insert("agent_role".to_string(), Value::String(role.to_string()));
+    record.insert(
+        "timestamp".to_string(),
+        json!(canon_llm::endpoint_worker::tab_manager_now_ms()),
+    );
+    if let Some(value) = action.get("observation").cloned().and_then(compact_json) {
+        record.insert("observation".to_string(), value);
+    }
+    if let Some(value) = action.get("action").cloned().and_then(compact_json) {
+        record.insert("action".to_string(), value);
+    }
+    if let Some(value) = action.get("path").cloned().and_then(compact_json) {
+        record.insert("path".to_string(), value);
+    }
+    if let Some(value) = action.get("line").cloned().and_then(compact_json) {
+        record.insert("line".to_string(), value);
+    }
+    if let Some(value) = action.get("rationale").cloned().and_then(compact_json) {
+        record.insert("rationale".to_string(), value);
+    }
+    if record.is_empty() {
+        return Ok(());
+    }
+    let path = PathBuf::from(SECONDARY_ACTION_LOG_FILE);
+    append_record_to_path(&path, &Value::Object(record))
+}
+
 pub(crate) fn append_message_log(
     role: &str,
     endpoint: &LlmEndpoint,
@@ -279,7 +339,7 @@ pub(crate) fn append_action_log(role: &str, endpoint: &LlmEndpoint, _prompt_kind
         (true, false) => Some(rationale.to_string()),
         (true, true) => None,
     };
-    let record = compact_log_record(
+    let mut record = compact_log_record(
         "tool",
         "request",
         Some(role),
@@ -295,7 +355,9 @@ pub(crate) fn append_action_log(role: &str, endpoint: &LlmEndpoint, _prompt_kind
         text,
         None,
     );
-    append_action_log_record(&record)
+    inject_action_fields(&mut record, action);
+    append_action_log_record(&record)?;
+    append_secondary_action_log(role, action)
 }
 
 pub(crate) fn append_action_result_log(
@@ -308,7 +370,7 @@ pub(crate) fn append_action_result_log(
     success: bool,
     result_text: &str,
 ) -> Result<()> {
-    let record = compact_log_record(
+    let mut record = compact_log_record(
         "tool",
         "result",
         Some(role),
@@ -324,6 +386,7 @@ pub(crate) fn append_action_result_log(
         Some(result_text.to_string()),
         None,
     );
+    inject_action_fields(&mut record, action);
     append_action_log_record(&record)
 }
 
@@ -335,7 +398,7 @@ pub(crate) fn append_llm_completion_log(
     action: &Value,
 ) -> Result<()> {
     let text = serde_json::to_string(action).ok();
-    let record = compact_log_record(
+    let mut record = compact_log_record(
         "llm",
         "completion",
         Some(role),
@@ -351,6 +414,7 @@ pub(crate) fn append_llm_completion_log(
         text,
         None,
     );
+    inject_action_fields(&mut record, action);
     append_action_log_record(&record)
 }
 

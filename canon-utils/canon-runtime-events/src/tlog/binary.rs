@@ -347,8 +347,7 @@ impl BinarySegmentWriter {
             eprintln!("[tlog][pending_set] after_kind={} after_id={} next_expected={:?}", event.kind, event.id, next_expected);
             *self.pending.lock().expect("pending poisoned") = next;
         }
-        // After all validation and FSM checks, actually write the event
-        self.write_canon_event_inner(&event)
+        Ok(())
     }
 
     fn write_canon_event_inner(&self, event: &CanonEvent) -> Result<()> {
@@ -374,7 +373,6 @@ impl BinarySegmentWriter {
         let seq = self.seq.fetch_add(1, Ordering::Relaxed);
 
         let mut guard = self.inner.lock().expect("binary segment writer poisoned");
-        eprintln!("[tlog][debug] writing to dir: {:?}", self.dir);
         // TEMP DEBUG: disable file locking to test write persistence
         // guard.log.get_ref().lock_exclusive()?;
 
@@ -390,7 +388,6 @@ impl BinarySegmentWriter {
         }
 
         let record_pos = guard.size;
-        eprintln!("[tlog][debug] writing {} bytes at pos {}", line_len, record_pos);
         guard.log.write_all(&line)?;
         guard.size = guard.size.saturating_add(line_len);
         guard.records = guard.records.saturating_add(1);
@@ -416,9 +413,8 @@ impl BinarySegmentWriter {
             guard.time.get_ref().sync_data()?;
         }
         // guard.log.get_ref().unlock()?;
-        *self.last_event.lock().expect("last_event poisoned") = Some(event.clone());
-        // After all validation and FSM checks, actually write the event
-        self.write_canon_event_inner(&event)
+        *self.last_event.lock().expect("last_event poisoned") = Some(event);
+        Ok(())
     }
 
     fn check_invalid_retry(&self, event: &CanonEvent) -> Result<Option<anyhow::Error>> {

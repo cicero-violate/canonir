@@ -2343,7 +2343,16 @@ fn assert_planner_recovery_row(row: &PlannerRecoveryRow) {
 }
 
 fn assert_reward_semantics_row(row: &RewardSemanticsRow) {
-    let mut ctx = canon_loop::LoopContext::new("/tmp/example".into(), "/tmp/tlog".into());
+    use std::sync::Arc;
+    use canon_event::EventEmitter;
+
+    struct NoopEmitter;
+    impl EventEmitter for NoopEmitter {
+        fn emit_with_parents(&self, _event: canon_event::RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {}
+    }
+
+    let emitter = Arc::new(NoopEmitter);
+    let mut ctx = canon_loop::LoopContext::new("/tmp/example".into(), "/tmp/tlog".into(), emitter);
     ctx.last_action_kind = row.last_action_kind.to_string();
     ctx.recent_execution_results = row.recent_execution_results.clone();
     ctx.last_verifier_reward_bias = Some(if row.compiler_clean { "positive".to_string() } else { "negative".to_string() });
