@@ -1,5 +1,8 @@
 # PLAN: Spec-Derived Execution Index
 
+STOP TOUCH CANON-MINI-AGENT!!!
+
+
 ## Canonical Inputs
 - Spec: `PLANS/SPEC.md`
 - Diagnostics: `PLANS/diagnostics.md`
