@@ -370,5 +370,3 @@ Canon = semantic state + judgment + invariants + canonical transitions + event-s
 
 English: this version makes the identity explicit: **Canon is event-sourced**, while semantic state is still the routing authority and events are the canonical control/history substrate.
 
-
-
