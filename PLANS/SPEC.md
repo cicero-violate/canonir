@@ -69,7 +69,7 @@ Where:
 
 ## Verification Commands
 
-1. `cargo build -p canon-route -p canon-loop -p canon-runtime -p canon-mini-agent`
+1. `cargo build -p canon-route -p canon-loop -p canon-runtime -p`
 2. `cargo run --bin canon-runtime-supervisor 2>&1 | tee /tmp/runtime.trace`
 3. `rg -n "planning_completed|route_selected|loop_observed|loop_acted|RequestDispatch|DECIDE TRACE|ROUTE TRACE" /tmp/runtime.trace`
 4. `rg -n "scheduler_len" canon-utils/canon-route canon-utils/canon-loop canon-utils/canon-runtime canon-utils/canon-invariant`
