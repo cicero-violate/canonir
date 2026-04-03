@@ -15,7 +15,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
-type WorkerKey = (String, Vec<String>, bool, usize);
+type WorkerKey = (String, bool, usize);
 static WORKERS: Lazy<Mutex<HashMap<WorkerKey, mpsc::Sender<LlmWorkItem>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
 pub fn llm_worker_new_tabs() -> TabManagerHandle {
@@ -270,14 +270,14 @@ fn should_retry_send_turn(err: &WsBridgeError) -> bool {
     matches!(err, WsBridgeError::Timeout | WsBridgeError::Cancelled | WsBridgeError::NoTab | WsBridgeError::NotConnected)
 }
 pub async fn llm_worker_send_request(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
+    bridge: &WsBridge, endpoint_id: &str, urls: &[String], stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
     phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool,
 ) -> Result<String> {
     let (req_id, resp) =
         llm_worker_send_request_with_req_id_timeout(
             bridge,
             endpoint_id,
-            url,
+            urls,
             stateful,
             prompt,
             role_schema,
@@ -297,13 +297,13 @@ pub async fn llm_worker_send_request(
 }
 
 pub async fn llm_worker_send_request_with_req_id(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
+    bridge: &WsBridge, endpoint_id: &str, urls: &[String], stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
     phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool,
 ) -> Result<(u64, LlmResponse)> {
     llm_worker_send_request_with_req_id_timeout(
         bridge,
         endpoint_id,
-        url,
+        urls,
         stateful,
         prompt,
         role_schema,
@@ -321,14 +321,14 @@ pub async fn llm_worker_send_request_with_req_id(
 }
 
 pub async fn llm_worker_send_request_timeout(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
+    bridge: &WsBridge, endpoint_id: &str, urls: &[String], stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
     phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool, response_timeout_secs: Option<u64>,
 ) -> Result<String> {
     let (req_id, resp) =
         llm_worker_send_request_with_req_id_timeout(
             bridge,
             endpoint_id,
-            url,
+            urls,
             stateful,
             prompt,
             role_schema,
@@ -348,7 +348,7 @@ pub async fn llm_worker_send_request_timeout(
 }
 
 pub async fn llm_worker_send_request_with_req_id_timeout(
-    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
+    bridge: &WsBridge, endpoint_id: &str, urls: &[String], stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
     phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool, response_timeout_secs: Option<u64>,
 ) -> Result<(u64, LlmResponse)> {
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
@@ -359,7 +359,7 @@ pub async fn llm_worker_send_request_with_req_id_timeout(
         let (tx_worker, rx_worker) = mpsc::channel(1);
         let worker = LlmWorker {
             endpoint_id: endpoint_id.to_string(),
-            url: vec![url.to_string()],
+            url: urls.to_vec(),
             max_tabs,
             stateful,
             bridge: bridge.clone(),
@@ -372,14 +372,14 @@ pub async fn llm_worker_send_request_with_req_id_timeout(
         tx_worker
     } else {
         let mut workers = WORKERS.lock().await;
-        let worker_key = (endpoint_id.to_string(), vec![url.to_string()], stateful, std::sync::Arc::as_ptr(tabs) as usize);
+        let worker_key = (endpoint_id.to_string(), stateful, std::sync::Arc::as_ptr(tabs) as usize);
         if let Some(sender) = workers.get(&worker_key) {
             sender.clone()
         } else {
             let (tx_worker, rx_worker) = mpsc::channel(64);
             let worker = LlmWorker {
                 endpoint_id: endpoint_id.to_string(),
-                url: vec![url.to_string()],
+                url: urls.to_vec(),
                 max_tabs,
                 stateful,
                 bridge: bridge.clone(),
@@ -416,7 +416,7 @@ pub async fn llm_worker_init_workers(bridge: &WsBridge, config: &CapabilityConfi
         if !endpoint.stateful {
             continue;
         }
-        let worker_key = (endpoint.id.clone(), endpoint.url.clone(), endpoint.stateful, std::sync::Arc::as_ptr(tabs) as usize);
+        let worker_key = (endpoint.id.clone(), endpoint.stateful, std::sync::Arc::as_ptr(tabs) as usize);
         if workers.contains_key(&worker_key) {
             continue;
         }

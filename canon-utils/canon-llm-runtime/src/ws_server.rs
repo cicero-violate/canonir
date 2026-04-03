@@ -101,6 +101,10 @@ struct ServerState {
 
     /// All live tabs reported by the extension.
     live_tabs: std::collections::HashSet<u32>,
+    /// tabId -> last known URL.
+    tab_urls: HashMap<u32, String>,
+    /// URL -> queue of pre-opened tab IDs (TAB_READY without reqId).
+    preopened_tabs_by_url: HashMap<String, std::collections::VecDeque<u32>>,
 
     /// TURN frames buffered while the extension WS is disconnected.
     /// Drained into out_tx the moment a new connection is established,
@@ -136,6 +140,8 @@ impl ServerState {
             pending_new_chat: HashMap::new(),
             pending_temp_chat: HashMap::new(),
             live_tabs: std::collections::HashSet::new(),
+            tab_urls: HashMap::new(),
+            preopened_tabs_by_url: HashMap::new(),
             turn_replay_queue: Vec::new(),
             completed_turns: Vec::new(),
             frame_counter: 0,
@@ -177,6 +183,18 @@ impl WsBridge {
         }
 
         rx.await.map_err(|_| WsBridgeError::Cancelled)
+    }
+
+    /// Claim an already-open tab that reported TAB_READY without a reqId.
+    pub async fn claim_tab_for_url(&self, url: &str) -> Option<u32> {
+        let mut st = self.state.lock().await;
+        if let Some(queue) = st.preopened_tabs_by_url.get_mut(url) {
+            if let Some(tab_id) = queue.pop_front() {
+                let _ = st.send(json!({ "type": "CLAIM_TAB", "tabId": tab_id, "url": url }));
+                return Some(tab_id);
+            }
+        }
+        None
     }
 
     /// Send a TURN to `tab_id` and wait for the assembled response.
@@ -487,6 +505,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             let url = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let mut st = state.lock().await;
             st.live_tabs.insert(tab_id);
+            st.tab_urls.insert(tab_id, url.to_string());
             let site = SiteType::from_url(url);
             st.tab_assemblers.entry(tab_id).and_modify(|asm| asm.set_site(site)).or_insert_with(|| FrameAssembler::new(site));
         }
@@ -498,6 +517,11 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
             };
             let mut st = state.lock().await;
             st.live_tabs.remove(&tab_id);
+            if let Some(url) = st.tab_urls.remove(&tab_id) {
+                if let Some(queue) = st.preopened_tabs_by_url.get_mut(&url) {
+                    queue.retain(|id| *id != tab_id);
+                }
+            }
             st.tab_assemblers.remove(&tab_id);
             st.pending.retain(|(tid, _), _| *tid != tab_id);
             st.pending_turn_id.remove(&tab_id);
@@ -512,16 +536,40 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                 None => return,
             };
             let url = msg.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let original_url = msg.get("originalUrl").and_then(|v| v.as_str());
             let req_id = msg.get("reqId").and_then(|v| v.as_u64());
 
             let mut st = state.lock().await;
             let site = SiteType::from_url(url);
             st.tab_assemblers.entry(tab_id).and_modify(|asm| asm.set_site(site)).or_insert_with(|| FrameAssembler::new(site));
+            st.tab_urls.insert(tab_id, url.to_string());
 
             if let Some(rid) = req_id {
                 if let Some(tx) = st.pending_open.remove(&rid) {
                     let _ = tx.send(tab_id);
                 }
+            } else {
+                let queue = st.preopened_tabs_by_url.entry(url.to_string()).or_default();
+                if !queue.contains(&tab_id) {
+                    queue.push_back(tab_id);
+                }
+                if let Some(orig) = original_url {
+                    let queue = st.preopened_tabs_by_url.entry(orig.to_string()).or_default();
+                    if !queue.contains(&tab_id) {
+                        queue.push_back(tab_id);
+                    }
+                }
+            }
+        }
+
+        "TAB_CLAIMED" => {
+            let tab_id = match msg.get("tabId").and_then(|v| v.as_u64()) {
+                Some(id) => id as u32,
+                None => return,
+            };
+            let mut st = state.lock().await;
+            for queue in st.preopened_tabs_by_url.values_mut() {
+                queue.retain(|id| *id != tab_id);
             }
         }
 

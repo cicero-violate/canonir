@@ -37,6 +37,12 @@ pub async fn tab_manager_get_or_open_tab(bridge: &WsBridge, endpoint_id: &str, u
         return Ok(id);
     }
     bridge.wait_for_connection().await;
+    if let Some(id) = bridge.claim_tab_for_url(url).await {
+        tab_manager_log_llm(format!("endpoint={} claimed_existing_tab={} url={}", endpoint_id, id, url));
+        tab_manager_set_tab_id(endpoint_id, id, tabs, _max_tabs).await;
+        tab_manager_mark_tab_in_flight(tabs, id, true).await;
+        return Ok(id);
+    }
     tab_manager_log_llm(format!("endpoint={} opening_new_tab url={}", endpoint_id, url));
     let open = bridge.open_fresh_tab_with_url(url.to_string());
     let id = match tokio::time::timeout(std::time::Duration::from_secs(20), open).await {

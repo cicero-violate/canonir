@@ -45,6 +45,13 @@ function makeConnection(url) {
 
     ws.onopen = () => {
       console.log(`[BG] WS connected to ${url}`);
+      chrome.tabs.query({ url: TAB_QUERY_PATTERNS }, (tabs) => {
+        for (const tab of tabs) {
+          if (!tab?.id || !tab?.url) continue;
+          const originalUrl = tabOriginalUrls.get(tab.id) ?? tab.url;
+          send({ type: "TAB_READY", tabId: tab.id, url: tab.url, reqId: null, originalUrl });
+        }
+      });
       while (queue.length) ws.send(queue.shift());
       if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(() => {
@@ -160,7 +167,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     const reqId = pendingOpenReqIds.get(tabId) ?? null;
     pendingOpenReqIds.delete(tabId);
-    sendToOwner(tabId, { type: "TAB_READY", tabId, url: message.url, reqId });
+    const originalUrl = tabOriginalUrls.get(tabId) ?? null;
+    const payload = { type: "TAB_READY", tabId, url: message.url, reqId, originalUrl };
+    const owner = tabWsOwner.get(tabId);
+    if (owner) {
+      owner(payload);
+    } else {
+      runtimeConn.send(payload);
+      for (const conn of miniAgentConns) {
+        conn.send(payload);
+      }
+    }
     sendResponse({ ok: true });
     return true;
   }
@@ -278,6 +295,17 @@ function handleRustMessage(msg, sendFn) {
       mode: "auto",
       turn_id: turnId
     });
+    return;
+  }
+
+  if (msg?.type === "CLAIM_TAB") {
+    const targetTabId = msg.tabId;
+    if (!targetTabId) return;
+    tabWsOwner.set(targetTabId, sendFn);
+    if (msg.url) tabOriginalUrls.set(targetTabId, msg.url);
+    for (const conn of [runtimeConn, ...miniAgentConns]) {
+      if (conn.send !== sendFn) conn.send({ type: "TAB_CLAIMED", tabId: targetTabId });
+    }
     return;
   }
 }
