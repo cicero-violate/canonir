@@ -210,7 +210,7 @@ pub fn apply_route_policy(ctx: &RouteContext, state: RoutePolicyState, decision:
 }
 
 #[allow(dead_code)]
-enum RouteProposal {
+pub enum RouteProposal {
     DeterministicRouteDecision(DeterministicRouteDecision),
     StateDriftObserve,
     PlannerDiscoveryReplan,
@@ -330,6 +330,11 @@ impl RouteProposal {
             },
         }
     }
+
+// Public entrypoint for semantic routing
+pub fn route(ctx: &crate::context::RouteContext) -> Option<RouteProposal> {
+    dispatch_route_proposal(ctx)
+}
 }
 
 fn derive_deterministic_route_from_constraints(ctx: &RouteContext, proposal: RouteProposal) -> DeterministicRouteDecision {

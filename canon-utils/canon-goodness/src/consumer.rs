@@ -51,11 +51,7 @@ impl EventConsumer for GoodnessConsumer {
                 store.append_goodness(v.tick, g_now, delta);
             }
 
-            return EventOutcome::emit(
-                RuntimeEvent::GoodnessSnapshot(canon_event::GoodnessSnapshot { tick: v.tick, g: g_now, delta_g: delta, metrics: serde_json::to_value(&metrics).unwrap_or_default() }),
-                file!(),
-                line!(),
-            );
+            panic!("GoodnessConsumer must not emit RuntimeEvent directly; emission must be routed through SemanticStateSummary-driven canonical pipeline");
         }
         EventOutcome::NoOp("goodness_noop")
     }

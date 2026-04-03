@@ -454,9 +454,9 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
             let mut rewrite_debug_event = None;
             match validate_exec_action(&exec_state, &exec_action) {
                 ExecDecision::Allow => {}
-                ExecDecision::Forbid(reason) => {
+                ExecDecision::Forbid(_reason) => {
                     ctx.mark_batch_inline_completion(planned, false);
-                    return Ok(LoopStageResult::Emit(emit_exec_constraint_rejection(planned, reason)));
+                    panic!("act stage must not emit RuntimeEvent directly; routing/emission must be driven by SemanticStateSummary via canonical pipeline");
                 }
                 ExecDecision::Rewrite(rewritten, reason) => {
                     rewrite_debug_event = Some(RuntimeEvent::Debug(canon_event::DebugEvent {
@@ -479,14 +479,14 @@ fn dispatch_plan(ctx: &mut LoopContext, planned: &LoopPlanned, trigger_id: &Even
                 ExecAction::RunCommand { cmd, cwd } => (cmd.as_str(), cwd.to_string_lossy().to_string()),
                 ExecAction::Other { .. } => {
                     ctx.mark_batch_inline_completion(planned, false);
-                    return Ok(LoopStageResult::Emit(emit_exec_constraint_rejection(planned, "meta_invariant_tool_selection_correctness: unsupported rewritten action kind")));
+                    panic!("act stage must not emit RuntimeEvent directly; routing/emission must be driven by SemanticStateSummary via canonical pipeline");
                 }
             };
             if is_potentially_destructive(cmd, &ctx.workspace) {
                 match ctx.destructive_cmd_policy {
                     DestructiveCmdPolicy::Block => {
                         ctx.mark_batch_inline_completion(planned, false);
-                        return Ok(LoopStageResult::Emit(emit_missing_args(planned, "rejected_destructive_command")));
+                        panic!("act stage must not emit RuntimeEvent directly; routing/emission must be driven by SemanticStateSummary via canonical pipeline");
                     }
                     DestructiveCmdPolicy::Warn => {
                         // emit warning
@@ -1226,6 +1226,7 @@ fn emit_missing_args(_planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
     RuntimeEvent::Debug(canon_event::DebugEvent { source: "act_stage".to_string(), kind: "loop_acted_blocked_missing_args".to_string(), payload: serde_json::json!({ "reason": reason }) })
 }
 
+#[allow(dead_code)]
 fn emit_exec_constraint_rejection(_planned: &LoopPlanned, reason: &str) -> RuntimeEvent {
     // HARD FIX: never emit LoopActed for constraint rejection (non-actionable path)
     RuntimeEvent::Debug(canon_event::DebugEvent { source: "act_stage".to_string(), kind: "loop_acted_blocked_exec_constraint".to_string(), payload: serde_json::json!({ "reason": reason }) })

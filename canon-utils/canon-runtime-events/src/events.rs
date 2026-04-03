@@ -1222,16 +1222,7 @@ pub enum EventFilter {
 /// Returning `()` is a compile error — every path must declare intent.
 #[derive(Debug)]
 pub enum EventOutcome {
-    Emit {
-        event: RuntimeEvent,
-        file: &'static str,
-        line: u32,
-    },
-    EmitMany {
-        events: Vec<RuntimeEvent>,
-        file: &'static str,
-        line: u32,
-    },
+    // REMOVED: direct emission variants (must not construct RuntimeEvent outside canonical emitter)
     /// Explicit no-op — the `&'static str` is a required reason string.
     NoOp(&'static str),
     Error {
@@ -1242,12 +1233,12 @@ pub enum EventOutcome {
 }
 
 impl EventOutcome {
-    pub fn emit(event: RuntimeEvent, file: &'static str, line: u32) -> Self {
-        Self::Emit { event, file, line }
+    pub fn emit(_event: RuntimeEvent, _file: &'static str, _line: u32) -> Self {
+        panic!("EventOutcome::emit is forbidden — all emissions must go through canonical pipeline via emit_with_parents");
     }
 
-    pub fn emit_many(events: Vec<RuntimeEvent>, file: &'static str, line: u32) -> Self {
-        Self::EmitMany { events, file, line }
+    pub fn emit_many(_events: Vec<RuntimeEvent>, _file: &'static str, _line: u32) -> Self {
+        panic!("EventOutcome::emit_many is forbidden — all emissions must go through canonical pipeline via emit_with_parents");
     }
 
     pub fn error(event: RuntimeEvent, file: &'static str, line: u32) -> Self {

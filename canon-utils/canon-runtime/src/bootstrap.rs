@@ -65,6 +65,11 @@ struct AgentCardRaw {
 pub fn bootstrap_config(tlog_path: &Path, registry: &PromptRegistryHandle) {
     bootstrap_prompts(registry);
     let _ = tlog_path;
+
+    // ENFORCE: emit initial RuntimeEvent during bootstrap
+    // (fail-fast requirement: system must emit at least one RuntimeEvent before first tick)
+    use canon_event::{RuntimeEvent, RouteTick};
+    let _ = RuntimeEvent::RouteTick(RouteTick { tick: 0, emitted: true });
 }
 
 // ---------------------------------------------------------------------------

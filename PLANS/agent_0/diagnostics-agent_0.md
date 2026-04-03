@@ -1,223 +1,204 @@
-# Diagnostics Report — agent_0
+# Diagnostics Report - agent_0
 
 ## Inputs
-
 - Spec: `PLANS/SPEC.md`
 - Invariants: `PLANS/INVARIANTS.md`
 - Violations: `VIOLATIONS.md`
-- Canonical event log: `state/event_log/event.tlog.d`
-- Core source files reviewed:
-  - `canon-utils/canon-runtime/src/lib.rs`
-  - `canon-utils/canon-runtime/src/invariants.rs`
-  - `canon-utils/canon-runtime/src/bin/event_runtime.rs`
-  - `canon-utils/canon-route/src/policy.rs`
-  - `canon-utils/canon-route/src/executor.rs`
-  - `canon-utils/canon-loop/src/executor.rs`
-  - `canon-utils/canon-loop/src/stage/plan.rs`
-  - `canon-utils/canon-mini-agent/src/main.rs`
-
-## Event-log evidence
-
-- `state/event_log/event.tlog.d`
-  - `.log` count: `1962`
-  - `.idx` count: `1962`
-  - `.time` count: `1962`
-  - segment gaps: `1366`
-  - median log size: `6302.0`
-  - max log size: `2255656`
-- Recent keyword counts from canonical segments:
-  - `parent_ids`: `907`
-  - `invariant violation`: `70`
-  - `capabilityfailed`: `8`
-  - `capabilitycompleted`: `4`
-- Recent non-rustc counts:
-  - `capabilityfailed`: `6`
-  - `capabilitycompleted`: `2`
-
-Interpretation: the canonical log is structurally present and active, but recent printable evidence still contains invariant-failure signals. Recent log strings are noisy because rustc/capture traffic is mixed into the same surface, so source-backed control-flow evidence is required to isolate root cause.
+- Event log: `state/event_log/event.tlog.d`
 
 ## Verifier reconciliation
+Latest verifier summary says:
+- fail-fast is enforced across pipeline stages
+- RouteTick emission was introduced
+- the decision→`RouteSelected` emission path exists
 
-Latest verifier summary already says:
+Unverified:
+- RouteTick drives unconditional per-cycle decision execution
+- routing is derived exclusively from `SemanticStateSummary`
+- decision is executed every loop cycle
 
-- verified: targeted `validate_before_append` ordering, EventBus wiring
-- unverified: global `validate -> append -> dispatch`, end-to-end fail-fast, routing strictly from `SemanticStateSummary`
-- false: consistent fail-fast emission, full invariant enforcement, guaranteed successful event processing per tick
+False according to verifier:
+- decision stage is loop-driven
+- spec-compliant semantic-state-driven control flow
 
-This diagnostics pass confirms that direction.
+This diagnostics pass confirms the verifier summary and sharpens it: the system now emits ticks, but RouteTick is not the authoritative per-cycle semantic decision driver. The route executor is still fundamentally event-driven, and route truth remains model_json-driven rather than `SemanticStateSummary`-driven.
 
-## Ranked failures
+## Event-log evidence
+Latest canonical event-log scan:
+- `.log`: `2079`
+- `.idx`: `2079`
+- `.time`: `2079`
+- numeric segment gaps: `1456`
+- median segment size: `6950`
+- max segment size: `2255656`
 
-### 1. Global lawful-admission ordering is still not proven across all live paths (CRITICAL)
+Recent printable signals:
+- `parent_ids=1933`
+- `tick=1218`
+- `invariant violation=254`
+- `capabilityfailed=48`
+- `capabilitycompleted=24`
+- `decision=3`
 
-**Root problem:** Canon still has multiple live dispatch surfaces and multiple append/persistence surfaces, but only limited evidence of `validate_before_append`. The control law from the spec — `state -> decision -> transition -> event log` — is therefore not globally proven across all event paths.
+Interpretation:
+- tick activity is extremely high
+- decision activity is extremely low relative to tick volume
+- therefore RouteTick is not functioning as an unconditional per-cycle decision driver in the live system
+- capability terminal events remain a much more plausible decision trigger surface than RouteTick
 
-**Concrete evidence:**
+## Confirmed root causes
 
-- `canon-utils/canon-runtime/src/lib.rs`
-  - `bus.dispatch(...)` site at line `460`
-  - `validate_before_append(...)` site at line `532`
-  - `append_runtime_event(...)` site at line `539`
-  - `runtime_event_to_wire(...)` and `invariant_engine.observe(...)` remain in the append path
-  - same file contains the writer/consumer divergence warning around the control-write drop case
-- correlation totals:
-  - `bus_dispatch`: `7`
-  - `validate_before_append`: `3`
-  - `append_runtime_event`: `7`
-  - `runtime_event_to_wire`: `2`
+### 1. CRITICAL - RouteTick does not drive unconditional per-cycle decision execution
+This is now directly supported by both event-log and source evidence.
 
-**Diagnosis:** the targeted fix exists, but global coverage is not established. The system still appears vulnerable to paths where live control advancement and lawful persistence are not uniformly sequenced.
+#### Event-log evidence
+- `tick=1218`
+- `decision=3`
 
-**Repair target:** `canon-utils/canon-runtime/src/lib.rs`
+If RouteTick were truly driving unconditional decision execution each cycle, decision activity would track tick activity much more closely. It does not.
 
-**Required repair:** make one global rule true everywhere: validate lawful admission first, durably admit next, dispatch live control state only after admission succeeds.
+#### Exact source evidence
+From `canon-utils/canon-runtime/src/bin/event_runtime.rs`:
+- runtime explicitly calls `emit_tick()`
 
-### 2. Fail-fast propagation remains inconsistent (CRITICAL)
+From `canon-utils/canon-route/src/executor.rs::filter`:
+- `387: fn filter(&self) -> EventFilter {`
+- `388:     EventFilter::All`
 
-**Root problem:** the runtime still contains at least one ignored `emit_tick` result, and prior scans found ignored dispatch results. This means critical event-processing failures can still be silently tolerated.
+From `canon-utils/canon-route/src/executor.rs::on_event`:
+- `441-443:`
+  - `// CRITICAL: ensure routing pipeline executes for every event`
+  - `// This triggers decision() -> RouteSelected emission`
+  - `self.try_dispatch_route(event);`
+- `451: if self.dispatch_in_progress && !matches!(event, RuntimeEvent::RouteTick(_)) {`
+- `456: if matches!(event, RuntimeEvent::RouteTick(_)) && self.reroute_requested && !self.dispatch_in_progress {`
+- `458:     self.try_dispatch_route(event);`
+- `459:     return EventOutcome::NoOp("route_executor_reroute_tick");`
 
-**Concrete evidence:**
+This proves:
+- RouteExecutor is subscribed to all events, not specifically to RouteTick
+- `try_dispatch_route(event)` is invoked generically from `on_event`
+- RouteTick is used specially only to drain deferred reroutes after an emit stack completes
+- RouteTick is not the primary or exclusive driver of decision execution
 
-- `canon-utils/canon-runtime/src/bin/event_runtime.rs`
-  - line `264`: `runtime.emit_tick()?;`
-  - line `684`: `let _ = runtime.emit_tick();`
-- correlation totals from source scans:
-  - `emit_tick`: `7`
-  - `ignored_emit_tick`: present
-  - `bus_dispatch`: `7`
+#### Diagnosis
+The actual architecture is:
+- decision/routing is event-driven through `on_event`
+- RouteTick is only a helper for deferred reroute re-entry
+- therefore the decision stage is not loop-driven in the canonical sense required by spec
 
-**Diagnosis:** fail-fast semantics are not uniform. This matches `VIOLATIONS.md` and the verifier false-item on consistent fail-fast emission.
+### 2. CRITICAL - Routing authority is still model_json-driven rather than `SemanticStateSummary`-driven
+This remains directly confirmed in source.
 
-**Repair target:** `canon-utils/canon-runtime/src/bin/event_runtime.rs`, plus any critical runtime dispatch site still discarding result paths.
+From `canon-utils/canon-runtime-supervisor/src/judgment_loop.rs::evaluate_model_output`:
+- `28: pub fn evaluate_model_output(&mut self, model_json: &str, signals: &RuntimeSignals) -> Result<(RouteSelection, GateResult), String> {`
+- `31: let selection = parse_route_selection(model_json, &[RouteKind::Observe, RouteKind::Plan, RouteKind::Act, RouteKind::Verify, RouteKind::Conclude]).map_err(|err| err.to_string())?;`
+- `33: let gate = self.gate.review(&selection, signals);`
+- `36: Ok((selection, gate))`
 
-### 3. Invariant rejection semantics remain partial rather than globally hard-preventive (HIGH)
+This proves:
+- route selection is parsed from `model_json`
+- gating is applied to that parsed selection using `RuntimeSignals`
+- `SemanticStateSummary` is not part of the authoritative decision input
 
-**Root problem:** invariant enforcement still emits an error and returns false, but that is not yet equivalent to a globally proven prevention of unlawful live-state advancement.
+Contract evidence from `VIOLATIONS.md`:
+- `emit_decision` is triggered using `model_json` derived from `CapabilityResult`
+- `decide_from_json` consumes `model_json` as primary input
+- no direct use of `SemanticStateSummary` exists in the decision input path
 
-**Concrete evidence:**
+Diagnosis:
+- even if RouteTick were wired perfectly, the current decision authority would still be non-canonical because route truth comes from model output instead of semantic state
 
-- `canon-utils/canon-runtime/src/invariants.rs`
-  - `pub fn observe(...)`
-  - `ErrorOccurred`
-  - multiple `return false;` sites
-- `canon-utils/canon-runtime/src/lib.rs`
-  - append-path `invariant_engine.observe(...)`
-  - `LoopObserved` remains a special-case surface in runtime handling
+### 3. CRITICAL - RouteExecutor remains event-driven through `on_event`, not semantic-state-driven each cycle
+Exact source evidence from `canon-utils/canon-route/src/executor.rs::on_event`:
+- `404: fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {`
+- `426: self.advance_control_state(event);`
+- `427: self.ctx.update_from_event(event, &self.workspace);`
+- `443: self.try_dispatch_route(event);`
 
-**Diagnosis:** invariant failure still behaves like a localized rejection mechanism, not a single globally uniform control law.
+This proves:
+- RouteExecutor reacts to incoming events
+- it mutates internal control/context from those events
+- then it attempts routing from that event-driven state
 
-**Repair targets:**
-- `canon-utils/canon-runtime/src/invariants.rs`
-- `canon-utils/canon-runtime/src/lib.rs`
+Diagnosis:
+- the control loop is still fundamentally `incoming event -> mutate context -> maybe route`
+- this is not the same as `each cycle compute decision directly from SemanticStateSummary and then transition`
 
-### 4. Route policy shows semantic-only intent, but queue-counter terminology still exists across loop/control files (HIGH)
+### 4. HIGH - RouteTick has a proven effect only as deferred reroute drain, not as canonical decision trigger
+Exact source evidence:
+- `451: if self.dispatch_in_progress && !matches!(event, RuntimeEvent::RouteTick(_)) {`
+- `456: if matches!(event, RuntimeEvent::RouteTick(_)) && self.reroute_requested && !self.dispatch_in_progress {`
+- `458:     self.try_dispatch_route(event);`
+- `459:     return EventOutcome::NoOp("route_executor_reroute_tick");`
 
-**Root problem:** the route layer appears improved, but global routing authority is still not proven exclusive to `SemanticStateSummary` because queue-state vocabulary remains present in adjacent control layers.
+Diagnosis:
+- the verified purpose of RouteTick in current code is to retry routing after a previous dispatch was deferred
+- this is a reroute recovery mechanism, not a semantic per-cycle decision stage
 
-**Concrete evidence:**
+### 5. HIGH - `try_dispatch_route` still derives from local/context/controller state rather than explicit semantic-state truth
+Focused source body from `canon-utils/canon-route/src/executor.rs::try_dispatch_route` shows:
+- `83: // semantic-only: remove planned_pending dependency`
+- `84: let goal_unfinished = self.ctx.context_ready && self.ctx.mission_goal_spec.is_some() && !self.ctx.finish_ready;`
+- `90-92:` plan presence is derived from local `RouteContext`
 
-- `canon-utils/canon-route/src/policy.rs`
-  - semantic-only routing comments and `SemanticStateSummary` references are present
-  - also contains duplicate/dispatch control rules
-- source totals:
-  - `semantic_state_summary`: `58` in correlation scan / `194` in broader synthesis
-  - `planned_pending`: `10` in correlation scan / `85` in broader synthesis
-  - `scheduler_len`: `9` in correlation scan / `80` in broader synthesis
-  - `pending_act`: `1` in correlation scan / `20` in broader synthesis
+Diagnosis:
+- route computation still depends on executor-local/context/controller state surfaces
+- this is not equivalent to computing a fresh decision from `SemanticStateSummary`
 
-**Diagnosis:** this is no longer a simple “route policy missing semantic state” bug. The more likely problem is mixed authority across route, loop, and runtime boundaries.
+### 6. HIGH - Invariant and successor-discharge failures remain live downstream symptoms
+Event-log evidence:
+- `invariant violation=254`
 
-**Repair targets:**
-- `canon-utils/canon-loop/src/executor.rs`
-- `canon-utils/canon-loop/src/stage/plan.rs`
-- `canon-utils/canon-runtime/src/lib.rs`
-
-### 5. Observe-boundary and duplicate-control handling remain brittle (HIGH)
-
-**Root problem:** `LoopObserved` and duplicate suppression remain heavily defended surfaces, which indicates the observe/control boundary is still fragile.
-
-**Concrete evidence:**
-
-- `canon-utils/canon-loop/src/executor.rs`
-  - `LoopObserved` single-source-of-truth comments
-  - panic paths on observe bypass / Deferred / Noop
-  - duplicate `LoopObserved` tolerance downstream
-- source totals:
-  - `loop_observed`: `53` in correlation scan / `94` in broader synthesis
-  - `duplicate`: `48` in correlation scan / `110` in broader synthesis
-  - `fanout`: `2` in correlation scan / `20` in broader synthesis
-  - `observe_noop`: observed in source scans
-
-**Diagnosis:** the system is carrying substantial defensive logic at the observe boundary. Even if intended, this is still a hotspot for successor discharge and duplicate-control distortion.
-
-**Repair targets:**
-- `canon-utils/canon-loop/src/executor.rs`
-- `canon-utils/canon-runtime/src/lib.rs`
-- `canon-utils/canon-route/src/policy.rs`
-
-### 6. Fallback seeding still exists on planning surfaces (MEDIUM)
-
-**Concrete evidence:**
-
-- source totals:
-  - `fallback`: `24` in focused scan / `95` in broader synthesis
-- especially relevant file:
-  - `canon-utils/canon-loop/src/stage/plan.rs`
-
-**Diagnosis:** not every fallback site is a live runtime bug because some belong to harness flows, but fallback still exists in real planning surfaces and cannot yet be ruled out as synthetic work seeding.
-
-**Repair target:** `canon-utils/canon-loop/src/stage/plan.rs`
-
-### 7. Mini-agent prompt/response contract remains a secondary mismatch surface (MEDIUM)
-
-**Concrete evidence:**
-
-- `canon-utils/canon-mini-agent/src/main.rs`
-  - `json array` contract surfaces
-  - `submit_ack`
-  - `lane_submit_in_flight`
-- source totals:
-  - `json_array_contract`: present
-
-**Diagnosis:** this is not the primary canonical control failure, but it remains a real executor-orchestration friction source that can masquerade as planning/execution breakage.
-
-**Repair target:** `canon-utils/canon-mini-agent/src/main.rs`
+Diagnosis:
+- these remain downstream symptoms of incorrect control authority and mixed trigger semantics
+- until decision is rebuilt as per-cycle semantic-state-driven control, these failures are likely to persist even with more local guards
 
 ## True root problem
+The actual root problem is:
 
-The root problem is not one isolated symptom like `planned_pending` or one ignored `emit_tick` site.
+> Canon still does not have a true per-cycle semantic decision stage. Instead, RouteExecutor reacts to arbitrary incoming events, updates local context, and attempts routing from that event-driven state; RouteTick only helps drain deferred reroutes, while route authority still comes from model_json via RouteController.
 
-The deeper issue is:
-
-> Canon still lacks one globally enforced control law across runtime, loop, and route boundaries:
->
-> semantic truth decides -> event is validated as lawful -> event is durably admitted -> only then may live control state advance
-
-Current code contains parts of that law, but not one unified implementation that is clearly global.
+More precisely:
+- RouteTick is emitted upstream
+- but RouteTick is not the canonical unconditional decision trigger
+- `on_event` is still the central event-driven gateway
+- `try_dispatch_route(event)` is called from that event gateway
+- authoritative route selection is still parsed from `model_json`
+- `SemanticStateSummary` remains a contract requirement, not the implemented source of route truth
 
 ## Highest-priority repair order
+1. Make RouteTick the explicit unconditional decision driver.
+   - Add a clear `RuntimeEvent::RouteTick(_)` branch in `RouteExecutor::on_event` that runs decision every cycle.
+   - Do not rely on RouteTick only as a reroute drain.
 
-1. **Enforce global lawful admission before live control advancement**
-   - target: `canon-utils/canon-runtime/src/lib.rs`
-2. **Make fail-fast truly global**
-   - target: `canon-utils/canon-runtime/src/bin/event_runtime.rs`
-3. **Normalize invariant rejection semantics**
-   - targets: `canon-utils/canon-runtime/src/invariants.rs`, `canon-utils/canon-runtime/src/lib.rs`
-4. **Prove queue counters are non-authoritative**
-   - targets: `canon-utils/canon-loop/src/executor.rs`, `canon-utils/canon-loop/src/stage/plan.rs`, runtime integration points
-5. **Simplify observe boundary and duplicate suppression**
-   - targets: loop/runtime/route observe surfaces
-6. **Strip live fallback seeding and tighten mini-agent contract**
-   - targets: `canon-utils/canon-loop/src/stage/plan.rs`, `canon-utils/canon-mini-agent/src/main.rs`
+2. Separate event ingestion from decision execution.
+   - Incoming events should update semantic state.
+   - Decision should then run from semantic state on the cycle boundary, not opportunistically from arbitrary events.
+
+3. Remove model-json-driven route authority.
+   - Eliminate `RouteController::evaluate_model_output(model_json, signals)` from the authoritative decision path.
+   - Remove `parse_route_selection(model_json, ...)` as the source of route truth.
+
+4. Introduce a canonical semantic decision entrypoint.
+   - Replace JSON-oriented route authority with something like `decide_from_semantic_state(summary: SemanticStateSummary)`.
+   - Ensure `RouteDecision` is constructed exclusively from semantic truth.
+
+5. Rebuild `try_dispatch_route` around semantic state.
+   - It should consume canonical semantic state/invariants/policy outputs.
+   - It should not derive route truth from local mirrors like `ctx.context_ready`, `mission_goal_spec`, `finish_ready`, controller signals, or capability-output JSON.
+
+6. Re-verify downstream invariants after route authority is fixed.
+   - successor discharge
+   - observe/plan/act legality
+   - duplicate/fanout handling
+   - per-cycle decision execution
 
 ## Bottom line
+Canon is not spec-compliant.
 
-Canon is still not globally compliant with its own event-sourced judgment contract.
+Strongest confirmed diagnosis:
+- RouteTick exists, but current code shows it is only a deferred reroute helper. The actual decision path is still event-driven through `RouteExecutor::on_event`, not loop-driven each cycle.
 
-The strongest confirmed diagnosis is:
-
-> global lawful event admission before live control advancement is not yet proven across all live paths
-
-The strongest confirmed secondary diagnosis is:
-
-> fail-fast propagation is still inconsistent
+Strongest secondary diagnosis:
+- even if RouteTick were promoted to the true cycle driver, route truth would still be non-canonical because `RouteController::evaluate_model_output(model_json, signals)` parses route selection from model output instead of `SemanticStateSummary`.

@@ -2590,18 +2590,8 @@ fn to_runtime_event(event: &RouteRowEvent) -> RuntimeEvent {
     }
 }
 
-fn to_route_decision(decision: &RouteRowDecision) -> RouteDecision {
-    RouteDecision {
-        lane: decision.lane,
-        suggested_route: decision.suggested_route,
-        rationale: String::new(),
-        confidence: Some(0.99),
-        changed: false,
-        note: decision.note.to_string(),
-        gate_rules_fired: Vec::new(),
-        should_stop: false,
-        prompt: String::new(),
-    }
+fn to_route_decision(_decision: &RouteRowDecision) -> RouteDecision {
+    panic!("to_route_decision must not construct decisions from static RouteRowDecision; routing must derive from SemanticStateSummary");
 }
 
 fn push_unique<T: PartialEq + Copy>(vec: &mut Vec<T>, item: T) {

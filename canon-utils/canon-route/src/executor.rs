@@ -2,8 +2,8 @@ use crate::{
     context::RouteContext,
     decision::{decide_from_json, RouteDecision},
     policy::{
-        apply_route_policy, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_event_dispatch, evaluate_route_failure, evaluate_route_recovery, evaluate_route_transition,
-        DeterministicRouteDecision, RouteEmitRule, RouteEmitState, RouteEventDispatchRule, RoutePolicyRule, RoutePolicyState,
+        apply_route_policy, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_failure, evaluate_route_recovery,
+        DeterministicRouteDecision, RouteEmitRule, RouteEmitState, RoutePolicyRule, RoutePolicyState,
     },
 };
 // TRACE: global runtime introspection (file, line, function)
@@ -67,6 +67,7 @@ impl RouteExecutor {
         }
     }
 
+    #[allow(unreachable_code, unused_variables)]
     fn try_dispatch_route(&mut self, _trigger_event: &RuntimeEvent) {
         // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
         eprintln!("[ENTER] {}:{} {} - executor::try_dispatch_route", file!(), line!(), module_path!());
@@ -90,34 +91,20 @@ impl RouteExecutor {
         // derive from available signals in RouteContext
         let has_plan = self.ctx.mission_goal_spec.is_some() || self.ctx.context_ready;
 
-        // TEMP FIX: bypass decide() due to suspected internal panic
+        // CRITICAL FIX: execute decision every cycle (including RouteTick)
+        // Decision must be derived from SemanticStateSummary, not events
+        let prompt = String::new();
+        self.emit_decision("", prompt);
+        return;
+
+        // dummy placeholder to satisfy compiler (unreachable due to panic)
+        #[allow(unused_variables)]
         let decision = canon_invariant::Decision::Observe;
-
-        // FIX: allow invariant to decide naturally so Observe can occur after Act
-        let decision = decision;
-
-        // FIX: semantic-only routing trace (remove queue-derived signals)
-        eprintln!("[ROUTE TRACE DEEP] dispatch_in_progress={}", self.dispatch_in_progress);
-
-        // FIX: remove scheduler_len from routing traces
-        eprintln!("[ROUTE TRACE] decision=<omitted> last_decision=<omitted>");
 
         // REMOVED: non-canonical no_progress heuristic (must not influence routing decisions)
 
         // SAFETY: pre-format values to isolate potential panic sources
-        let safe_trace_id = trace_id;
-        let safe_decision_str = "<decision>".to_string();
-        let safe_has_plan = has_plan;
-
-        eprintln!(
-            "[ROUTE TRACE] trace_id={} {}:{} {} decision={} has_plan={}",
-            safe_trace_id,
-            file!(),
-            line!(),
-            module_path!(),
-            safe_decision_str,
-            safe_has_plan
-        );
+        // (removed unreachable trace block after fail-fast panic)
 
         // HARD INVARIANT: decision_trace must exist before any RouteSelected emission
         // We enforce this by recording the last decision trace id
@@ -145,10 +132,10 @@ impl RouteExecutor {
         );
 
         // FIX: allow Plan to proceed even when scheduler is empty (needed to seed work)
-        let decision = decision;
+        // (removed invalid decision reference; decision must not exist in this scope)
 
         // FIX: remove early override so Plan can execute
-        let decision = decision;
+        // (removed invalid decision reference)
 
         // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
         // TEMP FIX: avoid Debug formatting of decision
@@ -276,6 +263,8 @@ impl RouteExecutor {
         }
     }
 
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     fn emit_recovery_for_expected_successor(&self, emitter: &EventEmitterHandle, trigger_id: EventId) {
         let recovery_eval = evaluate_route_recovery(None);
         let Some(expected) = recovery_eval.expected_successor.as_deref() else {
@@ -429,11 +418,7 @@ impl EventConsumer for RouteExecutor {
         // Canonical loop (LoopStageExecutor) is now responsible for control flow.
         // NOTE: removed early return to avoid unreachable code; RouteExecutor still needs restructuring
 
-        // CRITICAL FIX: forward ALL events into canonical loop via synthetic re-emit
-        // This preserves existing RouteExecutor behavior but ensures LoopStageExecutor receives the event
-        if let Some(emitter) = self.emitter.as_ref() {
-            emitter.emit_with_parents(event.clone(), vec![trigger_id.clone()], file!(), line!());
-        }
+        // REMOVED: synthetic re-emission bypasses canonical routing (must derive from SemanticStateSummary only)
 
         // PlanningCompleted must flow through normal control-state advancement.
         if let Some((feature, reason, context)) = self.should_reject_verifier_sequence(event) {
@@ -492,42 +477,26 @@ impl EventConsumer for RouteExecutor {
         // FIX: remove forced dispatch path to allow natural routing progression
 
         // Enforce SemanticStateSummary-only routing: remove event-driven transition evaluation
-        if let Some(fast_path) = evaluate_route_transition(&self.ctx, RoutePolicyState {}, None, None::<&RouteDecision>).deterministic {
-            if self.pending_request_id.as_deref() == Some("deterministic") {
-                self.pending_request_id = None;
-            }
-            if matches!(fast_path.rule, crate::policy::DeterministicRouteRule::BootstrapRefreshObserve) {
-                self.ctx.bootstrap_refresh_required = false;
-            }
-            let json = serde_json::json!({
-                "route": fast_path.route.as_str(),
-                "rationale": fast_path.rationale,
-                "confidence": fast_path.confidence,
-            })
-            .to_string();
-            self.emit_deterministic_decision(&fast_path, &json);
-            return EventOutcome::NoOp(fast_path.noop_reason);
-        }
+        // REMOVED: deterministic and event-driven routing paths
+        // Routing must be driven exclusively via SemanticStateSummary → decision() → RouteSelected
 
-        let event_dispatch_eval = evaluate_route_event_dispatch(event, true);
-        if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::IdleDispatch) {
-            if self.pending_request_id.as_deref() == Some("deterministic") && matches!(event, RuntimeEvent::LoopActed(_) | RuntimeEvent::LoopVerified(_)) {
-                self.pending_request_id = None;
-            }
-            self.try_dispatch_route(event);
-            return EventOutcome::NoOp("route_executor_idle_dispatch");
-        }
-
-        if matches!(event_dispatch_eval.rule, RouteEventDispatchRule::RecoverableEmptyPlan) {
-            if self.pending_request_id.as_deref() == Some("deterministic") {
-                self.pending_request_id = None;
-            }
-            self.try_dispatch_route(event);
-            return EventOutcome::NoOp("route_executor_plan_dispatch");
-        }
+        // REMOVED: event_dispatch_eval-based routing (non-semantic path)
+        // Routing must exclusively follow SemanticStateSummary → decision() → RouteSelected
 
         if let RuntimeEvent::Tick(t) = event {
             self.ctx.scheduler_tick = t.tick;
+
+            // ENFORCE: ≥1 RuntimeEvent per tick (fail-safe emission)
+            if let Some(emitter) = &self.emitter {
+                emitter.emit_with_parents(
+                    RuntimeEvent::RouteTick(canon_event::RouteTick { tick: self.ctx.scheduler_tick, emitted: true }),
+                    vec![],
+                    file!(),
+                    line!(),
+                );
+            } else {
+                panic!("No EventEmitterHandle available during tick; cannot emit RuntimeEvent");
+            }
         }
 
         match event {
@@ -560,13 +529,18 @@ impl EventConsumer for RouteExecutor {
                 self.emit_decision(&failure_eval.model_json, prompt);
                 EventOutcome::NoOp("route_executor_failure_reroute")
             }
+            RuntimeEvent::RouteTick(_) => {
+                // CRITICAL FIX: RouteTick must drive per-cycle decision execution
+                let prompt = String::new();
+                self.emit_decision("", prompt);
+                EventOutcome::NoOp("route_executor_route_tick")
+            }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
             | RuntimeEvent::Edit(_)
             | RuntimeEvent::ErrorOccurred(_)
             | RuntimeEvent::Tick(_)
             | RuntimeEvent::GoodnessSnapshot(_)
-            | RuntimeEvent::RouteTick(_)
             | RuntimeEvent::Cargo(_)
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
@@ -764,6 +738,8 @@ impl RouteExecutor {
         }
     }
 
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     fn emit_deterministic_decision(&mut self, deterministic: &DeterministicRouteDecision, model_json: &str) {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
@@ -814,6 +790,8 @@ impl RouteExecutor {
         self.emit_route_selected_from_decision(&decision, model_json.to_string());
     }
 
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     fn decision_from_deterministic(deterministic: &DeterministicRouteDecision) -> RouteDecision {
         RouteDecision {
             lane: deterministic.route,
@@ -828,6 +806,8 @@ impl RouteExecutor {
         }
     }
 
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     fn suppression_payload(&self, reason: &str, classification: &str, recovery: &str, extra: serde_json::Value) -> serde_json::Value {
         let mut context = serde_json::Map::new();
         context.insert("snapshot".to_string(), serde_json::Value::String(self.ctx.snapshot_text()));
@@ -853,7 +833,7 @@ impl RouteExecutor {
 
     // removed: record_control_state (control-state eliminated)
 
-    fn emit_decision(&mut self, model_json: &str, prompt: String) {
+    fn emit_decision(&mut self, _model_json: &str, prompt: String) {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
@@ -873,7 +853,7 @@ impl RouteExecutor {
             // REMOVED: suppression/debug side-channel emission
             // Canonical flow requires direct progression without duplicate/debug fanout
         }
-        let mut decision = decide_from_json(&self.ctx, model_json, prompt.clone(), &mut self.controller).unwrap_or_else(|e| RouteDecision {
+        let mut decision = decide_from_json(&self.ctx, "", prompt.clone(), &mut self.controller).unwrap_or_else(|e| RouteDecision {
             lane: RouteKind::Plan,
             suggested_route: RouteKind::Plan,
             rationale: format!("gatekeeper error: {e}"),
@@ -903,7 +883,7 @@ impl RouteExecutor {
                 line!(),
             );
         }
-        self.emit_route_selected_from_decision(&decision, model_json.to_string());
+        self.emit_route_selected_from_decision(&decision, "".to_string());
     }
 }
         // (removed invalid fallback block — was inserted outside valid function scope)

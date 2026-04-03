@@ -2,7 +2,7 @@ use crate::causal::update_causal_graph;
 use canon_decision::JournalLine;
 use canon_event::{LoopActed, LoopObserved, LoopPlanned, LoopRewarded, LoopVerified, RuntimeEvent, SubTaskResult, ToolCall, ToolResult};
 use canon_goal::{parse_agent_goal_markdown, summarize_goal, GoalSpec};
-use canon_judgment::{LlmSignals, RuntimeSignals};
+use canon_judgment::RuntimeSignals;
 use canon_semantic_state::{
     classify_planned_action_intents, derive_objective_trend_state, derive_self_development_objective_state, execution_results_for_action, primary_development_objective_kind,
     semantic_no_progress_streak, semantic_progress_rate, LlmSemanticContext, ObjectiveTrendState, SemanticActionIntent, SemanticExecutionResultRecord, SemanticStateSummary,
@@ -110,19 +110,7 @@ impl RouteContext {
     }
 
     pub fn signals(&self) -> RuntimeSignals {
-        RuntimeSignals {
-            context_ready: self.context_ready,
-            // semantic-only: do not expose planned_pending as authoritative
-            has_queued_plan: false,
-            performed_recently: self.acted_unverified,
-            repair_stalled: semantic_no_progress_streak(&self.recent_execution_results) > 0,
-            repair_pressure_score: self.objective_state().repair_pressure_score(),
-            finish_ready: self.finish_ready && self.workspace_dirty_tracker.all_clean(),
-            last_action_kind: self.last_action_kind.clone(),
-            llm_signals: self.last_llm_signals.as_ref().map(LlmSignals::from_value),
-            goodness: self.goodness,
-            delta_g: self.delta_g,
-        }
+        panic!("RouteContext::signals must be a pure projection of SemanticStateSummary; non-semantic fields detected");
     }
 
     pub fn target_workspace_missing_state(&self) -> bool {

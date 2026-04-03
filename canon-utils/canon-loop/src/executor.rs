@@ -684,6 +684,7 @@ impl LoopStageExecutor {
         }
 
         // CANONICAL DECISION → ROUTE CONSUMPTION
+        let mut route_selected_emitted = false;
         if self.ctx.pending_required_successor.as_deref() == Some("decision") {
             // HARD GUARD: prevent duplicate decision consumption within same tick
             if self.ctx.last_observed_tick == Some(self.ctx.current_tick) && self.ctx.last_route_rationale.is_some() {
@@ -723,12 +724,22 @@ impl LoopStageExecutor {
                     file!(),
                     line!(),
                 );
+                route_selected_emitted = true;
             }
             self.ctx.pending_required_successor = Some("route_selected".to_string());
         }
 
+        // FAIL-FAST: decision must produce RouteSelected
+        if self.ctx.pending_required_successor.as_deref() == Some("decision") && !route_selected_emitted {
+            panic!("decision stage failed to emit RouteSelected; violates canonical flow");
+        }
+
         // FIX: fail-safe — clear stuck pending successor if it remains after any subsequent event
         if self.ctx.pending_required_successor.as_deref() == Some("route_selected") {
+            // FAIL-FAST: ensure route leads to loop execution
+            if self.ctx.last_observed_tick != Some(self.ctx.current_tick) {
+                panic!("route_selected did not lead to loop execution (LoopObserved missing)");
+            }
             self.ctx.pending_required_successor = None;
         }
 
@@ -868,7 +879,7 @@ impl LoopStageExecutor {
                         }
                         // CRITICAL: ensure observe runs even on EmitMany path (no early exit before observe)
                         self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
-                        return EventOutcome::EmitMany { events: vec![], file: file!(), line: line!() };
+                        return EventOutcome::NoOp("emission handled via canonical emitter");
                     }
                     _ => self.emit_stage_result(trigger_id, result),
                 }
@@ -936,6 +947,14 @@ impl EventConsumer for LoopStageExecutor {
             }
             RuntimeEvent::Tick(Tick { tick, .. }) => {
                 self.ctx.current_tick = *tick;
+                // CRITICAL FIX: enforce state -> decision -> transition each loop cycle
+                // Emit RouteTick to trigger routing independently of external events
+                self.ctx.emitter.emit_with_parents(
+                    RuntimeEvent::RouteTick(canon_event::RouteTick { tick: *tick, emitted: false }),
+                    vec![trigger_id.clone()],
+                    file!(),
+                    line!(),
+                );
             }
             RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
                 self.handle_agent_registered(payload);

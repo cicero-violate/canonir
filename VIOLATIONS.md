@@ -1,58 +1,55 @@
 # Violations
 
-## 1. Fail-fast enforcement still not globally consistent (CRITICAL)
+## 1. RouteTick is not handled → decision not loop-driven (CRITICAL)
 - Evidence:
-  - emit_tick()? exists but `let _ = runtime.emit_tick()` still present in runtime loop
-  - Mixed error-handling semantics remain
+  - RouteTick is not present in the event match arms
+  - Large group of events (including LoopObserved, LoopPlanned, etc.) are treated as NoOp
+  - No explicit RouteTick → emit_decision path exists
 - Issue:
-  - Runtime can still swallow critical failures
-  - Violates end-to-end fail-fast requirement
+  - Decision is not executed per loop cycle
+  - Violates SPEC: control must be loop-driven via semantic state
 - Required fix:
-  - Remove all ignored Results for critical control operations
-  - Enforce global fail-fast policy across entire runtime
+  - Add explicit RuntimeEvent::RouteTick handler
+  - Invoke emit_decision unconditionally from RouteTick
+  - Fail-fast if decision is not produced
 
-## 2. Zero-consumer dispatch fail-fast not proven universal (CRITICAL)
+## 2. Decision stage remains event-gated (CRITICAL)
 - Evidence:
-  - Executor claims patch, but no verification across all dispatch entry points
+  - emit_decision is only invoked in CapabilityCompleted/Failed paths (previously observed)
+  - No loop-driven trigger present in current match
 - Issue:
-  - Some paths may still allow silent dispatch with no consumers
+  - Decision depends on external capability events
+  - Violates invariant: one decision per cycle
 - Required fix:
-  - Audit all dispatch paths to ensure zero-consumer condition always returns Err
-  - Add invariant assertion at dispatch boundary
+  - Remove event-gated decision triggers as primary path
+  - Ensure decision is executed every cycle via RouteTick
 
-## 3. End-to-end pipeline fail-fast not enforced (CRITICAL)
+## 3. Routing authority not proven SemanticStateSummary-derived (CRITICAL)
 - Evidence:
-  - Fail-fast added at emission and dispatch, but no proof for decision, routing, or loop stages
+  - No explicit SemanticStateSummary passed into decision path
+  - Routing still mediated through decide_from_json interface
 - Issue:
-  - Partial failures may still propagate silently
+  - No proof routing is derived from semantic state
 - Required fix:
-  - Ensure all stages (emit → validate → append → dispatch → route → loop) propagate Result
-  - Any failure must halt pipeline execution
-
-## 4. SemanticStateSummary routing not proven authoritative (CRITICAL)
-- Evidence:
-  - Executor acknowledges remaining gap
-- Issue:
-  - Routing may still depend on queue state or heuristics
-- Required fix:
+  - Replace decision interface with SemanticStateSummary input
   - Enforce routing = f(SemanticStateSummary)
-  - Reject any routing decisions derived from scheduler_len or queue mirrors
 
-## 5. No guarantee of successful control progression per tick (HIGH)
+## 4. Multiple control successors imply non-canonical flow (HIGH)
 - Evidence:
-  - emit_tick ensures attempt, dispatch enforces consumers, but no guarantee of full pipeline completion
+  - control_successor_for_event maps multiple events (PlanningCompleted, LoopActed, etc.) directly to RouteSelected
 - Issue:
-  - System may emit events without reaching decision/route/loop stages
+  - Multiple implicit routing entry points exist
+  - Violates single decision authority invariant
 - Required fix:
-  - Add invariant: each tick must produce a completed control transition (observe→decision→route→act/verify)
-  - Fail-fast if pipeline does not advance
+  - Ensure only decision stage produces RouteSelected
+  - Remove implicit routing transitions from other events
 
-## 6. System not fully spec-compliant
+## 5. System not spec-compliant
 - Evidence:
-  - Partial fixes applied (ordering, dispatch fail-fast)
-  - Core guarantees still incomplete
+  - RouteTick intended but not implemented as decision driver
+  - Decision still event-gated and not semantic-state-driven
 - Issue:
-  - System still allows inconsistent or partial execution
+  - Core control loop invariant is broken
 - Required fix:
-  - Enforce invariant and fail-fast guarantees across entire control-flow
-  - Ensure no escape paths exist outside canonical pipeline
+  - Implement RouteTick-driven decision execution
+  - Ensure semantic-state-only routing authority

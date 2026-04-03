@@ -681,9 +681,9 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
         eprintln!("[TRACE] TOP OF MAIN LOOP");
         // HEARTBEAT: ensure at least one event per loop cycle to prevent silent stall
         eprintln!("[LOOP TRACE] about to call emit_tick");
-        let _ = runtime.emit_tick();
+        runtime.emit_tick()?;
         // CRITICAL FIX: ensure tick is flushed to tlog immediately
-        let _ = runtime.flush_emitted_events();
+        runtime.flush_emitted_events()?;
         // Step 1: drain any events emitted by consumer threads (e.g. CapabilityCompleted).
         // These sit in emitter_rx until W processes them; they do NOT arrive via P2/q_event_rx.
         runtime.drain_emitted_events()?;
@@ -693,7 +693,12 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
         while handled < event_budget_per_cycle {
             match q_event_rx.try_recv() {
                 Ok(event_msg) => {
+                    let before_len = runtime.take_observed_events().len();
                     handle_event_msg(event_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed)?;
+                    let after_len = runtime.take_observed_events().len();
+                    if after_len <= before_len {
+                        return Err(anyhow::anyhow!("handle_event_msg produced no observable events"));
+                    }
                     handled = handled.saturating_add(1);
                 }
                 Err(cc::TryRecvError::Empty) => break,
@@ -710,7 +715,12 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
         // This is the only "polling" in the system; it is not tick-driven and emits no events.
         match q_event_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(event_msg) => {
+                let before_len = runtime.take_observed_events().len();
                 handle_event_msg(event_msg, &mut runtime, &mut processed, &cursor_path, &tlog_path, start_seq, &session_id, &mut last_saved, &mut last_saved_processed)?;
+                let after_len = runtime.take_observed_events().len();
+                if after_len <= before_len {
+                    return Err(anyhow::anyhow!("handle_event_msg produced no observable events"));
+                }
             }
             Err(cc::RecvTimeoutError::Timeout) => {}
             Err(cc::RecvTimeoutError::Disconnected) => break,

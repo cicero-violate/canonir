@@ -25,6 +25,7 @@
     injectScript("request_hook_group.js");
   }
 
+
   // inject.js → content.js: bridge installed signal
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
