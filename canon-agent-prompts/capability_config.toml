@@ -132,7 +132,7 @@ max_tabs = 1
 [[llm.endpoints]]
 id = "diagnostics_chatgpt"
 url = [
-  "https://chatgpt.com/c/69cf3fc0-a494-832b-850a-fcbd1416dcfc",
+  "https://chatgpt.com/c/69cf6641-725c-8329-9a2f-e1f035ea2466",
   "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118",
   "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
 ]
