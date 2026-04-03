@@ -7,7 +7,7 @@ goal_file = "/workspace/ai_sandbox/canon/canon-agent-prompts/AGENT_GOAL.md"
 max_iterations = 200
 llm_retry_count = 3
 llm_retry_delay_secs = 5
-response_timeout_secs = 20
+response_timeout_secs = 150
 max_concurrency = 4
 max_nodes = 64
 max_expand_iters = 6
@@ -132,6 +132,7 @@ max_tabs = 1
 [[llm.endpoints]]
 id = "diagnostics_chatgpt"
 url = [
+  "https://chatgpt.com/c/69cf3fc0-a494-832b-850a-fcbd1416dcfc",
   "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118",
   "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
 ]
@@ -188,11 +189,13 @@ max_tabs = 8
 
 [llm.roles.planner]
 burst = 4
+response_timeout_secs = 120
 [llm.roles.planner.weights]
 planner_chatgpt_group = 100
 
 [llm.roles.mini_planner]
 burst = 1
+response_timeout_secs = 120
 [llm.roles.mini_planner.weights]
 mini_planner_chatgpt = 100
 
@@ -213,11 +216,13 @@ analyst_chatgpt = 100
 
 [llm.roles.verifier]
 burst = 1
+response_timeout_secs = 120
 [llm.roles.verifier.weights]
 verifier_chatgpt = 100
 
 [llm.roles.diagnostics]
 burst = 1
+response_timeout_secs = 120
 [llm.roles.diagnostics.weights]
 diagnostics_chatgpt = 100
 
@@ -238,16 +243,19 @@ executor_pool = 100
 
 [llm.roles.executor]
 burst = 2
+response_timeout_secs = 20
 [llm.roles.executor.weights]
 executor_pool = 100
 
 [llm.roles.exec]
 burst = 8
+response_timeout_secs = 20
 [llm.roles.exec.weights]
 exec_pool = 100
 
 [llm.roles.decompose]
 burst = 8
+response_timeout_secs = 20
 [llm.roles.decompose.weights]
 exec_pool = 100
 
