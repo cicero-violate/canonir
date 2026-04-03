@@ -1,7 +1,9 @@
 use anyhow::{anyhow, bail, Context, Result};
 use canon_llm::{
     config::{CapabilityConfig, LlmEndpoint},
-    endpoint_worker::{llm_worker_new_tabs, llm_worker_send_request, llm_worker_send_request_with_req_id},
+    endpoint_worker::{
+        llm_worker_new_tabs, llm_worker_send_request_timeout, llm_worker_send_request_with_req_id_timeout,
+    },
     tab_management::TabManagerHandle,
     ws_server,
     ws_server::WsBridge,
@@ -89,6 +91,19 @@ fn choose_ws_port(args: &[String]) -> Result<(u16, bool)> {
         "no free ws port available in {:?}; pass --port explicitly or extend WS_PORT_CANDIDATES",
         WS_PORT_CANDIDATES
     );
+}
+
+fn role_key(role: &str) -> &str {
+    if role.starts_with("executor") {
+        "executor"
+    } else {
+        role
+    }
+}
+
+fn response_timeout_for_role(config: &CapabilityConfig, role: &str) -> u64 {
+    let role_cfg = config.role_config(role_key(role));
+    role_cfg.response_timeout_secs.unwrap_or(config.response_timeout_secs)
 }
 
 #[derive(Clone)]
@@ -245,6 +260,7 @@ async fn continue_executor_completion(
         }),
     );
 
+    let agent_type = role.to_uppercase();
     run_agent(
         role,
         prompt_kind,
@@ -252,6 +268,7 @@ async fn continue_executor_completion(
         action_result_prompt(
             Some(submitted.tab_id),
             Some(turn_id),
+            agent_type.as_str(),
             &out,
             action.get("action").and_then(|v| v.as_str()),
         ),
@@ -307,7 +324,17 @@ async fn run_agent(
             )
         } else {
             let result = last_result.as_deref().unwrap_or("");
-            (String::new(), action_result_prompt(last_tab_id, last_turn_id, result, last_action.as_deref()))
+            let agent_type = role_key(role).to_uppercase();
+            (
+                String::new(),
+                action_result_prompt(
+                    last_tab_id,
+                    last_turn_id,
+                    agent_type.as_str(),
+                    result,
+                    last_action.as_deref(),
+                ),
+            )
         };
         let exchange_id = make_command_id(role, prompt_kind, step + 1);
 
@@ -345,7 +372,8 @@ async fn run_agent(
         } else {
             endpoint.pick_url(step)
         };
-        let (req_id, resp) = match llm_worker_send_request_with_req_id(
+        let response_timeout_secs = response_timeout_for_role(_config, role);
+        let (req_id, resp) = match llm_worker_send_request_with_req_id_timeout(
             bridge,
             &endpoint.id,
             selected_url,
@@ -360,6 +388,7 @@ async fn run_agent(
             tabs,
             endpoint.max_tabs,
             submit_only,
+            Some(response_timeout_secs),
         )
         .await
         {
@@ -988,6 +1017,7 @@ async fn submit_executor_turn(
     tabs: &TabManagerHandle,
     send_system_prompt: bool,
     command_id: &str,
+    response_timeout_secs: u64,
 ) -> Result<String> {
     let exec_prompt = executor_cycle_prompt(
         job.executor_display.as_str(),
@@ -1034,7 +1064,7 @@ async fn submit_executor_turn(
             "prompt_bytes": prompt.len(),
         }),
     );
-    let raw = llm_worker_send_request(
+    let raw = llm_worker_send_request_timeout(
         bridge,
         &endpoint.id,
         endpoint.pick_url(0),
@@ -1049,6 +1079,7 @@ async fn submit_executor_turn(
         tabs,
         endpoint.max_tabs,
         true,
+        Some(response_timeout_secs),
     )
     .await?;
     append_orchestration_trace(
@@ -1366,6 +1397,7 @@ async fn main() -> Result<()> {
                     let bridge = bridge.clone();
                     let tabs = lane.tabs.clone();
                     let command_id = make_command_id(&job.executor_role, "executor", 1);
+                    let response_timeout_secs = response_timeout_for_role(&config, &job.executor_role);
                     dispatch_state.pending_submits.insert(
                         lane_index,
                         PendingSubmitState {
@@ -1376,8 +1408,8 @@ async fn main() -> Result<()> {
                             tabs: tabs.clone(),
                         },
                     );
-                   dispatch_state.lane_submit_in_flight.insert(lane_index, true);
-                   submit_joinset.spawn(async move {
+                    dispatch_state.lane_submit_in_flight.insert(lane_index, true);
+                    submit_joinset.spawn(async move {
                         let result = submit_executor_turn(
                             &job,
                             &endpoint,
@@ -1385,6 +1417,7 @@ async fn main() -> Result<()> {
                             &tabs,
                             true,
                             &command_id,
+                            response_timeout_secs,
                         )
                         .await;
                         (lane_index, job, result)
@@ -1795,7 +1828,7 @@ async fn main() -> Result<()> {
         } else if is_diagnostics {
             let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
             format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nUse {SPEC_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {diagnostics_rel}. Emit exactly one action to begin."
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nRead files and search the source code for the bugs (use read_file + run_command/ripgrep).\nRun 5+ python analysis actions over event logs and code evidence.\nInfer the root cause from the evidence and cite detailed sources of errors (file paths, functions, and log evidence).\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nUse {SPEC_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {diagnostics_rel}. Emit exactly one action to begin."
             )
         } else if is_planner {
             let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
@@ -1806,7 +1839,7 @@ async fn main() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics report (from {diagnostics_rel}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nUpdate {MASTER_PLAN_FILE} and derive lane plans: {lane_plan_list}. Emit exactly one action to begin."
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics report (from {diagnostics_rel}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nRead files and search the source code before issuing plan changes.\nWrite imperative, actionable instructions in {MASTER_PLAN_FILE} and derive lane plans: {lane_plan_list}.\nEmit exactly one action to begin."
             )
         } else {
             let spec = std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;

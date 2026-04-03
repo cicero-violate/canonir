@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
 use crate::{
-    WORKSPACE, SPEC_FILE, MASTER_PLAN_FILE, VIOLATIONS_FILE, DIAGNOSTICS_FILE, MAX_SNIPPET,
+    diagnostics_file, WORKSPACE, SPEC_FILE, MASTER_PLAN_FILE, VIOLATIONS_FILE, MAX_SNIPPET,
 };
 
 pub(crate) fn truncate(s: &str, max: usize) -> &str {
@@ -268,26 +268,30 @@ pub(crate) fn system_instructions(kind: AgentPromptKind) -> String {
 }
 
 pub(crate) fn planner_cycle_prompt(summary_text: &str, lane_plan_list: &str) -> String {
+    let diagnostics_file = diagnostics_file();
     format!(
-        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical references:\n- Spec: {SPEC_FILE}\n- Violations: {VIOLATIONS_FILE}\n- Diagnostics: {DIAGNOSTICS_FILE}\n- Master plan: {MASTER_PLAN_FILE}\n- Lane plans to write: {lane_plan_list}\n\nLatest verifier summary:\n{summary_text}\n\nPlanner baton:\n- Read the canonical files from disk instead of relying on pasted copies.\n- Update the master plan, then refresh the lane plans so each has a small READY window.\n- Prioritize root-cause repairs and semantic-state authority.\n- Emit exactly one action to begin."
+        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical references:\n- Spec: {SPEC_FILE}\n- Violations: {VIOLATIONS_FILE}\n- Diagnostics: {diagnostics_file}\n- Master plan: {MASTER_PLAN_FILE}\n- Lane plans to write: {lane_plan_list}\n\nLatest verifier summary:\n{summary_text}\n\nPlanner baton:\n- Read the canonical files from disk instead of relying on pasted copies.\n- Read files and search the source code before making changes.\n- Write imperative, actionable instructions in the master plan and lane plans.\n- Update the master plan, then refresh the lane plans so each has a small READY window.\n- Prioritize root-cause repairs and semantic-state authority.\n- Emit exactly one action to begin."
     )
 }
 
 pub(crate) fn executor_cycle_prompt(executor_name: &str, lane_label: &str, lane_plan_file: &str, latest_verify_result: &str) -> String {
+    let diagnostics_file = diagnostics_file();
     format!(
-        "TAB_ID: pending\nTURN_ID: pending\n\nWORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical references:\n- Spec: {SPEC_FILE}\n- Master plan: {MASTER_PLAN_FILE}\n- Assigned lane plan: {lane_plan_file}\n- Violations: {VIOLATIONS_FILE}\n- Diagnostics: {DIAGNOSTICS_FILE}\n\nLatest verifier result for lane {lane_label}:\n{latest_verify_result}\n\nExecutor baton:\n- You are {executor_name}, currently assigned to lane {lane_label}.\n- Read the canonical files from disk instead of relying on pasted copies.\n- Work only on the highest-priority READY items from the assigned lane plan.\n- Address verifier findings first.\n- Do not modify spec, plan, lane plans, violations, or diagnostics.\n- Use `done.reason` to report evidence for verifier review.\n- Emit exactly one action to begin."
+        "TAB_ID: pending\nTURN_ID: pending\nAGENT_TYPE: EXECUTOR\n\nWORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical references:\n- Spec: {SPEC_FILE}\n- Master plan: {MASTER_PLAN_FILE}\n- Assigned lane plan: {lane_plan_file}\n- Violations: {VIOLATIONS_FILE}\n- Diagnostics: {diagnostics_file}\n\nLatest verifier result for lane {lane_label}:\n{latest_verify_result}\n\nExecutor baton:\n- You are {executor_name}, currently assigned to lane {lane_label}.\n- Read the canonical files from disk instead of relying on pasted copies.\n- Work only on the highest-priority READY items from the assigned lane plan.\n- Address verifier findings first.\n- Do not modify spec, plan, lane plans, violations, or diagnostics.\n- Use `done.reason` to report evidence for verifier review.\n- Emit exactly one action to begin."
     )
 }
 
 pub(crate) fn verifier_cycle_prompt(lane_label: &str, lane_plan_file: &str, exec_result: &str) -> String {
+    let diagnostics_file = diagnostics_file();
     format!(
-        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical references:\n- Spec: {SPEC_FILE}\n- Master plan: {MASTER_PLAN_FILE}\n- Lane plan: {lane_plan_file}\n- Diagnostics: {DIAGNOSTICS_FILE}\n- Violations to write: {VIOLATIONS_FILE}\n\nExecutor lane: {lane_label}\nExecutor result summary:\n{exec_result}\n\nVerifier baton:\n- Read the canonical files from disk instead of relying on pasted copies.\n- Judge whether the current code satisfies the spec.\n- If violations are found, write {VIOLATIONS_FILE} with a clear, actionable list.\n- Emit exactly one action to begin."
+        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical references:\n- Spec: {SPEC_FILE}\n- Master plan: {MASTER_PLAN_FILE}\n- Lane plan: {lane_plan_file}\n- Diagnostics: {diagnostics_file}\n- Violations to write: {VIOLATIONS_FILE}\n\nExecutor lane: {lane_label}\nExecutor result summary:\n{exec_result}\n\nVerifier baton:\n- Read the canonical files from disk instead of relying on pasted copies.\n- Judge whether the current code satisfies the spec.\n- If violations are found, write {VIOLATIONS_FILE} with a clear, actionable list.\n- Emit exactly one action to begin."
     )
 }
 
 pub(crate) fn diagnostics_cycle_prompt(summary_text: &str) -> String {
+    let diagnostics_file = diagnostics_file();
     format!(
-        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical references:\n- Spec: {SPEC_FILE}\n- Violations: {VIOLATIONS_FILE}\n- Diagnostics report to write: {DIAGNOSTICS_FILE}\n- Event log directory: state/event_log/event.tlog.d\n\nLatest verifier summary:\n{summary_text}\n\nDiagnostics baton:\n- Always inspect the event log and the relevant canon system files.\n- Analyze violations and determine root causes.\n- Prioritize canon-route, canon-loop, canon-runtime, and canon-mini-agent when control flow or prompt contracts are implicated.\n- Use the spec as the canonical contract, not lane plans.\n- Focus on route/control-flow correctness, successor discharge, duplicate fanout, scheduler-state drift, and prompt-shell mismatches.\n- Emit exactly one action to begin."
+        "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical references:\n- Spec: {SPEC_FILE}\n- Violations: {VIOLATIONS_FILE}\n- Diagnostics report to write: {diagnostics_file}\n- Event log directory: state/event_log/event.tlog.d\n\nLatest verifier summary:\n{summary_text}\n\nDiagnostics baton:\n- Always inspect the event log and the relevant canon system files.\n- Read files and search the source code for the bugs (use read_file + run_command/ripgrep).\n- Run 5+ python analysis actions over event logs and code evidence.\n- Analyze violations and determine root causes; infer the true root problem, not just symptoms.\n- Provide detailed sources of errors (file paths, functions, and log evidence).\n- Prioritize canon-route, canon-loop, canon-runtime, and canon-mini-agent when control flow or prompt contracts are implicated.\n- Use the spec as the canonical contract, not lane plans.\n- Focus on route/control-flow correctness, successor discharge, duplicate fanout, scheduler-state drift, and prompt-shell mismatches.\n- Emit exactly one action to begin."
     )
 }
 
@@ -398,13 +402,14 @@ fn other_available_actions(last_action: Option<&str>) -> String {
 pub(crate) fn action_result_prompt(
     tab_id: Option<u32>,
     turn_id: Option<u64>,
+    agent_type: &str,
     result: &str,
     last_action: Option<&str>,
 ) -> String {
     let tab_label = tab_id.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string());
     let turn_label = turn_id.map(|v| v.to_string()).unwrap_or_else(|| "unknown".to_string());
     format!(
-        "TAB_ID: {tab_label}\nTURN_ID: {turn_label}\n\nAction result:\n{}\n\n{}\nEmit exactly one action.",
+        "TAB_ID: {tab_label}\nTURN_ID: {turn_label}\nAGENT_TYPE: {agent_type}\n\nAction result:\n{}\n\n{}\nEmit exactly one action.",
         truncate(result, MAX_SNIPPET),
         other_available_actions(last_action),
     )

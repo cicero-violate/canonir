@@ -1,72 +1,69 @@
 # Violations
 
-## 1. Runtime not participating in event system (CRITICAL)
+## 1. Build/runtime mismatch for EventBus (CRITICAL)
 - Evidence:
-  - actors = {"rustc": ...} only
-  - No runtime actor present in event log
-  - No runtime_started or tick events
+  - register() patched with BUS REGISTER TRACE, but no trace logs appear
+  - dispatch reports sync_consumers_len = 0
+  - EventRuntime::new logs registrations, but consumers not present at dispatch
 - Issue:
-  - Canonical runtime is not emitting or recording events
-  - Entire system operates outside event-sourced control
+  - Running binary is not using the patched EventBus (wrong crate/version/path)
+  - Consumer registration is effectively a no-op at runtime
 - Required fix:
-  - Ensure runtime bootstrap emits runtime_started
-  - Add tick driver that emits runtime/tick events
-  - Ensure runtime actor writes to event log
+  - Ensure single EventBus implementation is used across build (no duplicate crates/paths)
+  - Verify Cargo workspace resolves to intended canon-runtime crate
+  - Clean/rebuild to eliminate stale artifacts (e.g., cargo clean)
+  - Add invariant/log: register() must be observable in runtime logs
 
-## 2. Canonical control chain not initiated (CRITICAL)
+## 2. No consumers registered at dispatch (CRITICAL)
+- Evidence:
+  - sync_consumers_len = 0 during dispatch
+- Issue:
+  - Event bus has no active consumers → no routing/loop execution possible
+- Required fix:
+  - Ensure RouteExecutor and LoopStageExecutor are registered on the same bus instance used for dispatch
+  - Validate registration occurs before any dispatch
+  - Add fail-fast if consumer count == 0
+
+## 3. Runtime not participating in event system (CRITICAL)
+- Evidence:
+  - Diagnostics show only rustc actor; no runtime_started/tick
+  - No decision/route/observe/loop events
+- Issue:
+  - Runtime is not emitting canonical events
+- Required fix:
+  - Ensure runtime bootstrap emits runtime_started and periodic tick
+  - Register runtime actor and emitter to tlog
+
+## 4. Canonical control chain not initiated (CRITICAL)
 - Evidence:
   - No decision, route, dispatch, observe, or loop_observed events
 - Issue:
-  - Spec invariant (state → decision → transition → event log) completely broken
+  - state → decision → transition pipeline never starts
 - Required fix:
-  - Restore state → decision emission
-  - Ensure each tick produces at least one decision
-  - Add fail-fast if no decision events occur
+  - Construct SemanticStateSummary and emit decision each tick
+  - Enforce invariant: decision per tick or fail-fast
 
-## 3. RuntimeEvent emission/ingestion absent (CRITICAL)
-- Evidence:
-  - No RuntimeEvent present in logs
-  - Only rustc-originated events recorded
-- Issue:
-  - Runtime is not acting as an event producer
-- Required fix:
-  - Identify and fix RuntimeEvent emission entrypoint
-  - Ensure emitter is wired into runtime loop
-  - Validate ingestion pipeline delivers runtime events
-
-## 4. Routing layer never executes (CRITICAL)
+## 5. Routing layer never executes (CRITICAL)
 - Evidence:
   - route_events_present = 0
   - No RouteExecutor activity
 - Issue:
-  - Routing cannot occur without decision events
+  - No decision → no routing; also no consumers to receive events
 - Required fix:
-  - Restore decision stage first
-  - Then enforce routing from SemanticStateSummary
+  - Fix consumer registration and ensure routing derives from SemanticStateSummary
 
-## 5. Canonical loop fully inactive (CRITICAL)
+## 6. Canonical loop fully inactive (CRITICAL)
 - Evidence:
-  - No observe or LoopObserved events
-  - No downstream stages (plan/act/verify)
+  - No observe or LoopObserved; no plan/act/verify
 - Issue:
-  - Loop never entered
+  - Loop never entered due to upstream failures
 - Required fix:
-  - Restore pipeline entry before loop-level fixes
-
-## 6. System operating outside canonical architecture (CRITICAL)
-- Evidence:
-  - Only rustc events present
-  - No canonical control-flow events
-- Issue:
-  - System not using event-sourced execution model required by spec
-- Required fix:
-  - Ensure all control-flow is event-driven
-  - Eliminate non-event-driven execution paths
+  - Restore dispatch → route → loop after fixing EventBus linkage and runtime emission
 
 ## 7. System not spec-compliant
 - Evidence:
-  - No canonical stages executing
+  - Zero canonical stage execution; consumer count zero; runtime actor absent
 - Issue:
-  - Core invariant (state → decision → route → loop → plan → act → verify) completely broken
+  - Violates core invariant (state → decision → route → loop → plan → act → verify)
 - Required fix:
-  - Restore full canonical pipeline starting from runtime event emission
+  - Correct build linkage and EventBus usage, then restore full canonical pipeline

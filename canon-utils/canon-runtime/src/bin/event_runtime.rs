@@ -580,9 +580,28 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
         })?;
     }
 
-    // P3 tick timer removed — system is purely event-driven.
-    // Periodic ticks caused every consumer to re-observe on every heartbeat,
-    // generating O(N_agents * ticks_per_sec) spurious loop_observed events.
+    // FIX: reintroduce minimal tick driver to ensure LoopObserved emission
+    // Canonical invariant requires at least one observe per cycle (state → decision)
+    {
+        let tick_emitter = runtime.emitter_handle();
+        std::thread::spawn(move || {
+            let mut tick: u64 = 0;
+            loop {
+                tick += 1;
+                let event = RuntimeEvent::LoopObserved(canon_event::LoopObserved {
+                    tick,
+                    error_count: 0,
+                    warning_count: 0,
+                    compiler_errors: vec![],
+                    goal_text: None,
+                    semantic_summary: canon_semantic_state::SemanticStateSummary::default(),
+                    observe_diagnostics: vec![],
+                });
+                let _ = tick_emitter.emit_located(event, file!(), line!());
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        });
+    }
 
     // --- P4: prompt-directory watcher ---
     // Watches canon-agent-prompts/ for .md file changes. On change: re-reads

@@ -185,7 +185,7 @@ impl WsBridge {
     /// If the WS is disconnected the frame is pushed into `turn_replay_queue`
     /// and will be replayed the moment the extension reconnects, so no TURN
     /// is silently lost during the ~1 s reconnect window.
-    pub async fn send_turn_with_meta(&self, tab_id: u32, url: &str, text: String) -> Result<(String, u64), WsBridgeError> {
+    pub async fn send_turn_with_meta_with_timeout(&self, tab_id: u32, url: &str, text: String, response_timeout_secs: u64) -> Result<(String, u64), WsBridgeError> {
         let (tx, rx) = oneshot::channel::<String>();
         let (ack_tx, ack_rx) = oneshot::channel::<()>();
         let turn_id = self.next_turn_id.fetch_add(1, Ordering::Relaxed);
@@ -231,7 +231,7 @@ impl WsBridge {
             }
         }
 
-        match tokio::time::timeout(std::time::Duration::from_secs(self.response_timeout_secs), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(response_timeout_secs), rx).await {
             Ok(Ok(text)) => Ok((text, turn_id)),
             Ok(Err(_)) => {
                 let mut st = self.state.lock().await;
@@ -246,9 +246,17 @@ impl WsBridge {
         }
     }
 
+    pub async fn send_turn_with_meta(&self, tab_id: u32, url: &str, text: String) -> Result<(String, u64), WsBridgeError> {
+        self.send_turn_with_meta_with_timeout(tab_id, url, text, self.response_timeout_secs).await
+    }
+
     pub async fn send_turn(&self, tab_id: u32, url: &str, text: String) -> Result<String, WsBridgeError> {
         let (text, _turn_id) = self.send_turn_with_meta(tab_id, url, text).await?;
         Ok(text)
+    }
+
+    pub fn response_timeout_secs(&self) -> u64 {
+        self.response_timeout_secs
     }
 
     pub async fn submit_turn(&self, tab_id: u32, url: &str, text: String) -> Result<u64, WsBridgeError> {

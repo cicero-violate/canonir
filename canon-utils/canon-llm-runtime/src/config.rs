@@ -145,7 +145,7 @@ fn capability_config_default_llm_retry_delay() -> u64 {
     5
 }
 fn capability_config_default_response_timeout_secs() -> u64 {
-    60
+    150
 }
 fn capability_config_default_max_concurrency() -> usize {
     4
@@ -287,6 +287,7 @@ pub struct RoleConfig {
     #[serde(default)]
     pub weights: HashMap<String, u32>,
     pub burst: Option<usize>,
+    pub response_timeout_secs: Option<u64>,
 }
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct InstanceConfig {

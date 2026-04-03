@@ -30,6 +30,7 @@ pub struct LlmWorkItem {
     pub prompt: String,
     pub role_schema: String,
     pub phase: String,
+    pub response_timeout_secs: Option<u64>,
     pub submit_only: bool,
     pub response: oneshot::Sender<Result<LlmResponse>>,
 }
@@ -85,7 +86,9 @@ impl LlmWorker {
         }
         tab_manager_log_llm(format!("phase={} endpoint={} req_id={} send_turn_start", req.phase, self.endpoint_id, req.req_id));
         if req.submit_only {
-            let result = self.submit_turn_only(&req.phase, req.req_id, req.prompt, req.role_schema).await;
+            let result = self
+                .submit_turn_only(&req.phase, req.req_id, req.prompt, req.role_schema, req.response_timeout_secs)
+                .await;
             if let Ok(resp) = result.as_ref() {
                 if let Some(key) = req.cache_key {
                     self.cache.lock().await.insert(key, resp.raw.clone());
@@ -94,7 +97,16 @@ impl LlmWorker {
             let _ = req.response.send(result);
             return;
         }
-        let result = self.send_turn(&req.phase, req.req_id, req.allow_req_id_mismatch, req.prompt, req.role_schema).await;
+        let result = self
+            .send_turn(
+                &req.phase,
+                req.req_id,
+                req.allow_req_id_mismatch,
+                req.prompt,
+                req.role_schema,
+                req.response_timeout_secs,
+            )
+            .await;
         if let Ok(resp) = result.as_ref() {
             if let Some(key) = req.cache_key {
                 self.cache.lock().await.insert(key, resp.raw.clone());
@@ -102,9 +114,18 @@ impl LlmWorker {
         }
         let _ = req.response.send(result);
     }
-    async fn send_turn(&self, phase: &str, req_id: u64, allow_req_id_mismatch: bool, prompt: String, role_schema: String) -> Result<LlmResponse> {
+    async fn send_turn(
+        &self,
+        phase: &str,
+        req_id: u64,
+        allow_req_id_mismatch: bool,
+        prompt: String,
+        role_schema: String,
+        response_timeout_secs: Option<u64>,
+    ) -> Result<LlmResponse> {
         const MAX_SEND_ATTEMPTS: usize = 2;
         let selected_url = self.pick_url(req_id as usize);
+        let response_timeout_secs = response_timeout_secs.unwrap_or_else(|| self.bridge.response_timeout_secs());
         for attempt in 0..MAX_SEND_ATTEMPTS {
             let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, selected_url, &self.tabs, self.max_tabs).await?;
 
@@ -136,7 +157,7 @@ impl LlmWorker {
 
             tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
             tab_manager_log_llm(format!("phase={} endpoint={} tab={} send attempt={}", phase, self.endpoint_id, tab_id, attempt + 1));
-            let (raw, turn_id) = match self.bridge.send_turn_with_meta(tab_id, selected_url, full_prompt).await {
+            let (raw, turn_id) = match self.bridge.send_turn_with_meta_with_timeout(tab_id, selected_url, full_prompt, response_timeout_secs).await {
                 Ok(v) => v,
                 Err(e) => {
                     tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
@@ -200,7 +221,14 @@ impl LlmWorker {
         Err(anyhow::anyhow!("llm send_turn exhausted retries"))
     }
 
-    async fn submit_turn_only(&self, _phase: &str, req_id: u64, prompt: String, role_schema: String) -> Result<LlmResponse> {
+    async fn submit_turn_only(
+        &self,
+        _phase: &str,
+        req_id: u64,
+        prompt: String,
+        role_schema: String,
+        _response_timeout_secs: Option<u64>,
+    ) -> Result<LlmResponse> {
         let selected_url = self.pick_url(req_id as usize);
         let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, selected_url, &self.tabs, self.max_tabs).await?;
         let include_role = if role_schema.trim().is_empty() {
@@ -246,8 +274,24 @@ pub async fn llm_worker_send_request(
     phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool,
 ) -> Result<String> {
     let (req_id, resp) =
-        llm_worker_send_request_with_req_id(bridge, endpoint_id, url, stateful, prompt, role_schema, node_id, cache_key, bust_cache, allow_req_id_mismatch, phase, tabs, max_tabs, submit_only)
-            .await?;
+        llm_worker_send_request_with_req_id_timeout(
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            prompt,
+            role_schema,
+            node_id,
+            cache_key,
+            bust_cache,
+            allow_req_id_mismatch,
+            phase,
+            tabs,
+            max_tabs,
+            submit_only,
+            None,
+        )
+        .await?;
     let _ = req_id;
     Ok(resp.raw)
 }
@@ -255,6 +299,57 @@ pub async fn llm_worker_send_request(
 pub async fn llm_worker_send_request_with_req_id(
     bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
     phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool,
+) -> Result<(u64, LlmResponse)> {
+    llm_worker_send_request_with_req_id_timeout(
+        bridge,
+        endpoint_id,
+        url,
+        stateful,
+        prompt,
+        role_schema,
+        node_id,
+        cache_key,
+        bust_cache,
+        allow_req_id_mismatch,
+        phase,
+        tabs,
+        max_tabs,
+        submit_only,
+        None,
+    )
+    .await
+}
+
+pub async fn llm_worker_send_request_timeout(
+    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
+    phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool, response_timeout_secs: Option<u64>,
+) -> Result<String> {
+    let (req_id, resp) =
+        llm_worker_send_request_with_req_id_timeout(
+            bridge,
+            endpoint_id,
+            url,
+            stateful,
+            prompt,
+            role_schema,
+            node_id,
+            cache_key,
+            bust_cache,
+            allow_req_id_mismatch,
+            phase,
+            tabs,
+            max_tabs,
+            submit_only,
+            response_timeout_secs,
+        )
+        .await?;
+    let _ = req_id;
+    Ok(resp.raw)
+}
+
+pub async fn llm_worker_send_request_with_req_id_timeout(
+    bridge: &WsBridge, endpoint_id: &str, url: &str, stateful: bool, prompt: &str, role_schema: &str, node_id: Option<&str>, cache_key: Option<u64>, bust_cache: bool, allow_req_id_mismatch: bool,
+    phase: &str, tabs: &TabManagerHandle, max_tabs: usize, submit_only: bool, response_timeout_secs: Option<u64>,
 ) -> Result<(u64, LlmResponse)> {
     let req_id = NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
@@ -307,6 +402,7 @@ pub async fn llm_worker_send_request_with_req_id(
         prompt: prompt.to_string(),
         role_schema: role_schema.to_string(),
         phase: phase.to_string(),
+        response_timeout_secs,
         submit_only,
         response: tx,
     };

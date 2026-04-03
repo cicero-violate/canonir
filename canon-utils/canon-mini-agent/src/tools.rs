@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::{
-    DIAGNOSTICS_FILE, MASTER_PLAN_FILE, MAX_FULL_READ_LINES, MAX_SNIPPET, SPEC_FILE,
+    diagnostics_file, MASTER_PLAN_FILE, MAX_FULL_READ_LINES, MAX_SNIPPET, SPEC_FILE,
     VIOLATIONS_FILE, WORKSPACE,
 };
 use crate::logging::{append_action_log, append_action_result_log};
@@ -45,18 +45,19 @@ fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
         return None;
     }
 
+    let diagnostics_file = diagnostics_file();
     let touches_spec = targets.iter().any(|path| *path == SPEC_FILE);
     let touches_lane = targets.iter().any(|path| is_lane_plan(path));
     let touches_master_plan = targets.iter().any(|path| *path == MASTER_PLAN_FILE);
     let touches_violations = targets.iter().any(|path| *path == VIOLATIONS_FILE);
-    let touches_diagnostics = targets.iter().any(|path| *path == DIAGNOSTICS_FILE);
+    let touches_diagnostics = targets.iter().any(|path| *path == diagnostics_file);
     let touches_other = targets
         .iter()
         .any(|path| *path != SPEC_FILE
             && *path != MASTER_PLAN_FILE
             && !is_lane_plan(path)
             && *path != VIOLATIONS_FILE
-            && *path != DIAGNOSTICS_FILE);
+            && *path != diagnostics_file);
 
     match role {
         role if role.starts_with("executor") => {
@@ -197,7 +198,8 @@ fn patch_failure_guidance(path: Option<&str>, err_msg: &str) -> String {
     hints.push("Next step: emit `read_file` for the target file, then build a new patch with at least 3 unchanged context lines.".to_string());
 
     if let Some(file) = path {
-        if file == DIAGNOSTICS_FILE || file.ends_with(".md") {
+        let diagnostics_file = diagnostics_file();
+        if file == diagnostics_file || file.ends_with(".md") {
             hints.push("This is a prose/markdown file: prefer rewriting the whole section or the whole file instead of a tiny surgical hunk.".to_string());
             hints.push("For DIAGNOSTICS.md, one full-file rewrite is usually more reliable than repeated partial patches.".to_string());
         }

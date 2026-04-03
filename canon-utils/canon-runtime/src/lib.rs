@@ -184,6 +184,9 @@ impl EventRuntime {
     }
 
     pub fn process_events(&mut self, events: &[AnyEvent]) -> Result<usize> {
+        // FIX: ensure any pending emitted events are dispatched BEFORE processing
+        // This guarantees that early emissions (e.g. LoopObserved) see registered consumers
+        self.drain_emitted_events()?;
         let mut processed = 0usize;
         for event in events {
             if let AnyEvent::Canon(canon) = event {
@@ -615,6 +618,10 @@ impl EventRuntime {
     pub fn drain_emitted_events(&mut self) -> Result<()> {
         while let Ok(located) = self.emitter_rx.try_recv() {
             // DEBUG TRACE: confirm events are entering drain path
+            // FIX: route emitted events through EventBus dispatch
+            let event = located.event.clone();
+            let event_id = canon_event::EventId::new(canon_event::new_event_id());
+            let _ = self.bus.dispatch(event, event_id);
             eprintln!("[DRAIN EVENT] kind={:?} file={} line={}", canon_event::event_kind_str(&located.event), located.file, located.line);
             let event = located.event;
             let file = located.file;
@@ -627,6 +634,9 @@ impl EventRuntime {
             eprintln!("[CALLING APPEND] kind={:?}", canon_event::event_kind_str(&event));
             std::fs::write("/tmp/append_callsite_probe.log", format!("CALLSITE {:?}\n", event)).ok();
             self.append_runtime_event(&event, file, line, parent_ids, event_id);
+
+            // FIX: ensure emitted events are dispatched to consumers
+            let _ = self.bus.dispatch(event.clone(), canon_event::EventId::new(canon_event::new_event_id()));
         }
         Ok(())
     }
