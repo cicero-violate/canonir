@@ -528,7 +528,17 @@ impl EventRuntime {
         // Track ID so process_events can skip re-dispatch when P2 re-delivers this
         // same tlog entry (preventing double-processing of self-written events).
         self.dispatched_ids.insert(event_id.clone());
-        // CRITICAL FIX: prevent dispatch before consumers are registered
+        // CRITICAL: enforce invariants BEFORE any append or dispatch
+        if let Err(reason) = self.invariant_engine.validate_before_append(&event, &parent_ids) {
+            eprintln!("[INVARIANT VIOLATION] rejecting event before dispatch: {}", reason);
+            self.mode = RuntimeMode::FatalInvariantHalt { reason };
+            return Ok(());
+        }
+
+        // Append FIRST (canonical write)
+        self.append_runtime_event(&event, file, line, parent_ids.clone(), event_id.clone());
+
+        // Then dispatch
         if self.bus.sync_consumers_len() == 0 {
             eprintln!("[LIVE DISPATCH GUARD] skipping dispatch: no consumers registered yet");
             return Ok(());
@@ -539,7 +549,8 @@ impl EventRuntime {
             const SILENT_KINDS: &[&str] = &["debug", "runtime_state_updated", "code", "edit", "analysis", "cargo", "file", "bash", "llm"];
             let kind_str = canon_event::event_kind_str(&event);
             if !SILENT_KINDS.contains(&kind_str) {
-                eprintln!("[canon-runtime] WARN: event kind={kind_str} id={event_id} delivered to 0 consumers");
+                eprintln!("[canon-runtime] FATAL: event kind={kind_str} id={event_id} delivered to 0 consumers");
+                return Err(anyhow::anyhow!("dispatch failure: no consumers received event"));
             }
         }
 

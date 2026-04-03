@@ -260,7 +260,8 @@ fn handle_event_msg(
     }
     // HEARTBEAT: ensure at least one event per cycle to prevent stall
     // Canonical requirement: runtime must not go silent
-    let _ = runtime.emit_tick();
+    // CRITICAL: enforce emission — fail-fast if tick emission fails
+    runtime.emit_tick()?;
     Ok(())
 }
 
