@@ -1,4 +1,3 @@
-
 while true; do
   /workspace/ai_sandbox/canon/target/debug/canon-mini-agent --orchestrate --instance agent_0 --port 9103
   echo "restarting..."
