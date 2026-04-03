@@ -57,7 +57,10 @@ reports_skip_snapshot = true
 
 [[llm.endpoints]]
 id = "planner_chatgpt_group"
-url = "https://chatgpt.com/gg/69c897e5a6448198a36a18b58f83de07"
+url = [
+  "https://chatgpt.com/gg/69c897e5a6448198a36a18b58f83de07",
+  "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
+]
 role_markdown = "builtin:planner"
 role = "planner"
 stateful = true
@@ -65,7 +68,11 @@ max_tabs = 1
 
 [[llm.endpoints]]
 id = "mini_planner_chatgpt"
-url = "https://chatgpt.com/gg/69ca778f7ea0819c8437275ff608eb35"
+url = [
+  "https://chatgpt.com/c/69cf340f-f16c-8327-b945-8e58aba1b66f",
+  "https://chatgpt.com/gg/69ca778f7ea0819c8437275ff608eb35",
+  "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
+]
 role_markdown = "builtin:planner"
 role = "mini_planner"
 stateful = true
@@ -73,345 +80,206 @@ max_tabs = 1
 
 [[llm.endpoints]]
 id = "intent_chatgpt"
-url = "https://chatgpt.com/gg/69ca8d22f5f4819abed326a8343f9467"
+url = ["https://chatgpt.com/gg/69ca8d22f5f4819abed326a8343f9467"]
 role_markdown = "builtin:planner"
 role = "intent"
 stateful = true
 max_tabs = 1
 
 [[llm.endpoints]]
+id = "analyst_chatgpt"
+url = ["https://chatgpt.com/gg/69c897e5a6448198a36a18b58f83de07"]
+role_markdown = "builtin:analyst"
+role = "analyst"
+stateful = true
+max_tabs = 1
+
+[[llm.endpoints]]
+id = "router_chatgpt_group"
+url = ["https://chatgpt.com/gg/69bb5dbc591c819cb924366acba795bd"]
+role_markdown = "builtin:planner"
+role = "router"
+stateful = true
+max_tabs = 1
+
+[[llm.endpoints]]
 id = "goal_gen_chatgpt"
-url = "https://chatgpt.com/gg/69c229260fa08194ad30bb0e1f57105a"
+url = ["https://chatgpt.com/gg/69c229260fa08194ad30bb0e1f57105a"]
 role_markdown = "builtin:planner"
 role = "goal_gen"
 stateful = false
 max_tabs = 1
 
 [[llm.endpoints]]
+id = "analyst_chatgpt"
+url = ["https://chatgpt.com/gg/69c22949e1e881948abaf7016ef8be4c"]
+role_markdown = "builtin:planner"
+role = "analyst"
+stateful = true
+max_tabs = 1
+
+[[llm.endpoints]]
 id = "verifier_chatgpt"
-url = "https://chatgpt.com/gg/69ca70d1a4208199a3d1c4c77e87c147"
+url = [
+  "https://chatgpt.com/gg/69ca70d1a4208199a3d1c4c77e87c147",
+  "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
+]
 role_markdown = "builtin:planner"
 role = "verifier"
 stateful = true
 max_tabs = 1
 
 [[llm.endpoints]]
-id = "mini_agent_chatgpt"
-url = "https://chatgpt.com/gg/69ca500acd888199a32b90339c82fa31"
-role_markdown = "builtin:planner"
-role = "executor"
-stateful = true
-max_tabs = 1
-
-[[llm.endpoints]]
 id = "diagnostics_chatgpt"
-url = "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118"
+url = [
+  "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118",
+  "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
+]
 role_markdown = "builtin:planner"
 role = "diagnostics"
 stateful = true
 max_tabs = 1
 
 [[llm.endpoints]]
-id = "exec_chatgpt_d"
-url = "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02"
-role_markdown = "builtin:exec"
-role = "executor"
-stateful = true
-max_tabs = 1
-
-[llm.roles.mini_planner.weights]
-mini_planner_chatgpt = 100
-
-[llm.roles.mini_planner]
-burst = 1
-
-[llm.endpoints.router]
-id = "router_chatgpt_group"
-url = "https://chatgpt.com/gg/69bb5dbc591c819cb924366acba795bd"
-role_markdown = "builtin:planner"
-role = "router"
-stateful = true
-max_tabs = 1
-
-[llm.endpoints.goal_gen]
-id = "goal_gen_chatgpt"
-url = "https://chatgpt.com/gg/69c229260fa08194ad30bb0e1f57105a"
-role_markdown = "builtin:planner"
-role = "goal_gen"
-stateful = false
-max_tabs = 1
-
-[llm.endpoints.analyst]
-id = "analyst_chatgpt"
-url = "https://chatgpt.com/gg/69c22949e1e881948abaf7016ef8be4c"
-role_markdown = "builtin:planner"
-role = "analyst"
-stateful = true
-max_tabs = 1
-
-[llm.endpoints.harness_repair]
 id = "harness_repair_chatgpt"
-url = "https://chatgpt.com/gg/69c8f84bb6848194a9b9ca6eaf5819c6"
+url = ["https://chatgpt.com/gg/69c8f84bb6848194a9b9ca6eaf5819c6"]
 role_markdown = "builtin:planner"
 role = "harness_repair"
 stateful = true
 max_tabs = 1
 
-[llm.endpoints.harness_eventlog]
+[[llm.endpoints]]
 id = "harness_eventlog_chatgpt"
-url = "https://chatgpt.com/gg/69c8f86cf14c81a0a1a9b4487bccd784"
+url = ["https://chatgpt.com/gg/69c8f86cf14c81a0a1a9b4487bccd784"]
 role_markdown = "builtin:planner"
 role = "harness_eventlog"
 stateful = true
 max_tabs = 1
 
-[llm.endpoints.mini_agent]
-id = "mini_agent_chatgpt"
-url = "https://chatgpt.com/gg/69ca500acd888199a32b90339c82fa31"
+# executor pool: mini_agent + exec_d
+[[llm.endpoints]]
+id = "executor_pool"
+url = [
+  "https://chatgpt.com/gg/69ca500acd888199a32b90339c82fa31",
+  "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02",
+]
 role_markdown = "builtin:planner"
 role = "executor"
 stateful = true
-max_tabs = 1
+max_tabs = 2
 
-[llm.endpoints.executor_b]
-id = "exec_chatgpt_d"
-url = "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02"
-role_markdown = "builtin:exec"
-role = "executor"
-stateful = true
-max_tabs = 1
-
-[llm.roles.mini_agent.weights]
-mini_agent_chatgpt = 100
-
-[llm.roles.mini_agent]
-burst = 1
-
-[llm.roles.executor.weights]
-mini_agent_chatgpt = 50
-exec_chatgpt_d = 50
-
-[llm.roles.executor]
-burst = 1
-
-[llm.endpoints.verifier]
-id = "verifier_chatgpt"
-url = "https://chatgpt.com/gg/69ca70d1a4208199a3d1c4c77e87c147"
-role_markdown = "builtin:planner"
-role = "verifier"
-stateful = true
-max_tabs = 1
-
-
-[llm.roles.verifier.weights]
-verifier_chatgpt = 100
-
-[llm.roles.verifier]
-burst = 1
-
-[llm.roles.analyst.weights]
-analyst_chatgpt = 100
-
-[llm.roles.analyst]
-burst = 1
-
-[llm.endpoints.exec_chatgpt_a]
-id = "exec_chatgpt_a"
-url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
+# exec pool: all exec tabs a–h
+[[llm.endpoints]]
+id = "exec_pool"
+url = [
+  "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679",
+  "https://chatgpt.com/gg/69bb69adfe54819f9b4100d97cbd3912",
+  "https://chatgpt.com/gg/69bca5997968819c90b2dbe13d4290b6",
+  "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02",
+  "https://chatgpt.com/gg/69929b2174b48191a3e25a56524ca8e5",
+  "https://chatgpt.com/gg/699271537d0c819f88b1b8ec9c068b69",
+  "https://chatgpt.com/gg/69ca3cec39ec8195911764cda77d15a0",
+  "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
+]
 role_markdown = "builtin:exec"
 role = "exec"
 stateful = true
-max_tabs = 1
-
-[llm.endpoints.exec_chatgpt_b]
-id = "exec_chatgpt_b"
-url = "https://chatgpt.com/gg/69bb69adfe54819f9b4100d97cbd3912"
-role_markdown = "builtin:exec"
-role = "exec"
-stateful = true
-max_tabs = 1
-
-[llm.endpoints.exec_chatgpt_c]
-id = "exec_chatgpt_c"
-url = "https://chatgpt.com/gg/69bca5997968819c90b2dbe13d4290b6"
-role_markdown = "builtin:exec"
-role = "exec"
-stateful = true
-max_tabs = 1
-
-# [llm.endpoints.exec_chatgpt_d]
-# id = "exec_chatgpt_d"
-# url = "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02"
-# role_markdown = "builtin:exec"
-# role = "exec"
-# stateful = true
-# max_tabs = 1
-
-[llm.endpoints.exec_chatgpt_e]
-id = "exec_chatgpt_e"
-url = "https://chatgpt.com/gg/69929b2174b48191a3e25a56524ca8e5"
-role_markdown = "builtin:exec"
-role = "exec"
-stateful = true
-max_tabs = 1
-
-[llm.endpoints.exec_chatgpt_f]
-id = "exec_chatgpt_f"
-url = "https://chatgpt.com/gg/699271537d0c819f88b1b8ec9c068b69"
-role_markdown = "builtin:exec"
-role = "exec"
-stateful = true
-max_tabs = 1
-
-[llm.roles.decompose.weights]
-exec_chatgpt_a = 100
-exec_chatgpt_b = 100
-exec_chatgpt_c = 100
-exec_chatgpt_d = 100
-exec_chatgpt_e = 100
-exec_chatgpt_f = 100
-
-[llm.roles.decompose]
-burst = 6
-
-[llm.roles.planner.weights]
-planner_chatgpt_group = 100
+max_tabs = 8
 
 [llm.roles.planner]
 burst = 4
+[llm.roles.planner.weights]
+planner_chatgpt_group = 100
 
-[llm.roles.router.weights]
-router_chatgpt_group = 100
+[llm.roles.mini_planner]
+burst = 1
+[llm.roles.mini_planner.weights]
+mini_planner_chatgpt = 100
 
 [llm.roles.router]
 burst = 4
-
-[llm.roles.goal_gen.weights]
-goal_gen_chatgpt = 100
+[llm.roles.router.weights]
+router_chatgpt_group = 100
 
 [llm.roles.goal_gen]
 burst = 1
+[llm.roles.goal_gen.weights]
+goal_gen_chatgpt = 100
 
-[llm.roles.harness_repair.weights]
-harness_repair_chatgpt = 100
-
-[llm.roles.harness_repair]
+[llm.roles.analyst]
 burst = 1
+[llm.roles.analyst.weights]
+analyst_chatgpt = 100
 
-[llm.roles.harness_eventlog.weights]
-harness_eventlog_chatgpt = 100
-
-[llm.roles.harness_eventlog]
+[llm.roles.verifier]
 burst = 1
-
-[llm.roles.diagnostics.weights]
-diagnostics_chatgpt = 100
+[llm.roles.verifier.weights]
+verifier_chatgpt = 100
 
 [llm.roles.diagnostics]
 burst = 1
+[llm.roles.diagnostics.weights]
+diagnostics_chatgpt = 100
 
-[llm.roles.exec.weights]
-exec_chatgpt_a = 100
-exec_chatgpt_b = 100
-exec_chatgpt_c = 100
-exec_chatgpt_d = 100
-exec_chatgpt_e = 100
-exec_chatgpt_f = 100
+[llm.roles.harness_repair]
+burst = 1
+[llm.roles.harness_repair.weights]
+harness_repair_chatgpt = 100
+
+[llm.roles.harness_eventlog]
+burst = 1
+[llm.roles.harness_eventlog.weights]
+harness_eventlog_chatgpt = 100
+
+[llm.roles.mini_agent]
+burst = 1
+[llm.roles.mini_agent.weights]
+executor_pool = 100
+
+[llm.roles.executor]
+burst = 2
+[llm.roles.executor.weights]
+executor_pool = 100
 
 [llm.roles.exec]
-burst = 6
+burst = 8
+[llm.roles.exec.weights]
+exec_pool = 100
 
-# ---------------------------------------------------------------------------
-# Agent cards — tab assignments for browser automation
-# ---------------------------------------------------------------------------
+[llm.roles.decompose]
+burst = 8
+[llm.roles.decompose.weights]
+exec_pool = 100
 
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69c897e5a6448198a36a18b58f83de07"
-agent_id = "planner"
-role = "builtin:planner"
-goal = "AGENT_GOAL.md"
-tool_capabilities = []
+# instance URL slices for multi-instance mini-agent
+[llm.instances.agent_0]
+exec_pool_urls = [0, 1]
+executor_pool_url = 0
+planner_url = 0
+verifier_url = 0
+diagnostics_url = 0
+mini_planner_url = 0
 
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69bb5dbc591c819cb924366acba795bd"
-agent_id = "router"
-role = "builtin:planner"
-goal = "AGENT_GOAL.md"
-tool_capabilities = []
+[llm.instances.agent_1]
+exec_pool_urls = [2, 3]
+executor_pool_url = 1
+planner_url = 1
+verifier_url = 1
+diagnostics_url = 1
+mini_planner_url = 1
 
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69c229260fa08194ad30bb0e1f57105a"
-agent_id = "goal_gen"
-role = "builtin:planner"
-goal = "AGENT_GOAL.md"
-tool_capabilities = []
+[llm.instances.agent_2]
+exec_pool_urls = [4, 5]
+executor_pool_url = 0
+planner_url = 0
+verifier_url = 0
+diagnostics_url = 0
+mini_planner_url = 0
 
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679"
-agent_id = "exec_a"
-role = "builtin:exec"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69bb69adfe54819f9b4100d97cbd3912"
-agent_id = "exec_b"
-role = "builtin:exec"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69bca5997968819c90b2dbe13d4290b6"
-agent_id = "exec_c"
-role = "builtin:exec"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02"
-agent_id = "exec_d"
-role = "builtin:exec"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69929b2174b48191a3e25a56524ca8e5"
-agent_id = "exec_e"
-role = "builtin:exec"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/699271537d0c819f88b1b8ec9c068b69"
-agent_id = "exec_f"
-role = "builtin:exec"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69c22949e1e881948abaf7016ef8be4c"
-agent_id = "analyst_chatgpt"
-role = "builtin:planner"
-goal = "AGENT_GOAL.md"
-tool_capabilities = []
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69c8f84bb6848194a9b9ca6eaf5819c6"
-agent_id = "harness_repair"
-role = "builtin:planner"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69c8f86cf14c81a0a1a9b4487bccd784"
-agent_id = "harness_eventlog"
-role = "builtin:planner"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash"]
-
-[[agents.cards]]
-agent_url = "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118"
-agent_id = "diagnostics"
-role = "builtin:planner"
-goal = "AGENT_GOAL.md"
-tool_capabilities = ["apply_patch", "bash", "python"]
+[llm.instances.agent_3]
+exec_pool_urls = [6, 7]
+executor_pool_url = 1
+planner_url = 1
+verifier_url = 1
+diagnostics_url = 1
+mini_planner_url = 1
