@@ -1,5 +1,54 @@
 # SPEC: Canon Is an Event-Sourced Judgment System
 
+## Principle
+
+\[
+S \rightarrow J \rightarrow T \rightarrow E
+\]
+
+Where:
+
+- `S` = semantic state
+- `J` = judgment
+- `T` = lawful transition
+- `E` = event log
+
+**Explanation:**  
+Canon operates by deriving control from semantic truth, evaluating it through judgment and invariants, emitting the canonical lawful transition, and recording that transition in the append-only event log.
+
+### Canonical Form
+
+```text
+state -> decision -> transition -> event log
+
+## Objective Function
+
+**Variables:**  
+- `G` = goodness  
+- `C` = coverage  
+- `K` = clarity  
+- `D` = determinism  
+- `P` = lawful transitions  
+- `L` = code volume  
+- `U` = duplication  
+- `H` = hidden branches  
+
+### Equation
+
+\[
+G = \max\left(\frac{C \cdot K \cdot D \cdot P}{L \cdot U}\right)
+\quad \text{subject to} \quad
+C = 1,\ H = 0,\ P = 1
+\]
+
+**Explanation:**  
+Canon maximizes goodness by maximizing coverage, clarity, determinism, and lawful control, while minimizing code volume and duplication, under full coverage, zero hidden branches, and fully lawful transitions.
+
+\[
+\max(\text{Intelligence, Efficiency, Correctness, Alignment, Robustness, Performance, Scalability, Determinism, Transparency, Collaboration, Empowerment, Benefit, Learning, Future\text{-}Proofing) = G
+\]
+
+
 ## Identity
 
 Canon is an **event-sourced control system**.
