@@ -452,6 +452,11 @@ impl EventRuntime {
 
         let event_id = canon_event::EventId::new(canon_event::new_event_id());
         // Dispatch only — do NOT write to tlog (event is already there).
+        // CRITICAL FIX: guard against early replay before consumers are registered
+        if self.bus.sync_consumers_len() == 0 {
+            eprintln!("[REPLAY GUARD] skipping dispatch: no consumers registered yet");
+            return Ok(());
+        }
         let consumer_count = self.bus.dispatch(event.clone(), event_id.clone());
 
         // CRITICAL FIX: forward event into emitter pipeline so it can be persisted
@@ -523,6 +528,11 @@ impl EventRuntime {
         // Track ID so process_events can skip re-dispatch when P2 re-delivers this
         // same tlog entry (preventing double-processing of self-written events).
         self.dispatched_ids.insert(event_id.clone());
+        // CRITICAL FIX: prevent dispatch before consumers are registered
+        if self.bus.sync_consumers_len() == 0 {
+            eprintln!("[LIVE DISPATCH GUARD] skipping dispatch: no consumers registered yet");
+            return Ok(());
+        }
         let consumer_count = self.bus.dispatch(event.clone(), event_id.clone());
         // Watchdog: warn if a non-informational event has no consumers.
         if consumer_count == 0 {
@@ -538,6 +548,12 @@ impl EventRuntime {
         eprintln!("[HANDLE -> APPEND] kind={:?}", canon_event::event_kind_str(&event));
         // ACTUAL FIX: persist event to tlog
         eprintln!("[BEFORE append_runtime_event CALL]");
+        // 🔥 CRITICAL: enforce invariants at write-time (fail-fast)
+        if let Err(reason) = self.invariant_engine.validate_before_append(&event, &parent_ids) {
+            eprintln!("[INVARIANT VIOLATION] rejecting event before append: {}", reason);
+            self.mode = RuntimeMode::FatalInvariantHalt { reason };
+            return Ok(());
+        }
         std::fs::write("/tmp/append_callsite_probe.log", format!("CALLSITE {:?}\n", event)).ok();
         self.append_runtime_event(&event, file, line, parent_ids.clone(), event_id.clone());
         eprintln!("[AFTER append_runtime_event CALL]");

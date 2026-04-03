@@ -37,3 +37,10 @@ path = "src/bin/capability_smoke_test.rs"
 test = false
 bench = false
 doctest = false
+
+[[bin]]
+name = "rename"
+path = "src/bin/rename.rs"
+test = false
+bench = false
+doctest = false

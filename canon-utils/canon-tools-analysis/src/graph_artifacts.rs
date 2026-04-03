@@ -16,6 +16,9 @@ pub struct GraphArtifactSummary {
     pub call_edge_count: usize,
     pub module_edge_count: usize,
     pub cfg_edge_count: usize,
+    /// Unix ms timestamp when this artifact was captured. Present in history entries.
+    #[serde(default)]
+    pub captured_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -639,6 +642,7 @@ mod tests {
             call_edge_count: ir.call_graph.edge_count(),
             module_edge_count: ir.module_graph.edge_count(),
             cfg_edge_count: 0,
+            captured_at_ms: 0,
         };
         let index = GraphArtifactIndex { latest_workspace: summary.clone() };
         fs::write(dir.path().join("state/graph/index/latest_workspace.json"), serde_json::to_vec(&index).unwrap()).unwrap();

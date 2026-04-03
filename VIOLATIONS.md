@@ -1,52 +1,62 @@
 # Violations
 
-## 1. EventBus build/runtime mismatch (CRITICAL)
+## 1. Invariant enforcement occurs after dispatch (CRITICAL)
 - Evidence:
-  - BUS REGISTER TRACE (in patched register()) never appears
-  - BUS DISPATCH TRACE appears and shows sync_consumers_len = 0
-  - EventRuntime::new logs registration loop execution
+  - Diagnostics: dispatch runs before append validation (lib.rs:737-741)
+  - Invalid events can be dispatched before being rejected
 - Issue:
-  - Runtime is executing a different EventBus implementation than the patched source
-  - Consumer registration has no effect on the dispatching instance
+  - Violates invariant I16: "¬I_k ⇒ reject(E)" at write-time
+  - Causes divergence between dispatched state and persisted log
 - Required fix:
-  - Eliminate duplicate or stale crate artifacts
-  - Ensure single canonical EventBus implementation is linked
-  - Perform clean rebuild (cargo clean + rebuild)
-  - Verify register() logs appear at runtime
+  - Move invariant validation before dispatch
+  - Ensure invalid events are rejected before any side effects
+  - Enforce ordering: validate → append → dispatch (or validate → dispatch+append atomically)
 
-## 2. No consumers registered at dispatch (CRITICAL)
+## 2. Append rejection does not roll back dispatch effects (CRITICAL)
 - Evidence:
-  - sync_consumers_len = 0 during dispatch
+  - Invariant failure returns false but does not undo prior dispatch
+  - ErrorOccurred emitted instead of preventing propagation
 - Issue:
-  - No RouteExecutor or LoopStageExecutor receiving events
-  - Canonical pipeline cannot execute
+  - System state advances despite invalid event
+  - Breaks deterministic replay and causal consistency
 - Required fix:
-  - Ensure registration occurs on the same EventBus instance used for dispatch
-  - Add invariant: consumer count must be > 0 before dispatch
+  - Prevent dispatch entirely if invariant fails
+  - Or implement transactional dispatch with rollback on failure
 
-## 3. Runtime not participating in canonical event system (CRITICAL)
+## 3. Explicit invariant bypass for LoopObserved (CRITICAL)
 - Evidence:
-  - No decision, route, observe, or loop events
-  - Dispatch executes but has no consumers
+  - Diagnostics: LoopObserved explicitly allowed to persist even if invariant fails
 - Issue:
-  - Runtime emits events into a non-functional pipeline
+  - Violates invariant enforcement consistency
+  - Introduces special-case control-flow outside invariant system
 - Required fix:
-  - Fix EventBus linkage so emitted events reach registered consumers
-  - Ensure runtime actor participates in event log
+  - Remove bypass
+  - Ensure all event kinds are subject to invariant validation
 
-## 4. Canonical control-flow chain not executed (CRITICAL)
+## 4. Invariant engine is observational, not authoritative (CRITICAL)
 - Evidence:
-  - No decision → route → loop → plan → act → verify stages
+  - invariant_engine.observe returns false but system continues partial execution
 - Issue:
-  - Entire control chain blocked at dispatch due to missing consumers
+  - Invariants do not gate system behavior
 - Required fix:
-  - Restore functional EventBus so routing and loop stages receive events
+  - Make invariant engine authoritative gate for event progression
+  - Block append and dispatch on failure
 
-## 5. System not spec-compliant
+## 5. System violates deterministic replay and no-hidden-state invariants
 - Evidence:
-  - Dispatch runs with zero consumers
-  - No canonical stages execute
+  - Dispatch-before-append allows state changes not reflected in log
 - Issue:
-  - Violates core invariant: state → decision → route → loop → plan → act → verify
+  - Replay(Σ) ≠ actual runtime state
 - Required fix:
-  - Resolve build/runtime mismatch and restore full event-driven pipeline
+  - Ensure all state transitions are derived strictly from appended events
+  - Eliminate side effects prior to log commit
+
+## 6. System not spec-compliant
+- Evidence:
+  - Invariant enforcement order incorrect
+  - Runtime state can diverge from event log
+- Issue:
+  - Violates core invariant: state = f(Σ)
+- Required fix:
+  - Enforce invariant validation before any state mutation or dispatch
+  - Align runtime execution strictly with event-sourced model

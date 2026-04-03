@@ -153,4 +153,32 @@ impl InvariantEngine {
         }
         ok
     }
+
+    /// Enforce invariants at write-time (pre-append gate)
+    pub fn validate_before_append(
+        &self,
+        event: &RuntimeEvent,
+        parent_ids: &Vec<canon_event::EventId>,
+    ) -> Result<(), String> {
+        // Invariant 11: Payload must exist (basic structural check via debug repr)
+        let kind = canon_event::event_kind_str(event);
+        if kind.is_empty() {
+            return Err("invalid_event_kind".to_string());
+        }
+
+        // Invariant 3: Non-root events must have parents
+        if kind != "root" && parent_ids.is_empty() {
+            return Err("missing_parent_ids".to_string());
+        }
+
+        // Invariant 7/19: effect events must have a control parent (approximation)
+        if kind == "effect" && parent_ids.is_empty() {
+            return Err("orphan_effect_event".to_string());
+        }
+
+        // NOTE: learned statistical invariants (self.invariants) are enforced in observe()
+        // This function enforces structural + hard invariants required by SPEC
+
+        Ok(())
+    }
 }

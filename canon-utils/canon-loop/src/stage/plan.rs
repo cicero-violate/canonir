@@ -1876,6 +1876,7 @@ mod tests {
             call_edge_count: ir.call_graph.edge_count(),
             module_edge_count: ir.module_graph.edge_count(),
             cfg_edge_count: ir.cfg_graph.edge_count(),
+            captured_at_ms: 0,
         };
         let index = canon_analysis::GraphArtifactIndex { latest_workspace: summary.clone() };
         fs::write(artifact_dir.join("index").join("latest_workspace.json"), serde_json::to_vec(&index).unwrap()).unwrap();

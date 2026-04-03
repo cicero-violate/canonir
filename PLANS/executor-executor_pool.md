@@ -1,38 +1,47 @@
 # EXECUTOR PLAN (executor_pool)
 
-## READY NOW (MAX 5)
+## READY NOW (MAX 8)
 
-1. PROVE THE LAUNCHED `canon-runtime` BINARY MATCHES THE REVIEWED SOURCE
-   - trace the actual launched binary path for the failing runtime session
-   - prove Cargo workspace resolution points to the intended `canon-runtime` crate
-   - prove the launched binary contains the reviewed `EventBus` implementation
-   - eliminate stale or duplicate build artifacts when binary identity is ambiguous
+1. **Patch `PLANS/SPEC.md` and `PLANS/INVARIANTS.md` for strict append-time rejection.**
+   - Read `PLANS/SPEC.md` and `PLANS/INVARIANTS.md`.
+   - Patch them so invariant violation at the append boundary rejects event persistence.
+   - Re-read both files to confirm the rule is explicit and mandatory.
 
-2. MOVE STARTUP AND REGISTRATION EVIDENCE INTO THE CANONICAL EVENT LOG
-   - emit canonical startup evidence instead of relying only on stderr or ad-hoc debug files
-   - record runtime bootstrap start, consumer registration count, and live bus identity in canonical logs
-   - make current registration success observable from the same event log used for diagnostics
+2. **Patch the real append boundary in `canon-utils/canon-runtime/src/lib.rs`.**
+   - Read `handle_runtime_event_located_with_parents(...)` and `append_runtime_event(...)`.
+   - Patch `append_runtime_event(...)` so invariant-engine rejection is authoritative at write-time.
+   - Rebuild and verify invalid events no longer enter the log.
 
-3. FAIL FAST ON MISSING REGISTRATION EVIDENCE OR ZERO-CONSUMER DISPATCH
-   - add a hard runtime invariant requiring registration evidence before normal dispatch begins
-   - add a hard runtime invariant requiring consumer count greater than zero before dispatch
-   - halt runtime immediately when either invariant fails and record that failure canonically
+3. **Remove the `LoopObserved` append bypass unless it is explicitly lawful.**
+   - Read the `LoopObserved` override in `append_runtime_event(...)`.
+   - Patch it out unless SPEC + INVARIANTS are updated to allow it explicitly.
+   - Rebuild and verify `LoopObserved` no longer bypasses append-time rejection by default.
 
-4. PROVE REGISTRATION AND DISPATCH USE THE SAME LIVE EVENTBUS INSTANCE
-   - trace the `EventBus` created in `EventRuntime::new` through later runtime dispatch
-   - remove any path that swaps, shadows, reconstructs, or dispatches on a different bus instance
-   - prove the bus that receives registration is the same bus that later dispatches runtime events
+4. **Patch dispatch-time handling so invalid append state does not propagate.**
+   - Read `canon-utils/canon-runtime/src/lib.rs` and `canon-utils/canon-runtime/src/bus.rs`.
+   - Patch dispatch handling so invalid events are not treated as lawful progress when append-time enforcement rejects them.
+   - Rebuild and verify invalid state is blocked rather than merely logged.
 
-5. AFTER LIVE NON-ZERO CONSUMER REGISTRATION IS PROVEN, RESTORE RUNTIME AND DECISION ENTRY
-   - emit `runtime_started` exactly once and make runtime actor identity visible in canonical logs
-   - ensure recurring tick emission reaches persistence through the live runtime path
-   - construct `SemanticStateSummary` at startup and on each tick
-   - emit one canonical decision every tick before downstream execution
-   - keep `scheduler_len`, `planned_pending`, and similar counters out of control truth
+5. **Add append-boundary tests.**
+   - Read `canon-utils/canon-invariant/src/control_harness.rs` and `canon-utils/canon-invariant/src/request_lifecycle_harness.rs`.
+   - Add tests for append-time rejection, no silent `LoopObserved` bypass, and no invalid-state propagation after rejection.
+   - Run the relevant test targets.
+
+6. **Inspect fresh canonical artifacts with Python.**
+   - Read only the newest files under `state/event_log/event.tlog.d`.
+   - Verify current artifacts show enforcement at append-time, not merely warnings or probes.
+   - Do not advance if invalid events still appear to persist.
+
+7. **Re-check semantic-state-only routing after append enforcement is live.**
+   - Read `canon-utils/canon-route/src/policy.rs` and `canon-utils/canon-route/src/executor.rs`.
+   - Patch route choice so queue-local mirrors cannot alter outcome unless proven semantic-state-derived.
+   - Rebuild and run route-policy tests or targeted runtime checks.
+
+8. **Only then restore broader runtime/control-flow progression.**
+   - Read/patch runtime and route entry surfaces as needed.
+   - Verify fresh artifacts show lawful decision, route, observe, and downstream progression under enforced append-time invariants.
 
 ## BLOCKED / NOT READY YET
-
-- route repair before non-zero live consumer registration is proven
-- loop entry repair before route events exist
-- downstream plan/act/verify/reward work before observe exists
-- local queue-symptom patches that preserve scheduler-first routing
+- Any broader pipeline repair before append-time invariant rejection is mandatory.
+- Any queue-derived routing behavior not proven from `SemanticStateSummary`.
+- Any reliance on observational logging as a substitute for enforcement.

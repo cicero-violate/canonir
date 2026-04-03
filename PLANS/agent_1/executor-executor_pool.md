@@ -1,6 +1,6 @@
 # EXECUTOR PLAN (executor_pool)
 
-## READY NOW (MAX 5)
+## READY NOW (MAX 10)
 
 1. RESTORE RUNTIME EVENT EMISSION (PRIMARY BLOCKER)
    - locate RuntimeEvent emission sites in runtime

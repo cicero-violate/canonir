@@ -28,6 +28,11 @@ impl EventBus {
         eprintln!("[EventBus] registered_consumers={}", self.sync_consumers.len());
     }
 
+    /// Expose number of registered synchronous consumers
+    pub fn sync_consumers_len(&self) -> usize {
+        self.sync_consumers.len()
+    }
+
     pub fn register(&mut self, name: String, mut consumer: Box<dyn EventConsumer>, emitter: EventEmitterHandle) {
         consumer.set_emitter(emitter.clone());
         let filter = consumer.filter();
@@ -37,7 +42,7 @@ impl EventBus {
             consumer: Mutex::new(consumer),
             emitter,
         });
-        println!("[BUS REGISTER TRACE STDOUT] after_push_len={}", self.sync_consumers.len());
+        println!("[BUS REGISTER TRACE STDOUT] bus_ptr={:p} after_push_len={}", self, self.sync_consumers.len());
     }
 
     // FIX: restore async registration path (map to sync so consumers are not lost)
@@ -46,7 +51,7 @@ impl EventBus {
     }
 
     pub fn dispatch(&self, event: RuntimeEvent, event_id: EventId) -> usize {
-        eprintln!("[BUS DISPATCH TRACE] sync_consumers_len={} event={}", self.sync_consumers.len(), canon_event::event_kind_str(&event));
+        eprintln!("[BUS DISPATCH TRACE] bus_ptr={:p} sync_consumers_len={} event={}", self, self.sync_consumers.len(), canon_event::event_kind_str(&event));
         let base_event = match self.hooks.run_pre(&event) {
             HookDecision::Allow => event,
             HookDecision::Mutate { replacement } => replacement,

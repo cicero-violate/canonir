@@ -46,18 +46,20 @@ fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
     }
 
     let diagnostics_file = diagnostics_file();
+    let legacy_diagnostics_file = "DIAGNOSTICS.md";
     let touches_spec = targets.iter().any(|path| *path == SPEC_FILE);
     let touches_lane = targets.iter().any(|path| is_lane_plan(path));
     let touches_master_plan = targets.iter().any(|path| *path == MASTER_PLAN_FILE);
     let touches_violations = targets.iter().any(|path| *path == VIOLATIONS_FILE);
-    let touches_diagnostics = targets.iter().any(|path| *path == diagnostics_file);
+    let touches_diagnostics = targets.iter().any(|path| *path == diagnostics_file || *path == legacy_diagnostics_file);
     let touches_other = targets
         .iter()
         .any(|path| *path != SPEC_FILE
             && *path != MASTER_PLAN_FILE
             && !is_lane_plan(path)
             && *path != VIOLATIONS_FILE
-            && *path != diagnostics_file);
+            && *path != diagnostics_file
+            && *path != legacy_diagnostics_file);
 
     match role {
         role if role.starts_with("executor") => {
@@ -103,8 +105,11 @@ fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
         "diagnostics" => {
             if touches_spec || touches_master_plan || touches_lane || touches_violations || touches_other {
                 Some(
-                    "Diagnostics may only patch DIAGNOSTICS.md because diagnostics owns ranked failure reporting."
-                        .to_string(),
+                    format!(
+                        "Diagnostics may only patch {} or {} because diagnostics owns ranked failure reporting.",
+                        diagnostics_file,
+                        legacy_diagnostics_file
+                    ),
                 )
             } else {
                 None
@@ -199,9 +204,13 @@ fn patch_failure_guidance(path: Option<&str>, err_msg: &str) -> String {
 
     if let Some(file) = path {
         let diagnostics_file = diagnostics_file();
-        if file == diagnostics_file || file.ends_with(".md") {
+        let legacy_diagnostics_file = "DIAGNOSTICS.md";
+        if file == diagnostics_file || file == legacy_diagnostics_file || file.ends_with(".md") {
             hints.push("This is a prose/markdown file: prefer rewriting the whole section or the whole file instead of a tiny surgical hunk.".to_string());
-            hints.push("For DIAGNOSTICS.md, one full-file rewrite is usually more reliable than repeated partial patches.".to_string());
+            hints.push(format!(
+                "For {}, one full-file rewrite is usually more reliable than repeated partial patches.",
+                diagnostics_file
+            ));
         }
     }
 
