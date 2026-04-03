@@ -11,6 +11,11 @@ const MINI_AGENT_WS_LIST = [
   "ws://127.0.0.1:9107",
   "ws://127.0.0.1:9108",
 ];
+const TAB_QUERY_PATTERNS = [
+  "https://chatgpt.com/*",
+  "https://chat.openai.com/*",
+  "https://gemini.google.com/*"
+];
 
 // tabId → send function of the WS connection that owns that tab
 const tabWsOwner = new Map();
@@ -21,6 +26,23 @@ const pendingOpenReqIds = new Map();
 const tabOriginalUrls = new Map();
 // tabId → true while a navigate-back NEW_CHAT is in flight.
 const pendingNewChatNavigations = new Map();
+
+if (chrome.storage?.session) {
+  chrome.storage.session.get("tabOriginalUrls", (result) => {
+    if (result?.tabOriginalUrls) {
+      for (const [k, v] of Object.entries(result.tabOriginalUrls)) {
+        tabOriginalUrls.set(Number(k), v);
+      }
+    }
+  });
+}
+
+function persistTabOriginalUrls() {
+  if (!chrome.storage?.session) return;
+  const obj = {};
+  for (const [k, v] of tabOriginalUrls) obj[String(k)] = v;
+  chrome.storage.session.set({ tabOriginalUrls: obj });
+}
 
 // ── WS connection factory ────────────────────────────────────────────────
 function makeConnection(url) {
@@ -233,6 +255,7 @@ function handleRustMessage(msg, sendFn) {
       if (!tab?.id) return;
       const newTabId = tab.id;
       tabOriginalUrls.set(newTabId, msg.url);
+      persistTabOriginalUrls();
       tabWsOwner.set(newTabId, sendFn);
       try {
         chrome.tabs.update(newTabId, { autoDiscardable: false });
@@ -302,7 +325,10 @@ function handleRustMessage(msg, sendFn) {
     const targetTabId = msg.tabId;
     if (!targetTabId) return;
     tabWsOwner.set(targetTabId, sendFn);
-    if (msg.url) tabOriginalUrls.set(targetTabId, msg.url);
+    if (msg.url) {
+      tabOriginalUrls.set(targetTabId, msg.url);
+      persistTabOriginalUrls();
+    }
     for (const conn of [runtimeConn, ...miniAgentConns]) {
       if (conn.send !== sendFn) conn.send({ type: "TAB_CLAIMED", tabId: targetTabId });
     }
@@ -315,7 +341,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   const send = tabWsOwner.get(tabId) ?? runtimeConn.send;
   tabWsOwner.delete(tabId);
   pendingOpenReqIds.delete(tabId);
-  tabOriginalUrls.delete(tabId);
+  if (tabOriginalUrls.delete(tabId)) {
+    persistTabOriginalUrls();
+  }
   pendingNewChatNavigations.delete(tabId);
   send({ type: "TAB_CLOSED", tabId });
 });

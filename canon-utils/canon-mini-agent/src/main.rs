@@ -367,16 +367,11 @@ async fn run_agent(
             }),
         );
 
-        let selected_url = if endpoint.stateful {
-            endpoint.pick_url(0)
-        } else {
-            endpoint.pick_url(step)
-        };
         let response_timeout_secs = response_timeout_for_role(_config, role);
         let (req_id, resp) = match llm_worker_send_request_with_req_id_timeout(
             bridge,
             &endpoint.id,
-            selected_url,
+            &endpoint.url,
             endpoint.stateful,
             &prompt,
             &role_schema,
@@ -1067,7 +1062,7 @@ async fn submit_executor_turn(
     let raw = llm_worker_send_request_timeout(
         bridge,
         &endpoint.id,
-        endpoint.pick_url(0),
+        &endpoint.url,
         endpoint.stateful,
         &prompt,
         &role_schema,

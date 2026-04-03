@@ -10,7 +10,7 @@ pub struct SyncConsumerEntry {
 }
 
 pub struct EventBus {
-    sync_consumers: Vec<SyncConsumerEntry>,
+    pub sync_consumers: Vec<SyncConsumerEntry>,
     hooks: Arc<HookChain>,
 }
 
@@ -37,7 +37,7 @@ impl EventBus {
             consumer: Mutex::new(consumer),
             emitter,
         });
-        eprintln!("[BUS REGISTER TRACE] after_push_len={}", self.sync_consumers.len());
+        println!("[BUS REGISTER TRACE STDOUT] after_push_len={}", self.sync_consumers.len());
     }
 
     // FIX: restore async registration path (map to sync so consumers are not lost)

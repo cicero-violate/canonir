@@ -1,69 +1,52 @@
 # Violations
 
-## 1. Build/runtime mismatch for EventBus (CRITICAL)
+## 1. EventBus build/runtime mismatch (CRITICAL)
 - Evidence:
-  - register() patched with BUS REGISTER TRACE, but no trace logs appear
-  - dispatch reports sync_consumers_len = 0
-  - EventRuntime::new logs registrations, but consumers not present at dispatch
+  - BUS REGISTER TRACE (in patched register()) never appears
+  - BUS DISPATCH TRACE appears and shows sync_consumers_len = 0
+  - EventRuntime::new logs registration loop execution
 - Issue:
-  - Running binary is not using the patched EventBus (wrong crate/version/path)
-  - Consumer registration is effectively a no-op at runtime
+  - Runtime is executing a different EventBus implementation than the patched source
+  - Consumer registration has no effect on the dispatching instance
 - Required fix:
-  - Ensure single EventBus implementation is used across build (no duplicate crates/paths)
-  - Verify Cargo workspace resolves to intended canon-runtime crate
-  - Clean/rebuild to eliminate stale artifacts (e.g., cargo clean)
-  - Add invariant/log: register() must be observable in runtime logs
+  - Eliminate duplicate or stale crate artifacts
+  - Ensure single canonical EventBus implementation is linked
+  - Perform clean rebuild (cargo clean + rebuild)
+  - Verify register() logs appear at runtime
 
 ## 2. No consumers registered at dispatch (CRITICAL)
 - Evidence:
   - sync_consumers_len = 0 during dispatch
 - Issue:
-  - Event bus has no active consumers → no routing/loop execution possible
+  - No RouteExecutor or LoopStageExecutor receiving events
+  - Canonical pipeline cannot execute
 - Required fix:
-  - Ensure RouteExecutor and LoopStageExecutor are registered on the same bus instance used for dispatch
-  - Validate registration occurs before any dispatch
-  - Add fail-fast if consumer count == 0
+  - Ensure registration occurs on the same EventBus instance used for dispatch
+  - Add invariant: consumer count must be > 0 before dispatch
 
-## 3. Runtime not participating in event system (CRITICAL)
+## 3. Runtime not participating in canonical event system (CRITICAL)
 - Evidence:
-  - Diagnostics show only rustc actor; no runtime_started/tick
-  - No decision/route/observe/loop events
+  - No decision, route, observe, or loop events
+  - Dispatch executes but has no consumers
 - Issue:
-  - Runtime is not emitting canonical events
+  - Runtime emits events into a non-functional pipeline
 - Required fix:
-  - Ensure runtime bootstrap emits runtime_started and periodic tick
-  - Register runtime actor and emitter to tlog
+  - Fix EventBus linkage so emitted events reach registered consumers
+  - Ensure runtime actor participates in event log
 
-## 4. Canonical control chain not initiated (CRITICAL)
+## 4. Canonical control-flow chain not executed (CRITICAL)
 - Evidence:
-  - No decision, route, dispatch, observe, or loop_observed events
+  - No decision → route → loop → plan → act → verify stages
 - Issue:
-  - state → decision → transition pipeline never starts
+  - Entire control chain blocked at dispatch due to missing consumers
 - Required fix:
-  - Construct SemanticStateSummary and emit decision each tick
-  - Enforce invariant: decision per tick or fail-fast
+  - Restore functional EventBus so routing and loop stages receive events
 
-## 5. Routing layer never executes (CRITICAL)
+## 5. System not spec-compliant
 - Evidence:
-  - route_events_present = 0
-  - No RouteExecutor activity
+  - Dispatch runs with zero consumers
+  - No canonical stages execute
 - Issue:
-  - No decision → no routing; also no consumers to receive events
+  - Violates core invariant: state → decision → route → loop → plan → act → verify
 - Required fix:
-  - Fix consumer registration and ensure routing derives from SemanticStateSummary
-
-## 6. Canonical loop fully inactive (CRITICAL)
-- Evidence:
-  - No observe or LoopObserved; no plan/act/verify
-- Issue:
-  - Loop never entered due to upstream failures
-- Required fix:
-  - Restore dispatch → route → loop after fixing EventBus linkage and runtime emission
-
-## 7. System not spec-compliant
-- Evidence:
-  - Zero canonical stage execution; consumer count zero; runtime actor absent
-- Issue:
-  - Violates core invariant (state → decision → route → loop → plan → act → verify)
-- Required fix:
-  - Correct build linkage and EventBus usage, then restore full canonical pipeline
+  - Resolve build/runtime mismatch and restore full event-driven pipeline

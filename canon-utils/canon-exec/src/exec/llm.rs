@@ -98,11 +98,10 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                     .find(|e| req.endpoint_id.as_deref().map_or(false, |id| e.id == id) || e.role.as_deref() == Some(req.role.as_str()))
                                     .cloned()
                                     .ok_or_else(|| anyhow::anyhow!("relay: no endpoint for role={}", req.role))?;
-                                let endpoint_url = endpoint.pick_url(0);
                                 endpoint_worker::llm_worker_send_request(
                                     &bridge,
                                     &endpoint.id,
-                                    endpoint_url,
+                                    &endpoint.url,
                                     endpoint.stateful,
                                     &req.prompt,
                                     &req.role_schema,
@@ -273,7 +272,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                     let (result_tx, result_rx) = std::sync::mpsc::channel();
                     let bridge_cloned = bridge.clone();
                     let endpoint_id = endpoint.id.clone();
-                    let endpoint_url = selected_url.clone();
+                    let endpoint_urls = endpoint.url.clone();
                     let endpoint_stateful = endpoint.stateful;
                     let endpoint_max_tabs = endpoint.max_tabs;
                     // removed tab_cooldown_ms: field no longer exists in CapabilityConfig
@@ -293,7 +292,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 llm::llm_client_call_agent_raw_with_retry_allow_mismatch(
                                     &bridge_cloned,
                                     &endpoint_id,
-                                    &endpoint_url,
+                                    &endpoint_urls,
                                     endpoint_stateful,
                                     &prompt_with_request_id_cloned,
                                     &role_content_cloned,
@@ -311,7 +310,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 llm::llm_client_call_agent_json_with_retry_allow_mismatch(
                                     &bridge_cloned,
                                     &endpoint_id,
-                                    &endpoint_url,
+                                    &endpoint_urls,
                                     endpoint_stateful,
                                     &prompt_with_request_id_cloned,
                                     &role_content_cloned,

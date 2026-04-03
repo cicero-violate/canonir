@@ -66,15 +66,10 @@ pub async fn run(question: &str, tlog_path: &str) -> Result<()> {
             build_non_stateful_prompt(&first_prompt, &history)
         };
 
-        let selected_url = if endpoint.stateful {
-            endpoint.pick_url(0)
-        } else {
-            endpoint.pick_url((turn - 1) as usize)
-        };
         let raw = llm_worker_send_request(
             &bridge,
             &endpoint.id,
-            selected_url,
+            &endpoint.url,
             endpoint.stateful,
             &prompt,
             "",        // role_schema embedded in prompt

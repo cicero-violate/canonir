@@ -1,200 +1,242 @@
 # Analysis & Fix Plan: ws_server keeps opening new tabs instead of claiming existing ones
 
-## Root cause chain (4 bugs)
+## What was fixed last time (now in code)
+- `ws.onopen` calls `chrome.tabs.query` to send inventory ← **broken, see Bug 1**
+- `CLAIM_TAB` sends URL, sets `tabOriginalUrls` ✓
+- `TAB_CLAIMED` broadcast to other connections ✓
+- `ws_server.rs` handles `TAB_CLAIMED` ✓
 
 ---
 
-### Bug 1 — Race: `wait_for_connection` returns before `TAB_READY` is delivered (PRIMARY BUG)
+## Why it still doesn't work — three remaining bugs
 
-**Trace:**
+---
 
-1. Rust process starts. `ServerState::new()` → `preopened_tabs_by_url` is empty.
-2. Extension `ws.onopen` fires. Rust's `wait_for_connection()` returns immediately.
-3. Rust calls `tab_manager_get_or_open_tab` → `claim_tab_for_url(url)` → checks
-   `preopened_tabs_by_url` → **empty** → falls through to `open_fresh_tab_with_url`.
-4. Meanwhile (100–500ms later), `chrome.tabs.query` + `executeScript` at extension
-   startup re-injects content scripts into existing ChatGPT tabs. Those content scripts
-   send `CONTENT_READY` → background.js converts to `TAB_READY` (no reqId) → Rust
-   adds to `preopened_tabs_by_url`. But it's too late — Rust already opened a new tab.
+### Bug 1 — `TAB_QUERY_PATTERNS` is undefined (CRITICAL)
 
-**Why `ws.onopen` sends nothing about existing tabs:**
+In `ws.onopen`:
+```js
+chrome.tabs.query({ url: TAB_QUERY_PATTERNS }, (tabs) => {
+```
 
+`TAB_QUERY_PATTERNS` is **never defined** anywhere in background.js.
+This throws a `ReferenceError` in the service worker, silently swallowed by the JS engine.
+The `chrome.tabs.query` call never executes. No `TAB_READY` inventory messages are ever sent.
+`preopened_tabs_by_url` stays empty. `claim_tab_for_url` always returns `None`.
+The code falls through to `open_fresh_tab_with_url` every single time.
+
+**Fix:** Inline the array literal (same one used at startup):
 ```js
 ws.onopen = () => {
-  console.log(`[BG] WS connected to ${url}`);
-  while (queue.length) ws.send(queue.shift());  // drain buffered messages only
-  // ← NO tab inventory sent here
+  chrome.tabs.query(
+    { url: ["https://chatgpt.com/*", "https://chat.openai.com/*", "https://gemini.google.com/*"] },
+    (tabs) => {
+      for (const tab of tabs) {
+        if (!tab?.id || !tab?.url) continue;
+        const originalUrl = tabOriginalUrls.get(tab.id) ?? tab.url;
+        send({ type: "TAB_READY", tabId: tab.id, url: tab.url, reqId: null, originalUrl });
+      }
+    }
+  );
+  while (queue.length) ws.send(queue.shift());
   ...
 };
 ```
 
-The extension never announces "here are the tabs I already have open" when connecting.
-
-**Fix: Send a `TAB_INVENTORY` (or individual `TAB_READY`) for each already-known tab
-in `ws.onopen`, BEFORE draining the queue.** The extension already has `tabWsOwner` and
-`tabOriginalUrls` populated from any previous session. Enumerate all open ChatGPT/Gemini
-tabs synchronously via `chrome.tabs.query` in `ws.onopen` and send `TAB_READY` for each,
-with `reqId: null` so they land in `preopened_tabs_by_url`.
-
-Alternatively: add a short grace-period wait in `tab_manager_get_or_open_tab` between
-checking `claim_tab_for_url` (returns None) and calling `open_fresh_tab_with_url`, giving
-the TAB_READY messages time to arrive. Something like:
-
-```rust
-// claim_tab_for_url returned None — wait briefly for TAB_READY to arrive
-if let Some(id) = try_claim_with_grace_period(bridge, url, 800).await {
-    // got it
-} else {
-    // open fresh
-}
-```
-
-The ws.onopen fix is cleaner and eliminates the race entirely.
-
 ---
 
-### Bug 2 — `CLAIM_TAB` doesn't set `tabOriginalUrls` in background.js
+### Bug 2 — URL mismatch: tab navigates from `/gg/` to `/c/` and `tabOriginalUrls` is lost on restart
 
-When Rust claims a pre-opened tab via `claim_tab_for_url`, the server sends:
-```json
-{ "type": "CLAIM_TAB", "tabId": 123 }
-```
+**How it happens:**
 
-background.js handles it:
+content.js sends `CONTENT_READY` with `location.href`. For a custom GPT tab that has
+already had a conversation, ChatGPT SPA-navigates from
+`https://chatgpt.com/gg/<id>` → `https://chatgpt.com/c/<chat-id>`.
+So `tab.url` (and `location.href`) is the `/c/` URL, not the configured `/gg/` URL.
+
+In `ws.onopen` inventory:
 ```js
-if (msg?.type === "CLAIM_TAB") {
-  const targetTabId = msg.tabId;
-  tabWsOwner.set(targetTabId, sendFn);   // ownership set ✓
-  // ← tabOriginalUrls NEVER set for claimed tabs ✗
-  return;
-}
+const originalUrl = tabOriginalUrls.get(tab.id) ?? tab.url;
+send({ type: "TAB_READY", ..., url: tab.url, originalUrl });
 ```
 
-Consequence: when `NEW_CHAT` is later sent for a custom GPT tab (url contains `/gg/`),
-the navigate-back logic looks up `tabOriginalUrls.get(targetTabId)` → `undefined` →
-`originalUrl` is empty → `isCustomGpt` is false → falls through to
-`sendToTab(targetTabId, { type: "NEW_CHAT" })` (the in-page new-chat path, which may
-not work on custom GPT pages).
+`tabOriginalUrls` is populated at OPEN_TAB and CLAIM_TAB time — but it's an **in-memory
+Map** that is **cleared whenever the extension service worker restarts**. After a browser
+restart or service worker eviction (Chrome evicts them after inactivity), `tabOriginalUrls`
+is empty, so `originalUrl` falls back to `tab.url` (the `/c/` URL). The tab is stored in
+`preopened_tabs_by_url` under the `/c/` URL only.
 
-**Fix: Rust must include the URL in the `CLAIM_TAB` message**, and background.js must
-set `tabOriginalUrls` on receipt:
+Meanwhile, Rust calls `claim_tab_for_url("https://chatgpt.com/gg/<id>")` — this key
+doesn't exist in the map. Claim fails, new tab opens.
 
-```rust
-// ws_server.rs claim_tab_for_url
-st.send(json!({ "type": "CLAIM_TAB", "tabId": tab_id, "url": url }))
-```
+**Fix: Persist `tabOriginalUrls` in `chrome.storage.session` and restore on startup.**
 
-```js
-// background.js CLAIM_TAB handler
-if (msg?.type === "CLAIM_TAB") {
-  tabWsOwner.set(msg.tabId, sendFn);
-  if (msg.url) tabOriginalUrls.set(msg.tabId, msg.url);
-}
-```
+`chrome.storage.session` persists across service worker restarts within the same browser
+session (cleared only when the browser closes). This gives us the `/gg/` URLs back after
+service worker eviction.
 
----
-
-### Bug 3 — Unowned `TAB_READY` is broadcast to ALL mini-agent connections
-
-In background.js `CONTENT_READY` handler:
+Changes to background.js:
 
 ```js
-const owner = tabWsOwner.get(tabId);
-if (owner) {
-  owner(payload);
-} else {
-  runtimeConn.send(payload);          // goes to canon-loop
-  for (const conn of miniAgentConns) {
-    conn.send(payload);               // goes to EVERY mini-agent instance
+// On startup: restore tabOriginalUrls from session storage
+chrome.storage.session.get("tabOriginalUrls", (result) => {
+  if (result?.tabOriginalUrls) {
+    for (const [k, v] of Object.entries(result.tabOriginalUrls)) {
+      tabOriginalUrls.set(Number(k), v);
+    }
   }
+});
+
+// Helper: persist tabOriginalUrls to session storage whenever it changes
+function persistTabOriginalUrls() {
+  const obj = {};
+  for (const [k, v] of tabOriginalUrls) obj[String(k)] = v;
+  chrome.storage.session.set({ tabOriginalUrls: obj });
 }
 ```
 
-Every connected mini-agent instance receives the same `TAB_READY` for every unowned tab.
-Each calls `claim_tab_for_url` — only one wins (pops the queue first). The others see
-nothing in their `preopened_tabs_by_url` and fall through to `open_fresh_tab_with_url`,
-causing N−1 duplicate new tabs to be opened.
+Call `persistTabOriginalUrls()` after any write to `tabOriginalUrls`:
+- After `tabOriginalUrls.set(newTabId, msg.url)` in OPEN_TAB handler
+- After `tabOriginalUrls.set(targetTabId, msg.url)` in CLAIM_TAB handler
+- After `tabOriginalUrls.delete(tabId)` in `onRemoved` listener
 
-**Fix:** The first instance to `CLAIM_TAB` wins. But the others must be told not to open
-a new tab. Two options:
+With this in place, after a service worker restart the `ws.onopen` inventory correctly
+sends `originalUrl` as the `/gg/` URL even for tabs currently at a `/c/` URL.
 
-**Option A (preferred):** When background.js receives `CLAIM_TAB`, broadcast a
-`TAB_CLAIMED { tabId }` message to all OTHER connections so they can evict that tabId
-from their `preopened_tabs_by_url` queues.
+---
+
+### Bug 3 — Rust calls `claim_tab_for_url` before inventory messages are processed
+
+Even with bugs 1 and 2 fixed, there is still a timing window:
+
+1. WS connection established → Rust's `out_tx` set → `wait_for_connection()` returns
+2. Simultaneously, JS `ws.onopen` fires, calls `chrome.tabs.query` (async callback)
+3. Rust immediately calls `tab_manager_get_or_open_tab` → `claim_tab_for_url` →
+   `preopened_tabs_by_url` is empty → claim fails → opens new tab
+4. ...100–300ms later, `chrome.tabs.query` callback fires, sends TAB_READY messages
+   → too late
+
+The `wait_for_connection()` poll interval is 200ms. Rust returns from it almost
+immediately after the WS connects. The JS `chrome.tabs.query` callback is async and
+may take 50–300ms (depends on number of tabs and Chrome scheduler). The TAB_READY
+messages also need to travel over loopback and be processed by `handle_inbound`.
+
+**Fix: Add a grace-period claim retry in `tab_manager_get_or_open_tab`.**
+
+Instead of immediately falling through to `open_fresh_tab_with_url` after a failed claim,
+poll `claim_tab_for_url` for up to ~1500ms before giving up:
+
+```rust
+// tab_management.rs  tab_manager_get_or_open_tab
+pub async fn tab_manager_get_or_open_tab(...) -> Result<u32> {
+    tab_manager_wait_endpoint_cooldown(endpoint_id, tabs).await;
+    if let Some(id) = tab_manager_get_owner_tab(endpoint_id, tabs).await {
+        return Ok(id);
+    }
+    bridge.wait_for_connection().await;
+
+    // Grace period: poll claim_tab_for_url for up to 1500ms
+    // to allow the inventory TAB_READY messages from ws.onopen to arrive.
+    const CLAIM_POLL_INTERVAL_MS: u64 = 100;
+    const CLAIM_POLL_MAX_MS: u64 = 1500;
+    let poll_start = std::time::Instant::now();
+    loop {
+        if let Some(id) = bridge.claim_tab_for_url(url).await {
+            tab_manager_set_tab_id(endpoint_id, id, tabs, _max_tabs).await;
+            tab_manager_mark_tab_in_flight(tabs, id, true).await;
+            tab_manager_log_llm(format!("endpoint={} claimed_tab={} url={}", endpoint_id, id, url));
+            return Ok(id);
+        }
+        if poll_start.elapsed().as_millis() as u64 >= CLAIM_POLL_MAX_MS {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(CLAIM_POLL_INTERVAL_MS)).await;
+    }
+
+    // No pre-opened tab found — open a fresh one.
+    tab_manager_log_llm(format!("endpoint={} opening_new_tab url={}", endpoint_id, url));
+    let open = bridge.open_fresh_tab_with_url(url.to_string());
+    let id = match tokio::time::timeout(std::time::Duration::from_secs(20), open).await {
+        Ok(Ok(id)) => id,
+        Ok(Err(e)) => return Err(anyhow::anyhow!("failed to open tab: {e}")),
+        Err(_) => return Err(anyhow::anyhow!("open tab timeout")),
+    };
+    tab_manager_set_tab_id(endpoint_id, id, tabs, _max_tabs).await;
+    tab_manager_mark_tab_in_flight(tabs, id, true).await;
+    Ok(id)
+}
+```
+
+The 1500ms grace period is long enough for `chrome.tabs.query` to complete and TAB_READY
+messages to arrive, but short enough not to significantly delay startup when there truly
+are no existing tabs (the fallback opens a fresh tab after 1.5s in that case).
+
+---
+
+## Summary of all remaining fixes
+
+| # | File | Change |
+|---|---|---|
+| 1 | `background.js` `ws.onopen` | Replace `TAB_QUERY_PATTERNS` with inline array literal |
+| 2 | `background.js` | Add `chrome.storage.session` persistence for `tabOriginalUrls`; restore on startup; call `persistTabOriginalUrls()` after every write/delete |
+| 3 | `tab_management.rs` `tab_manager_get_or_open_tab` | Add 1500ms grace-period poll loop around `claim_tab_for_url` before calling `open_fresh_tab_with_url` |
+
+---
+
+## Full corrected `ws.onopen` block
 
 ```js
-// background.js
-if (msg?.type === "CLAIM_TAB") {
-  tabWsOwner.set(msg.tabId, sendFn);
-  if (msg.url) tabOriginalUrls.set(msg.tabId, msg.url);
-  // notify all other connections that this tab is taken
-  for (const conn of [runtimeConn, ...miniAgentConns]) {
-    if (conn.send !== sendFn) conn.send({ type: "TAB_CLAIMED", tabId: msg.tabId });
+ws.onopen = () => {
+  console.log(`[BG] WS connected to ${url}`);
+  chrome.tabs.query(
+    { url: ["https://chatgpt.com/*", "https://chat.openai.com/*", "https://gemini.google.com/*"] },
+    (tabs) => {
+      for (const tab of tabs) {
+        if (!tab?.id || !tab?.url) continue;
+        const originalUrl = tabOriginalUrls.get(tab.id) ?? tab.url;
+        send({ type: "TAB_READY", tabId: tab.id, url: tab.url, reqId: null, originalUrl });
+      }
+    }
+  );
+  while (queue.length) ws.send(queue.shift());
+  if (pingInterval) clearInterval(pingInterval);
+  pingInterval = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "PING" }));
+  }, 20000);
+};
+```
+
+## Full corrected `tab_manager_get_or_open_tab` flow
+
+```
+1. wait endpoint cooldown
+2. check owner tab (already assigned) → return if found
+3. wait for WS connection
+4. LOOP up to 1500ms every 100ms:
+     claim_tab_for_url(url) → return if claimed
+5. open_fresh_tab_with_url(url) → wait 20s → return
+```
+
+## `tabOriginalUrls` persistence additions
+
+```js
+// At top of background.js (after tabOriginalUrls Map declaration):
+chrome.storage.session.get("tabOriginalUrls", (result) => {
+  if (result?.tabOriginalUrls) {
+    for (const [k, v] of Object.entries(result.tabOriginalUrls)) {
+      tabOriginalUrls.set(Number(k), v);
+    }
   }
+});
+
+function persistTabOriginalUrls() {
+  const obj = {};
+  for (const [k, v] of tabOriginalUrls) obj[String(k)] = v;
+  chrome.storage.session.set({ tabOriginalUrls: obj });
 }
+
+// Call persistTabOriginalUrls() after:
+// - tabOriginalUrls.set(newTabId, msg.url)  in OPEN_TAB handler
+// - tabOriginalUrls.set(targetTabId, msg.url) in CLAIM_TAB handler
+// - tabOriginalUrls.delete(tabId)  in onRemoved listener
 ```
-
-ws_server.rs handles `TAB_CLAIMED` by removing the tabId from `preopened_tabs_by_url`.
-
-**Option B:** Only broadcast `TAB_READY` (no owner) to a single connection — whichever
-is the "primary" one. But this doesn't work cleanly with multiple equal-priority mini-agents.
-
----
-
-### Bug 4 — `llm_worker_init_workers` creates workers that are never reused
-
-In `endpoint_worker.rs`, the worker cache key is:
-
-```rust
-// in llm_worker_init_workers (uses full URL Vec from config):
-let worker_key = (endpoint.id.clone(), endpoint.url.clone(), endpoint.stateful, ptr);
-// e.g. ("exec_pool", ["url1","url2","url3",...], true, 0x...)
-
-// in llm_worker_send_request_with_req_id_timeout (single picked URL):
-let worker_key = (endpoint_id.to_string(), vec![url.to_string()], stateful, ptr);
-// e.g. ("exec_pool", ["url2"], true, 0x...)
-```
-
-These keys never match (`vec!["url1","url2"]` ≠ `vec!["url2"]`), so:
-- `llm_worker_init_workers` pre-warms workers that are **immediately orphaned**
-- Every `send_request` call creates a brand-new worker for the single picked URL instead
-
-This means stateful workers never share tab state across requests, defeating the point
-of the `tabs_with_role_sent` set (system prompt only sent once per tab).
-
-**Fix:** Make both sites use the same key construction. The cleanest approach: the worker
-key should use the **endpoint_id + tabs pointer only** (not the URL list), and the worker
-owns the full URL Vec. Then `pick_url` happens inside the worker, not at the call site.
-
-```rust
-type WorkerKey = (String, bool, usize);  // (endpoint_id, stateful, tabs_ptr)
-```
-
-The `url` parameter to `llm_worker_send_request` becomes the full `Vec<String>` from
-the endpoint config, and the worker selects from it per-request. All callers for the
-same endpoint then reuse the same worker and its tab state.
-
----
-
-## Fix summary table
-
-| # | Location | Problem | Fix |
-|---|---|---|---|
-| 1 | `background.js` `ws.onopen` | No tab inventory sent on connect | Send `TAB_READY` for all open ChatGPT tabs in `ws.onopen` before draining queue |
-| 2 | `background.js` `CLAIM_TAB` handler | `tabOriginalUrls` not set for claimed tabs | Include `url` in `CLAIM_TAB` message; set `tabOriginalUrls` in handler |
-| 3 | `background.js` `CONTENT_READY` handler | Unowned `TAB_READY` broadcast to all instances | Broadcast `TAB_CLAIMED` to all other connections when a claim is made |
-| 4 | `endpoint_worker.rs` worker key | `init_workers` key ≠ `send_request` key | Unify key to `(endpoint_id, stateful, tabs_ptr)`; pass full URL Vec to worker |
-
----
-
-## Files to change
-
-- `canon-chromium-extension/background.js`
-  - `ws.onopen`: enumerate existing tabs and send `TAB_READY` for each
-  - `CLAIM_TAB` handler: set `tabOriginalUrls`, broadcast `TAB_CLAIMED` to other connections
-- `canon-utils/canon-llm-runtime/src/ws_server.rs`
-  - `claim_tab_for_url`: include `url` in the `CLAIM_TAB` message
-  - `handle_inbound`: add `TAB_CLAIMED` handler that removes tabId from `preopened_tabs_by_url`
-- `canon-utils/canon-llm-runtime/src/endpoint_worker.rs`
-  - Unify `WorkerKey` to not include URL list
-  - Change `llm_worker_send_request*` signatures to accept `Vec<String>` URLs or let the worker own URL selection
