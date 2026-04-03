@@ -98,10 +98,11 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                     .find(|e| req.endpoint_id.as_deref().map_or(false, |id| e.id == id) || e.role.as_deref() == Some(req.role.as_str()))
                                     .cloned()
                                     .ok_or_else(|| anyhow::anyhow!("relay: no endpoint for role={}", req.role))?;
+                                let endpoint_url = endpoint.pick_url(0);
                                 endpoint_worker::llm_worker_send_request(
                                     &bridge,
                                     &endpoint.id,
-                                    &endpoint.url,
+                                    endpoint_url,
                                     endpoint.stateful,
                                     &req.prompt,
                                     &req.role_schema,
@@ -162,7 +163,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                             .llm_endpoints
                             .iter()
                             .find(|e| e.id == aid)
-                            .or_else(|| config.llm_endpoints.iter().find(|e| e.url.contains(aid)))
+                            .or_else(|| config.llm_endpoints.iter().find(|e| e.url.iter().any(|url| url.contains(aid))))
                             // Fallback: treat agent_id as a role name (e.g., "exec" → first exec endpoint).
                             .or_else(|| config.llm_endpoints.iter().find(|e| e.role.as_deref() == Some(aid)))
                     } else if let Some(role_name) = role.as_deref() {
@@ -242,6 +243,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                     let prompt_with_request_id = format!("{{\"request_id\":\"{}\"}}\n{}", request_id, full_prompt);
                     let dispatched_ms = now_ms();
                     let call_n = llm_call_counter;
+                    let selected_url = endpoint.pick_url(call_n as usize).to_string();
 
                     llm_call_counter += 1;
                     let req_tag = format!("{dispatched_ms}_{call_n:04}");
@@ -252,7 +254,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                         "request_id": request_id,
                         "capability": name,
                         "endpoint": endpoint.id,
-                        "url": endpoint.url,
+                        "url": selected_url,
                         "role": role_content,
                         "prompt": prompt_with_request_id,
                         "args": json!({ "prompt": prompt_with_request_id, "role": role }),
@@ -271,7 +273,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                     let (result_tx, result_rx) = std::sync::mpsc::channel();
                     let bridge_cloned = bridge.clone();
                     let endpoint_id = endpoint.id.clone();
-                    let endpoint_url = endpoint.url.clone();
+                    let endpoint_url = selected_url.clone();
                     let endpoint_stateful = endpoint.stateful;
                     let endpoint_max_tabs = endpoint.max_tabs;
                     // removed tab_cooldown_ms: field no longer exists in CapabilityConfig
@@ -357,7 +359,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 "request_id": request_id,
                                 "capability": name,
                                 "endpoint": endpoint.id,
-                                "url": endpoint.url,
+                                "url": selected_url,
                                 "role": role_content,
                                 "prompt": prompt_with_request_id,
                                 "args": json!({ "prompt": prompt_with_request_id, "role": role }),
@@ -392,7 +394,7 @@ fn spawn_llm_worker() -> std::sync::mpsc::Sender<LlmWork> {
                                 "request_id": request_id,
                                 "capability": name,
                                 "endpoint": endpoint.id,
-                                "url": endpoint.url,
+                                "url": selected_url,
                                 "role": role_content,
                                 "prompt": prompt_with_request_id,
                                 "args": json!({ "prompt": prompt_with_request_id, "role": role }),

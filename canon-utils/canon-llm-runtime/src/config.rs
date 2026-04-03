@@ -118,6 +118,8 @@ struct CapabilityConfigRawLlm {
     pub endpoints: CapabilityConfigRawEndpoints,
     #[serde(default)]
     pub roles: HashMap<String, RoleConfig>,
+    #[serde(default)]
+    pub instances: HashMap<String, InstanceConfig>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -286,10 +288,26 @@ pub struct RoleConfig {
     pub weights: HashMap<String, u32>,
     pub burst: Option<usize>,
 }
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct InstanceConfig {
+    #[serde(default)]
+    pub exec_pool_urls: Vec<usize>,
+    #[serde(default)]
+    pub executor_pool_url: Option<usize>,
+    #[serde(default)]
+    pub planner_url: Option<usize>,
+    #[serde(default)]
+    pub verifier_url: Option<usize>,
+    #[serde(default)]
+    pub diagnostics_url: Option<usize>,
+    #[serde(default)]
+    pub mini_planner_url: Option<usize>,
+}
 #[derive(Debug, Deserialize, Clone)]
 pub struct LlmEndpoint {
     pub id: String,
-    pub url: String,
+    #[serde(deserialize_with = "deserialize_url_list")]
+    pub url: Vec<String>,
     pub role_markdown: String,
     #[serde(default)]
     pub role: Option<String>,
@@ -297,6 +315,41 @@ pub struct LlmEndpoint {
     pub stateful: bool,
     #[serde(default = "capability_config_default_max_tabs")]
     pub max_tabs: usize,
+}
+impl LlmEndpoint {
+    pub fn pick_url(&self, index: usize) -> &str {
+        match self.url.len() {
+            0 => "",
+            len => &self.url[index % len],
+        }
+    }
+}
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum UrlList {
+    One(String),
+    Many(Vec<String>),
+}
+fn deserialize_url_list<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let list = UrlList::deserialize(deserializer)?;
+    Ok(match list {
+        UrlList::One(url) => vec![url],
+        UrlList::Many(urls) => urls,
+    })
+}
+fn normalize_endpoints(mut list: Vec<LlmEndpoint>) -> (Vec<LlmEndpoint>, Option<LlmEndpoint>) {
+    for endpoint in &mut list {
+        if endpoint.max_tabs == 0 {
+            endpoint.max_tabs = endpoint.url.len().max(1);
+        } else if endpoint.max_tabs == 1 && endpoint.url.len() > 1 {
+            endpoint.max_tabs = endpoint.url.len();
+        }
+    }
+    let planner = list.iter().find(|e| e.role.as_deref() == Some("planner")).cloned();
+    (list, planner)
 }
 #[derive(Clone)]
 pub struct CapabilityConfig {
@@ -354,6 +407,7 @@ pub struct CapabilityConfig {
     pub llm_endpoints: Vec<LlmEndpoint>,
     pub planner_endpoint: Option<LlmEndpoint>,
     pub llm_roles: HashMap<String, RoleConfig>,
+    pub llm_instances: HashMap<String, InstanceConfig>,
 }
 impl CapabilityConfig {
     pub fn snapshot_store_load() -> Result<Self> {
@@ -361,12 +415,11 @@ impl CapabilityConfig {
         let raw: CapabilityConfigRawConfig = toml::from_str(&raw_toml).context("cannot parse capability_config.toml")?;
         let (llm_endpoints, planner_endpoint) = match raw.llm.endpoints {
             CapabilityConfigRawEndpoints::List(list) => {
-                let planner = list.iter().find(|e| e.role.as_deref() == Some("planner")).cloned();
+                let (list, planner) = normalize_endpoints(list);
                 (list, planner)
             }
             CapabilityConfigRawEndpoints::Map(map) => {
                 let mut list = Vec::new();
-                let mut planner = None;
                 for (key, mut ep) in map {
                     if ep.id.is_empty() {
                         ep.id = key.clone();
@@ -374,11 +427,9 @@ impl CapabilityConfig {
                     if ep.role.is_none() && key == "planner" {
                         ep.role = Some("planner".to_string());
                     }
-                    if ep.role.as_deref() == Some("planner") {
-                        planner = Some(ep.clone());
-                    }
                     list.push(ep);
                 }
+                let (list, planner) = normalize_endpoints(list);
                 (list, planner)
             }
         };
@@ -437,6 +488,7 @@ impl CapabilityConfig {
             llm_endpoints,
             planner_endpoint,
             llm_roles: raw.llm.roles,
+            llm_instances: raw.llm.instances,
         })
     }
     pub fn apply_env_flags(&self) {
@@ -453,6 +505,72 @@ impl CapabilityConfig {
     }
     pub fn planner_endpoint(&self) -> Result<&LlmEndpoint> {
         self.planner_endpoint.as_ref().ok_or_else(|| anyhow::anyhow!("no planner endpoint configured"))
+    }
+
+    pub fn for_instance(&self, instance_id: &str) -> Result<Self> {
+        let inst = self
+            .llm_instances
+            .get(instance_id)
+            .ok_or_else(|| anyhow::anyhow!("no [llm.instances.{}] in capability_config.toml", instance_id))?;
+
+        let mut cfg = self.clone();
+
+        if let Some(ep) = cfg.llm_endpoints.iter_mut().find(|e| e.id == "exec_pool") {
+            let all = ep.url.clone();
+            ep.url = inst
+                .exec_pool_urls
+                .iter()
+                .filter_map(|&i| all.get(i).cloned())
+                .collect();
+            ep.max_tabs = ep.url.len().max(1);
+        }
+
+        if let Some(idx) = inst.executor_pool_url {
+            if let Some(ep) = cfg.llm_endpoints.iter_mut().find(|e| e.id == "executor_pool") {
+                if let Some(url) = ep.url.get(idx).cloned() {
+                    ep.url = vec![url];
+                    ep.max_tabs = 1;
+                }
+            }
+        }
+
+        if let Some(idx) = inst.planner_url {
+            if let Some(ep) = cfg.llm_endpoints.iter_mut().find(|e| e.id == "planner_chatgpt_group") {
+                if let Some(url) = ep.url.get(idx).cloned() {
+                    ep.url = vec![url];
+                    ep.max_tabs = 1;
+                }
+            }
+        }
+
+        if let Some(idx) = inst.verifier_url {
+            if let Some(ep) = cfg.llm_endpoints.iter_mut().find(|e| e.id == "verifier_chatgpt") {
+                if let Some(url) = ep.url.get(idx).cloned() {
+                    ep.url = vec![url];
+                    ep.max_tabs = 1;
+                }
+            }
+        }
+
+        if let Some(idx) = inst.diagnostics_url {
+            if let Some(ep) = cfg.llm_endpoints.iter_mut().find(|e| e.id == "diagnostics_chatgpt") {
+                if let Some(url) = ep.url.get(idx).cloned() {
+                    ep.url = vec![url];
+                    ep.max_tabs = 1;
+                }
+            }
+        }
+
+        if let Some(idx) = inst.mini_planner_url {
+            if let Some(ep) = cfg.llm_endpoints.iter_mut().find(|e| e.id == "mini_planner_chatgpt") {
+                if let Some(url) = ep.url.get(idx).cloned() {
+                    ep.url = vec![url];
+                    ep.max_tabs = 1;
+                }
+            }
+        }
+
+        Ok(cfg)
     }
 }
 const CAPABILITY_POLICY_TOML: &str = "/workspace/ai_sandbox/canon/canon-agent-prompts/capability_policy.toml";

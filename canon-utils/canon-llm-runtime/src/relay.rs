@@ -170,17 +170,17 @@ goal_file = "/tmp/goal.md"
 [llm]
 tab_cooldown_ms = 0
 
-[llm.endpoints.harness_repair]
+[[llm.endpoints]]
 id = "harness_repair_chatgpt"
-url = "https://chatgpt.com/gg/69c8f84bb6848194a9b9ca6eaf5819c6"
+url = ["https://chatgpt.com/gg/69c8f84bb6848194a9b9ca6eaf5819c6"]
 role_markdown = "builtin:planner"
 role = "harness_repair"
 stateful = true
 max_tabs = 1
 
-[llm.endpoints.harness_eventlog]
+[[llm.endpoints]]
 id = "harness_eventlog_chatgpt"
-url = "https://chatgpt.com/gg/69c8f86cf14c81a0a1a9b4487bccd784"
+url = ["https://chatgpt.com/gg/69c8f86cf14c81a0a1a9b4487bccd784"]
 role_markdown = "builtin:planner"
 role = "harness_eventlog"
 stateful = true

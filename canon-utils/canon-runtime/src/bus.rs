@@ -117,8 +117,8 @@ impl EventBus {
 
     pub fn register(&mut self, name: String, mut consumer: Box<dyn EventConsumer>, emitter: EventEmitterHandle) {
         eprintln!("[REGISTER ENTRY] name={}", name);
-        // 🔥 CRITICAL FIX: force all consumers onto async path
-        if false && consumer.is_synchronous() {
+        // FIX: allow synchronous consumers to execute in canonical order
+        if consumer.is_synchronous() {
             let consumer_name = consumer.consumer_name().to_string();
             consumer.set_emitter(emitter.clone());
             let filter = consumer.filter();
@@ -127,8 +127,11 @@ impl EventBus {
         }
         let consumer_name = consumer.consumer_name().to_string();
         eprintln!("[REGISTER] consumer_name={} is_sync={}", consumer_name, consumer.is_synchronous());
-        let emitter_for_loop = emitter.clone();
-        consumer.set_emitter(emitter);
+        // CRITICAL FIX: ensure emitter_for_loop is the SAME runtime emitter (not a detached clone)
+        // Cloning must preserve connection to runtime append path
+        let emitter_for_loop = emitter;
+        // Pass SAME emitter instance to consumer so all emissions reach runtime
+        consumer.set_emitter(emitter_for_loop.clone());
         let hooks = self.hooks.clone();
         let filter = consumer.filter();
         let (tx, rx) = bounded::<EventMessage>(self.queue_size);

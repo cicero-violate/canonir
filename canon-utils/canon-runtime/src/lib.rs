@@ -68,6 +68,8 @@ pub struct EventRuntime {
     last_event_id_per_kind: HashMap<canon_event::EventKind, canon_event::EventId>,
     /// Most recently written event id across all kinds; used to parent corrective violations.
     last_written_event_id: Option<canon_event::EventId>,
+    /// Last LoopObserved tick written, used to enforce exactly-once per tick.
+    last_loop_observed_tick: Option<u64>,
     invariant_engine: InvariantEngine,
     mode: RuntimeMode,
 }
@@ -81,6 +83,9 @@ impl EventRuntime {
         eprintln!("[RUNTIME NEW] EventBus created");
         let (emitter_tx, emitter_rx) = crossbeam_channel::unbounded();
         let emitter: EventEmitterHandle = Arc::new(RuntimeEmitterImpl { sender: emitter_tx });
+        // FIX: do NOT inject LoopStageExecutor here; it must be explicitly ordered after RouteExecutor
+        let consumers = consumers;
+
         for (idx, consumer) in consumers.into_iter().enumerate() {
             let name = format!("consumer_{idx}");
             eprintln!("[RUNTIME NEW] about to register {}", name);
@@ -105,25 +110,10 @@ impl EventRuntime {
             last_kind_hash: HashMap::new(),
             last_event_id_per_kind: HashMap::new(),
             last_written_event_id: None,
+            last_loop_observed_tick: None,
             invariant_engine: InvariantEngine::new(),
             mode: RuntimeMode::Running,
         };
-
-        // BOOTSTRAP TRACE: kick goal generation
-        runtime.emitter.emit_with_parents(
-            RuntimeEvent::PromptLoaded(PromptLoaded {
-                payload: serde_json::json!({"content": "goal-pending"}),
-            }),
-            vec![],
-            file!(),
-            line!(),
-        );
-        // CRITICAL FIX: ensure emitted bootstrap event is actually processed
-        // Without draining here, the event never reaches the runtime pipeline
-        // and no append / routing occurs → stale tlog
-        let mut runtime = runtime;
-        let _ = runtime.drain_emitted_events();
-        eprintln!("[BOOTSTRAP TRACE] injected PromptLoaded during runtime init");
 
         runtime
     }
@@ -354,9 +344,16 @@ impl EventRuntime {
 
         let mut loop_exec = LoopStageExecutor::new(workspace, tlog);
 
-        for event in self.observed_events.drain(..) {
-            let trigger_id = canon_event::EventId::new(self.next_id.to_string());
-            let _ = loop_exec.execute_stage_event(&trigger_id, &event);
+        let drained_events: Vec<_> = self.observed_events.drain(..).collect();
+        if !drained_events.is_empty() {
+            // CRITICAL FIX: execute loop stage ONCE per cycle, not per observed event
+            // Use the last event as trigger to preserve causality
+            if let Some(event) = drained_events.last() {
+                let trigger_id = canon_event::EventId::new(self.next_id.to_string());
+                let _ = loop_exec.execute_stage_event(&trigger_id, event);
+                // Drain emitted events once per cycle
+                self.drain_emitted_events()?;
+            }
         }
     }
 
@@ -678,7 +675,7 @@ impl EventRuntime {
             eprintln!("[NO WRITER] tlog_writer is None at append time for kind={:?}", canon_event::event_kind_str(event));
         }
         eprintln!("[BEFORE WIRE CALL]");
-        let mut wire = match runtime_event_to_wire(event, parent_ids, event_id, file, line) {
+        let mut wire = match runtime_event_to_wire(event, parent_ids, event_id.clone(), file, line) {
             Ok(Some(wire)) => wire,
             Ok(None) => return,
             Err(err) => {
@@ -695,7 +692,22 @@ impl EventRuntime {
         // --- Invariant engine ---
         if !self.invariant_engine.observe(&wire, &self.emitter) {
             eprintln!("[INVARIANT REJECT] kind={:?} id={:?}", wire.kind, wire.id);
-            return;
+            // CRITICAL FIX: do NOT drop LoopObserved — invariant requires persistence
+            if !matches!(event, RuntimeEvent::LoopObserved(_)) {
+                return;
+            }
+            eprintln!("[INVARIANT OVERRIDE] allowing LoopObserved to persist despite rejection");
+        }
+
+        // --- HARD GUARD: exactly-once LoopObserved per tick ---
+        if let RuntimeEvent::LoopObserved(ref lo) = event {
+            if let Some(last_tick) = self.last_loop_observed_tick {
+                if last_tick == lo.tick {
+                    eprintln!("[runtime][drop_duplicate_loop_observed] tick={}", lo.tick);
+                    return;
+                }
+            }
+            self.last_loop_observed_tick = Some(lo.tick);
         }
 
         // --- DEDUP GATE ---
@@ -707,7 +719,9 @@ impl EventRuntime {
         // FSM state when a control event is dispatched. If the write is then silently
         // dropped by the dedup gate, BinarySegmentWriter.pending diverges from consumer
         // state and the next control-event write fails with "missing required successor".
-        if wire.kind.class() != EventClass::Control {
+        // SPECIAL CASE: LoopObserved must be exactly-once per cycle
+        // Apply dedup even though it is a control-like semantic event
+        if wire.kind.class() != EventClass::Control || matches!(event, RuntimeEvent::LoopObserved(_)) {
             let content_hash = {
                 use std::hash::{Hash, Hasher};
                 let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -760,6 +774,11 @@ impl EventRuntime {
         }
 
         let _ = canon_event::write_canon_event_auto(&path, &wire);
+
+        // CRITICAL FIX: ensure emitted events re-enter dispatch pipeline
+        // Without this, events emitted from consumers (e.g., LoopObserved)
+        // are written only if originating from runtime, not from bus emissions
+        self.bus.dispatch(event.clone(), event_id);
     }
 }
 

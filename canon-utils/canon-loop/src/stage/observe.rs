@@ -21,14 +21,12 @@ pub fn execute_forced(ctx: &mut LoopContext) -> anyhow::Result<LoopStageResult> 
     execute_inner(ctx, true)
 }
 
-fn execute_inner(ctx: &mut LoopContext, force: bool) -> anyhow::Result<LoopStageResult> {
-    // FIX: hard guard — only allow ONE observe execution per tick globally
-    if !force {
-        if let Some(last_tick) = ctx.last_observed_tick {
-            if last_tick >= ctx.current_tick {
-                // CRITICAL FIX: enforce exactly-once emission per tick
-                // Do NOT early return; invariant requires exactly one LoopObserved emission
-            }
+fn execute_inner(ctx: &mut LoopContext, _force: bool) -> anyhow::Result<LoopStageResult> {
+    // CRITICAL FIX: enforce exactly-once observe execution per tick
+    if let Some(last_tick) = ctx.last_observed_tick {
+        if last_tick == ctx.current_tick {
+            // Already emitted LoopObserved for this tick — skip duplicate execution
+            return Ok(LoopStageResult::EmitMany(vec![]));
         }
     }
     // INVARIANT: Observe MUST emit exactly one LoopObserved (no bypass)

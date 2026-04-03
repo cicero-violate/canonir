@@ -5,8 +5,27 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use crate::{ACTION_LOG_FILE, MAX_SNIPPET, SECONDARY_ACTION_LOG_FILE};
+use crate::MAX_SNIPPET;
 use crate::prompts::{action_observation, action_rationale, parse_actions, truncate};
+
+struct LogPaths {
+    action_log: PathBuf,
+    secondary_log: PathBuf,
+}
+static LOG_PATHS: OnceLock<LogPaths> = OnceLock::new();
+
+pub fn init_log_paths(prefix: &str) {
+    let base = std::path::Path::new("/workspace/ai_sandbox/canon/agent_logs").join(prefix);
+    let _ = std::fs::create_dir_all(&base);
+    let _ = LOG_PATHS.set(LogPaths {
+        action_log: base.join("actions.jsonl"),
+        secondary_log: base.join("log.jsonl"),
+    });
+}
+
+fn log_paths() -> Result<&'static LogPaths> {
+    LOG_PATHS.get().ok_or_else(|| anyhow::anyhow!("log paths not initialized"))
+}
 
 fn patch_summary_path(patch: &str) -> Option<&str> {
     for line in patch.lines() {
@@ -79,7 +98,7 @@ pub(crate) fn append_action_log_record(record: &Value) -> Result<()> {
     let lock = LOG_MUTEX.get_or_init(|| Mutex::new(()));
     let _guard = lock.lock().expect("action log mutex poisoned");
 
-    let primary = PathBuf::from(ACTION_LOG_FILE);
+    let primary = log_paths()?.action_log.clone();
     append_record_to_path(&primary, record)?;
     Ok(())
 }
@@ -278,7 +297,7 @@ fn append_secondary_action_log(role: &str, action: &Value) -> Result<()> {
     if record.is_empty() {
         return Ok(());
     }
-    let path = PathBuf::from(SECONDARY_ACTION_LOG_FILE);
+    let path = log_paths()?.secondary_log.clone();
     append_record_to_path(&path, &Value::Object(record))
 }
 

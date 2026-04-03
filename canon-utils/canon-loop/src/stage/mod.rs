@@ -23,16 +23,42 @@ pub enum LoopStageEvent {
 
 impl LoopStageEvent {
     pub fn execute(self, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
-        match self {
+        let result = match self {
             LoopStageEvent::Scan(_rs) => observe::execute_forced(ctx),
-            LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx, trigger_id),
+            LoopStageEvent::PlanTrigger(d) => plan::execute_trigger(d, ctx, trigger_id.clone()),
             LoopStageEvent::ActDispatch(d) => act::execute_dispatch(d, ctx, trigger_id.clone()),
             LoopStageEvent::VerifyTrigger(d) => verify::execute(d, ctx),
-            LoopStageEvent::Decompose(d) => decompose::execute(d, ctx, trigger_id),
+            LoopStageEvent::Decompose(d) => decompose::execute(d, ctx, trigger_id.clone()),
             LoopStageEvent::Conclude(d) => reward::execute_conclude(d, ctx),
-            LoopStageEvent::CapabilityDone(c) => dispatch_capability_done(c, ctx, trigger_id),
-            LoopStageEvent::CapabilityFail(f) => dispatch_capability_fail(f, ctx, trigger_id),
+            LoopStageEvent::CapabilityDone(c) => dispatch_capability_done(c, ctx, trigger_id.clone()),
+            LoopStageEvent::CapabilityFail(f) => dispatch_capability_fail(f, ctx, trigger_id.clone()),
             LoopStageEvent::RewardPolicy(v) => reward::execute_from_policy(v, ctx),
+        }?;
+
+        // CRITICAL FIX: enforce observe AFTER every stage execution (actual runtime path)
+        let observe_result = observe::execute_forced(ctx)?;
+
+        // Merge results to preserve both stage output and LoopObserved emission
+        match (result, observe_result) {
+            (LoopStageResult::EmitMany(mut a), LoopStageResult::EmitMany(mut b)) => {
+                a.append(&mut b);
+                Ok(LoopStageResult::EmitMany(a))
+            }
+            (LoopStageResult::EmitMany(mut a), LoopStageResult::Emit(b)) => {
+                a.push(b);
+                Ok(LoopStageResult::EmitMany(a))
+            }
+            (LoopStageResult::Emit(a), LoopStageResult::EmitMany(mut b)) => {
+                let mut out = vec![a];
+                out.append(&mut b);
+                Ok(LoopStageResult::EmitMany(out))
+            }
+            (LoopStageResult::Emit(a), LoopStageResult::Emit(b)) => {
+                Ok(LoopStageResult::EmitMany(vec![a, b]))
+            }
+            (_, LoopStageResult::EmitMany(b)) => Ok(LoopStageResult::EmitMany(b)),
+            (_, LoopStageResult::Emit(b)) => Ok(LoopStageResult::Emit(b)),
+            (a, _) => Ok(a),
         }
     }
 }

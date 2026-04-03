@@ -113,7 +113,14 @@ mod tests {
         std::fs::create_dir_all(workspace.join("src")).unwrap();
         std::fs::write(workspace.join("src/main.rs"), "fn main() { println!(\"ok\"); }\n").unwrap();
 
-        let mut ctx = LoopContext::new(workspace.clone(), PathBuf::from("/tmp/test.tlog"), canon_event::new_noop_emitter());
+        let mut ctx = LoopContext::new(workspace.clone(), PathBuf::from("/tmp/test.tlog"), {
+            use std::sync::Arc;
+            struct N;
+            impl canon_event::EventEmitter for N {
+                fn emit_with_parents(&self, _event: canon_event::RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {}
+            }
+            Arc::new(N)
+        });
         ctx.last_acted = Some(canon_event::LoopActed {
             tick: 0,
             action_kind: "run_command".to_string(),

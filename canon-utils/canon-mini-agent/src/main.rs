@@ -19,7 +19,7 @@ mod engine;
 use engine::process_action_and_execute;
 use logging::{
     append_action_log_record, append_action_result_log, append_message_log, append_orchestration_trace,
-    compact_log_record, make_command_id, now_ms,
+    compact_log_record, make_command_id, now_ms, init_log_paths,
 };
 use prompts::{
     action_observation, action_rationale, action_result_prompt, diagnostics_cycle_prompt,
@@ -34,13 +34,62 @@ const SPEC_FILE: &str = "PLANS/SPEC.md";
 const MASTER_PLAN_FILE: &str = "PLAN.md";
 #[allow(dead_code)]
 const VIOLATIONS_FILE: &str = "VIOLATIONS.md";
-const DIAGNOSTICS_FILE: &str = "DIAGNOSTICS.md";
-const ACTION_LOG_FILE: &str = "/workspace/ai_sandbox/canon/agent_logs/actions.jsonl";
-const SECONDARY_ACTION_LOG_FILE: &str = "/workspace/ai_sandbox/canon/agent_logs/log.jsonl";
-const WS_PORT_DEFAULT: u16 = 9103;
+const WS_PORT_CANDIDATES: &[u16] = &[
+    9103,
+    9104,
+    9105,
+    9106,
+    9107,
+    9108,
+];
 const MAX_STEPS: usize = 2000;
 const MAX_FULL_READ_LINES: usize = 500;
 const MAX_SNIPPET: usize = 3000;
+
+static DIAGNOSTICS_FILE_PATH: OnceLock<String> = OnceLock::new();
+
+pub fn diagnostics_file() -> &'static str {
+    DIAGNOSTICS_FILE_PATH
+        .get()
+        .map(String::as_str)
+        .unwrap_or("DIAGNOSTICS.md")
+}
+
+fn ws_port_arg(args: &[String]) -> Option<&str> {
+    args.windows(2)
+        .find(|w| w[0] == "--port")
+        .map(|w| w[1].as_str())
+}
+
+fn instance_arg(args: &[String]) -> Option<&str> {
+    args.windows(2)
+        .find(|w| w[0] == "--instance")
+        .map(|w| w[1].as_str())
+}
+
+fn ws_port_is_available(port: u16) -> bool {
+    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok()
+}
+
+fn choose_ws_port(args: &[String]) -> Result<(u16, bool)> {
+    if let Some(raw) = ws_port_arg(args) {
+        let port = raw
+            .parse::<u16>()
+            .with_context(|| format!("invalid --port value: {raw}"))?;
+        return Ok((port, true));
+    }
+
+    for &port in WS_PORT_CANDIDATES {
+        if ws_port_is_available(port) {
+            return Ok((port, false));
+        }
+    }
+
+    bail!(
+        "no free ws port available in {:?}; pass --port explicitly or extend WS_PORT_CANDIDATES",
+        WS_PORT_CANDIDATES
+    );
+}
 
 #[derive(Clone)]
 struct LaneConfig {
@@ -230,7 +279,7 @@ async fn run_agent(
     eprintln!(
         "[{role}] endpoint_id={} url={} prompt_kind={} submit_only={}",
         endpoint.id,
-        endpoint.url,
+        endpoint.pick_url(0),
         prompt_kind,
         submit_only
     );
@@ -291,10 +340,15 @@ async fn run_agent(
             }),
         );
 
+        let selected_url = if endpoint.stateful {
+            endpoint.pick_url(0)
+        } else {
+            endpoint.pick_url(step)
+        };
         let (req_id, resp) = match llm_worker_send_request_with_req_id(
             bridge,
             &endpoint.id,
-            &endpoint.url,
+            selected_url,
             endpoint.stateful,
             &prompt,
             &role_schema,
@@ -983,7 +1037,7 @@ async fn submit_executor_turn(
     let raw = llm_worker_send_request(
         bridge,
         &endpoint.id,
-        &endpoint.url,
+        endpoint.pick_url(0),
         endpoint.stateful,
         &prompt,
         &role_schema,
@@ -1066,15 +1120,34 @@ async fn main() -> Result<()> {
     let is_verifier = !orchestrate && args.iter().any(|a| a == "--verifier");
     let is_planner = !orchestrate && args.iter().any(|a| a == "--planner");
     let is_diagnostics = !orchestrate && args.iter().any(|a| a == "--diagnostics");
-    let ws_port: u16 = args.windows(2).find(|w| w[0] == "--port").and_then(|w| w[1].parse().ok()).unwrap_or(WS_PORT_DEFAULT);
+    let (ws_port, ws_port_explicit) = choose_ws_port(&args)?;
+    if ws_port_explicit {
+        eprintln!("[canon-mini-agent] ws_port={} (explicit)", ws_port);
+    } else {
+        eprintln!(
+            "[canon-mini-agent] ws_port={} (auto-selected from {:?})",
+            ws_port,
+            WS_PORT_CANDIDATES
+        );
+    }
 
     let workspace = PathBuf::from(WORKSPACE);
     let spec_path = workspace.join(SPEC_FILE);
     let master_plan_path = workspace.join(MASTER_PLAN_FILE);
     let violations_path = workspace.join(VIOLATIONS_FILE);
-    let diagnostics_path = workspace.join(DIAGNOSTICS_FILE);
+    let instance_id = instance_arg(&args).map(str::to_string);
+    let path_prefix = instance_id.clone().unwrap_or_else(|| "default".to_string());
+    init_log_paths(&path_prefix);
+    let diagnostics_rel = format!("PLANS/{}/diagnostics-{}.md", path_prefix, path_prefix);
+    let diagnostics_path = workspace.join(&diagnostics_rel);
+    let _ = DIAGNOSTICS_FILE_PATH.set(diagnostics_rel.clone());
 
     let config = CapabilityConfig::snapshot_store_load().context("failed to load capability_config.toml")?;
+    let config = if let Some(id) = instance_id.as_deref() {
+        config.for_instance(id)?
+    } else {
+        config
+    };
     let mut executor_endpoints: Vec<LlmEndpoint> = config
         .llm_endpoints
         .iter()
@@ -1082,12 +1155,12 @@ async fn main() -> Result<()> {
         .cloned()
         .collect();
     executor_endpoints.sort_by(|a, b| a.id.cmp(&b.id));
-    let mut lanes: Vec<LaneConfig> = executor_endpoints
+    let lanes: Vec<LaneConfig> = executor_endpoints
         .into_iter()
         .enumerate()
         .map(|(index, ep)| LaneConfig {
             index,
-            plan_file: format!("PLANS/executor-{}.md", ep.id),
+            plan_file: format!("PLANS/{}/executor-{}.md", path_prefix, ep.id),
             label: ep.id.clone(),
             endpoint: ep,
             tabs: llm_worker_new_tabs(),
@@ -1096,13 +1169,33 @@ async fn main() -> Result<()> {
     if lanes.is_empty() {
         bail!("no executor endpoints with role = \"executor\" found in capability_config.toml");
     }
-    if lanes.len() > 1 {
-        eprintln!(
-            "[canon-mini-agent] temporary single-executor mode: using {} and ignoring {} other executor endpoints",
-            lanes[0].label,
-            lanes.len().saturating_sub(1)
-        );
-        lanes.truncate(1);
+    let plans_dir = workspace.join("PLANS").join(&path_prefix);
+    let _ = std::fs::create_dir_all(&plans_dir);
+    if !diagnostics_path.exists() {
+        let legacy_path = workspace.join("DIAGNOSTICS.md");
+        if let Ok(contents) = std::fs::read_to_string(&legacy_path) {
+            let _ = std::fs::write(&diagnostics_path, contents);
+        } else {
+            let _ = std::fs::write(&diagnostics_path, "");
+        }
+    }
+    for lane in &lanes {
+        let plan_path = workspace.join(&lane.plan_file);
+        if plan_path.exists() {
+            continue;
+        }
+        let legacy_path = workspace.join(format!("PLANS/executor-{}.md", lane.endpoint.id));
+        if let Ok(contents) = std::fs::read_to_string(&legacy_path) {
+            if let Some(parent) = plan_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&plan_path, contents);
+        } else {
+            if let Some(parent) = plan_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&plan_path, "");
+        }
     }
 
     let ws_addr: std::net::SocketAddr = format!("127.0.0.1:{ws_port}").parse()?;
@@ -1693,7 +1786,7 @@ async fn main() -> Result<()> {
         eprintln!("[canon-mini-agent] role={role} input loaded ({} bytes)", primary_input.len());
 
         let endpoint = find_endpoint(&config, role)?.clone();
-        eprintln!("[canon-mini-agent] endpoint id={} url={}", endpoint.id, endpoint.url);
+    eprintln!("[canon-mini-agent] endpoint id={} url={}", endpoint.id, endpoint.pick_url(0));
 
         let initial_prompt = if is_verifier {
             format!(
@@ -1702,7 +1795,7 @@ async fn main() -> Result<()> {
         } else if is_diagnostics {
             let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
             format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nUse {SPEC_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {DIAGNOSTICS_FILE}. Emit exactly one action to begin."
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nUse {SPEC_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {diagnostics_rel}. Emit exactly one action to begin."
             )
         } else if is_planner {
             let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
@@ -1713,7 +1806,7 @@ async fn main() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics report (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nUpdate {MASTER_PLAN_FILE} and derive lane plans: {lane_plan_list}. Emit exactly one action to begin."
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics report (from {diagnostics_rel}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nUpdate {MASTER_PLAN_FILE} and derive lane plans: {lane_plan_list}. Emit exactly one action to begin."
             )
         } else {
             let spec = std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;
@@ -1721,7 +1814,7 @@ async fn main() -> Result<()> {
             let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
             let diagnostics = std::fs::read_to_string(&diagnostics_path).unwrap_or_default();
             format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nMaster plan (from {MASTER_PLAN_FILE}):\n{master_plan}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics (from {DIAGNOSTICS_FILE}):\n{diagnostics}\n\nAssigned lane plan (from {primary_input_name}):\n{primary_input}\n\nDo not modify spec, plan, lane plans, violations, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{spec}\n\nMaster plan (from {MASTER_PLAN_FILE}):\n{master_plan}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics (from {diagnostics_rel}):\n{diagnostics}\n\nAssigned lane plan (from {primary_input_name}):\n{primary_input}\n\nDo not modify spec, plan, lane plans, violations, or diagnostics. Use `done.reason` to report evidence for verifier review. Emit exactly one action to begin."
             )
         };
 

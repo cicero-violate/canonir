@@ -1,10 +1,16 @@
-// Background: dual WS relay between Rust and all content scripts.
-// ws  → 9100 (canon runtime)
-// ws2 → 9102 (mini-agent, dedicated port)
-// All messages tagged with tabId. TAB_READY (not TAB_OPENED) gates Rust TURN dispatch.
+// Background: multi-WS relay between Rust and all content scripts.
+// One WS per server/agent process. All messages tagged with tabId.
+// TAB_READY (not TAB_OPENED) gates Rust TURN dispatch.
 
 const RUST_WS       = "ws://127.0.0.1:9100";
-const MINI_AGENT_WS = "ws://127.0.0.1:9103";
+const MINI_AGENT_WS_LIST = [
+  "ws://127.0.0.1:9103",
+  "ws://127.0.0.1:9104",
+  "ws://127.0.0.1:9105",
+  "ws://127.0.0.1:9106",
+  "ws://127.0.0.1:9107",
+  "ws://127.0.0.1:9108",
+];
 
 // tabId → send function of the WS connection that owns that tab
 const tabWsOwner = new Map();
@@ -69,8 +75,8 @@ function makeConnection(url) {
   return { send, connect };
 }
 
-const runtimeConn   = makeConnection(RUST_WS);
-const miniAgentConn = makeConnection(MINI_AGENT_WS);
+const runtimeConn = makeConnection(RUST_WS);
+const miniAgentConns = MINI_AGENT_WS_LIST.map((url) => makeConnection(url));
 
 // ── Route a message back to whichever server owns the tab ────────────────
 function sendToOwner(tabId, msg) {
@@ -297,4 +303,6 @@ chrome.tabs.query({ url: ["https://chatgpt.com/*", "https://chat.openai.com/*", 
 });
 
 runtimeConn.connect();
-miniAgentConn.connect();
+for (const conn of miniAgentConns) {
+  conn.connect();
+}

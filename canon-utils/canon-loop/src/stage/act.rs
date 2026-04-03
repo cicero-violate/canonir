@@ -69,7 +69,10 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: E
         }
     };
     ctx.active_batch_llm_request_id = task.plan.llm_request_id.clone();
-    dispatch_plan(ctx, &task.plan, &trigger_id)
+    let result = dispatch_plan(ctx, &task.plan, &trigger_id)?;
+    // CRITICAL FIX: enforce observe immediately after dispatch (actual runtime path)
+    let _ = crate::stage::observe::execute_forced(ctx)?;
+    Ok(result)
 }
 
 fn emit_act_stall(ctx: &LoopContext, trigger_id: &EventId, reason: &str) {

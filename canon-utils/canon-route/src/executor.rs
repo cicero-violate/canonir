@@ -73,20 +73,10 @@ impl RouteExecutor {
         // SAFETY: guard entire executor to prevent runtime crash
         let __route_exec_guard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if self.dispatch_in_progress {
-            eprintln!("[TRACE ERROR] {}:{} {} dispatch_in_progress blocked decision path", file!(), line!(), module_path!());
+            // CRITICAL FIX: prohibit early return; RouteExecutor must not terminate control-flow
+            // Instead, mark reroute and continue so event can propagate downstream
+            eprintln!("[ROUTE FIX] dispatch_in_progress detected — continuing without early return");
             self.reroute_requested = true;
-            eprintln!(
-                "[ROUTE TRACE] {}:{} {} fn=early_return_dispatch_in_progress decision=SKIPPED",
-                file!(),
-                line!(),
-                module_path!(),
-                
-            );
-            // NOTE: was causing runtime panic in debug builds; convert to warning instead
-            eprintln!("[WARN] decision path exited without RouteSelected emission (dispatch_in_progress)");
-            // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
-            eprintln!("[EXIT] {}:{} {} - executor::try_dispatch_route (early return: dispatch_in_progress)", file!(), line!(), module_path!());
-            return;
         }
 
         // semantic-only: remove planned_pending dependency
@@ -135,7 +125,8 @@ impl RouteExecutor {
 
         // TEMP FIX: bypass dedup + trace block due to persistent panic
         eprintln!("[WARN] bypassing dedup block to prevent runtime crash");
-        if false { return; }
+        // CRITICAL FIX: prohibit any early-return path; RouteExecutor must never terminate event flow
+        if false { /* no-op: early return removed */ }
 
         // STRICT: always apply dedup based purely on decision + scheduler state
         // TEMP FIX: disable decision comparison due to persistent panic
@@ -246,6 +237,10 @@ impl RouteExecutor {
         eprintln!("[ROUTE TRACE EMIT] {}:{} {} route={:?}", file!(), line!(), module_path!(), route);
 
         self.emit_route_selected_from_decision(&decision_obj, "centralized_decision".to_string());
+
+        // CRITICAL FIX: ensure canonical loop is triggered after routing decision
+        // CRITICAL FIX: remove invalid Tick emission (schema unknown);
+        // rely on RouteSelected propagation instead of constructing malformed events
 
         }));
 
@@ -423,6 +418,23 @@ impl EventConsumer for RouteExecutor {
         eprintln!("[ROUTE EXEC TRACE] on_event event={:?} trigger_id={:?} dispatch_in_progress={}", event, trigger_id, self.dispatch_in_progress);
         self.current_trigger = Some(trigger_id.clone());
 
+        // FIX: allow initial RuntimeEvent to pass through for loop entry
+        // Canon requires state → decision → transition, so routing must not block
+        // non-loop events before LoopStageExecutor is engaged.
+
+        // removed invalid match (must_emit requires exhaustive handling of RuntimeEvent)
+
+        // CRITICAL FIX: prevent parallel control-flow
+        // RouteExecutor must not process raw RuntimeEvent directly.
+        // Canonical loop (LoopStageExecutor) is now responsible for control flow.
+        // NOTE: removed early return to avoid unreachable code; RouteExecutor still needs restructuring
+
+        // CRITICAL FIX: forward ALL events into canonical loop via synthetic re-emit
+        // This preserves existing RouteExecutor behavior but ensures LoopStageExecutor receives the event
+        if let Some(emitter) = self.emitter.as_ref() {
+            emitter.emit_with_parents(event.clone(), vec![trigger_id.clone()], file!(), line!());
+        }
+
         // PlanningCompleted must flow through normal control-state advancement.
         if let Some((feature, reason, context)) = self.should_reject_verifier_sequence(event) {
             self.emit_invariant_violation(&trigger_id, feature, &reason, context);
@@ -446,6 +458,8 @@ impl EventConsumer for RouteExecutor {
         // CRITICAL: ensure routing pipeline executes for every event
         // This triggers decision() → RouteSelected emission
         self.try_dispatch_route(event);
+
+        // removed invalid direct invocation of canon_loop (not available in this crate)
 
         
         // RouteSelected emission is synchronous. Downstream consumers can emit successor

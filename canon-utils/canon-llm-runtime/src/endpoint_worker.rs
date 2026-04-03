@@ -15,7 +15,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
-type WorkerKey = (String, String, bool, usize);
+type WorkerKey = (String, Vec<String>, bool, usize);
 static WORKERS: Lazy<Mutex<HashMap<WorkerKey, mpsc::Sender<LlmWorkItem>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static NEXT_REQ_ID: AtomicU64 = AtomicU64::new(1);
 pub fn llm_worker_new_tabs() -> TabManagerHandle {
@@ -43,7 +43,7 @@ pub struct LlmResponse {
 #[derive(Clone)]
 struct LlmWorker {
     endpoint_id: String,
-    url: String,
+    url: Vec<String>,
     max_tabs: usize,
     stateful: bool,
     bridge: WsBridge,
@@ -56,6 +56,12 @@ struct LlmWorker {
     tabs_with_role_sent: Arc<Mutex<HashSet<u32>>>,
 }
 impl LlmWorker {
+    fn pick_url(&self, index: usize) -> &str {
+        match self.url.len() {
+            0 => "",
+            len => &self.url[index % len],
+        }
+    }
     async fn handle_request(&self, req: LlmWorkItem) {
         // telemetry removed
         if req.bust_cache {
@@ -98,8 +104,9 @@ impl LlmWorker {
     }
     async fn send_turn(&self, phase: &str, req_id: u64, allow_req_id_mismatch: bool, prompt: String, role_schema: String) -> Result<LlmResponse> {
         const MAX_SEND_ATTEMPTS: usize = 2;
+        let selected_url = self.pick_url(req_id as usize);
         for attempt in 0..MAX_SEND_ATTEMPTS {
-            let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
+            let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, selected_url, &self.tabs, self.max_tabs).await?;
 
             // For stateful endpoints, send the role/system prompt only on the first
             // turn to this tab; all subsequent turns carry only the user prompt.
@@ -129,7 +136,7 @@ impl LlmWorker {
 
             tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
             tab_manager_log_llm(format!("phase={} endpoint={} tab={} send attempt={}", phase, self.endpoint_id, tab_id, attempt + 1));
-            let (raw, turn_id) = match self.bridge.send_turn_with_meta(tab_id, &self.url, full_prompt).await {
+            let (raw, turn_id) = match self.bridge.send_turn_with_meta(tab_id, selected_url, full_prompt).await {
                 Ok(v) => v,
                 Err(e) => {
                     tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
@@ -155,7 +162,7 @@ impl LlmWorker {
                 tab_manager_log_llm(format!("phase={} endpoint={} tab={} req_id_mismatch_accepted", phase, self.endpoint_id, tab_id));
             }
             let _ = response_router::response_router_resolve(req_id).await;
-            if !self.stateful && is_gemini_url(&self.url) {
+            if !self.stateful && is_gemini_url(selected_url) {
                 let _ = self.bridge.new_chat(tab_id).await;
                 match self.bridge.wait_new_chat(tab_id, 20).await {
                     Ok(()) => tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, self.endpoint_id, tab_id)),
@@ -165,7 +172,7 @@ impl LlmWorker {
                         return Err(anyhow::anyhow!("new_chat timeout"));
                     }
                 }
-            } else if !self.stateful && is_chatgpt_url(&self.url) {
+            } else if !self.stateful && is_chatgpt_url(selected_url) {
                 let _ = self.bridge.new_chat(tab_id).await;
                 match self.bridge.wait_new_chat(tab_id, 20).await {
                     Ok(()) => tab_manager_log_llm(format!("phase={} endpoint={} tab={} new_chat_done", phase, self.endpoint_id, tab_id)),
@@ -194,7 +201,8 @@ impl LlmWorker {
     }
 
     async fn submit_turn_only(&self, _phase: &str, req_id: u64, prompt: String, role_schema: String) -> Result<LlmResponse> {
-        let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &self.url, &self.tabs, self.max_tabs).await?;
+        let selected_url = self.pick_url(req_id as usize);
+        let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, selected_url, &self.tabs, self.max_tabs).await?;
         let include_role = if role_schema.trim().is_empty() {
             false
         } else if !self.stateful {
@@ -217,7 +225,7 @@ impl LlmWorker {
         };
 
         tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
-        let turn_id = self.bridge.submit_turn(tab_id, &self.url, full_prompt).await?;
+        let turn_id = self.bridge.submit_turn(tab_id, selected_url, full_prompt).await?;
         tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
         let raw = format!(
             "{{\"submit_ack\":true,\"req_id\":{req_id},\"tab_id\":{tab_id},\"turn_id\":{turn_id}}}"
@@ -256,7 +264,7 @@ pub async fn llm_worker_send_request_with_req_id(
         let (tx_worker, rx_worker) = mpsc::channel(1);
         let worker = LlmWorker {
             endpoint_id: endpoint_id.to_string(),
-            url: url.to_string(),
+            url: vec![url.to_string()],
             max_tabs,
             stateful,
             bridge: bridge.clone(),
@@ -269,14 +277,14 @@ pub async fn llm_worker_send_request_with_req_id(
         tx_worker
     } else {
         let mut workers = WORKERS.lock().await;
-        let worker_key = (endpoint_id.to_string(), url.to_string(), stateful, std::sync::Arc::as_ptr(tabs) as usize);
+        let worker_key = (endpoint_id.to_string(), vec![url.to_string()], stateful, std::sync::Arc::as_ptr(tabs) as usize);
         if let Some(sender) = workers.get(&worker_key) {
             sender.clone()
         } else {
             let (tx_worker, rx_worker) = mpsc::channel(64);
             let worker = LlmWorker {
                 endpoint_id: endpoint_id.to_string(),
-                url: url.to_string(),
+                url: vec![url.to_string()],
                 max_tabs,
                 stateful,
                 bridge: bridge.clone(),

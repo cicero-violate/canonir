@@ -137,7 +137,18 @@ mod tests {
 
     #[test]
     fn semantic_progress_improves_reward() {
-        let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"), canon_event::new_noop_emitter());
+        let mut ctx = LoopContext::new(
+            PathBuf::from("/tmp"),
+            PathBuf::from("/tmp/tlog"),
+            {
+                use std::sync::Arc;
+                struct N;
+                impl canon_event::EventEmitter for N {
+                    fn emit_with_parents(&self, _event: canon_event::RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {}
+                }
+                Arc::new(N)
+            }
+        );
         ctx.last_verifier_reward_bias = Some("negative".into());
         let verified = base_verified();
         let base = evaluate_reward_semantics(&ctx, &verified).reward;
@@ -147,7 +158,18 @@ mod tests {
 
     #[test]
     fn semantic_progress_resets_stagnation_on_failed_verify() {
-        let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"), canon_event::new_noop_emitter());
+        let mut ctx = LoopContext::new(
+            PathBuf::from("/tmp"),
+            PathBuf::from("/tmp/tlog"),
+            {
+                use std::sync::Arc;
+                struct N;
+                impl canon_event::EventEmitter for N {
+                    fn emit_with_parents(&self, _event: canon_event::RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {}
+                }
+                Arc::new(N)
+            }
+        );
         ctx.stagnant_ticks = 3;
         ctx.last_verifier_reward_bias = Some("negative".into());
         ctx.recent_execution_results.push(SemanticExecutionResultRecord::new("module_created", "module file created", vec!["/tmp/src/index.rs".into()], true));
@@ -158,7 +180,18 @@ mod tests {
 
     #[test]
     fn graph_proof_failure_penalizes_reward() {
-        let mut ctx = LoopContext::new(PathBuf::from("/tmp"), PathBuf::from("/tmp/tlog"), canon_event::new_noop_emitter());
+        let mut ctx = LoopContext::new(
+            PathBuf::from("/tmp"),
+            PathBuf::from("/tmp/tlog"),
+            {
+                use std::sync::Arc;
+                struct N;
+                impl canon_event::EventEmitter for N {
+                    fn emit_with_parents(&self, _event: canon_event::RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {}
+                }
+                Arc::new(N)
+            }
+        );
         ctx.last_verifier_reward_bias = Some("negative".into());
         let verified = base_verified();
         let base = evaluate_reward_semantics(&ctx, &verified).reward;

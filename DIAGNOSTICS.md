@@ -1,100 +1,116 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- state/event_log/event.tlog.d (548 segment files)
-- latest stage-signal analysis
-- VIOLATIONS.md
-- PLANS/SPEC.md
+- event log: latest segments in state/event_log/event.tlog.d
+- violations: VIOLATIONS.md
+- spec: PLANS/SPEC.md (state → decision → transition → event log)
+- source: canon-runtime, canon-loop, canon-route, canon-mini-agent
+- commands: python analysis (actors, stages, patterns)
 
 ## Ranked Failures
 
 ### 1. Impact: CRITICAL
-Signal: Canonical loop is non-atomic and never completes
+Signal: Runtime not participating; canonical pipeline never initiates
 Evidence:
-- decision=30, route=107, dispatch=87, observe=0
-- No LoopObserved events
-- Increasing divergence (route >> decision, dispatch >> decision)
+- actors = {"rustc": 343} only
+- No runtime_started, tick, decision, route, dispatch, observe, or loop_observed
+- repeated analyses show identical absence of canonical stages
+- Spec requires event-sourced control flow
 
 Root Cause:
-- Runtime executes partial pipeline fragments without enforcing full-cycle completion
-- Execution exits or diverges before observe stage
+- Runtime bootstrap not executing canonical runtime loop
+- RuntimeEvent emission path never invoked
+- No runtime actor registered in event system
 
 Repair Targets:
-- canon-runtime: enforce atomic loop execution (state → decision → route → dispatch → observe)
-- remove all early exits prior to observe
-- enforce single loop driver controlling all stages
-- add invariant: every cycle must end with LoopObserved
+- canon-runtime:
+  - audit main entrypoint for runtime loop initialization
+  - ensure runtime_started emitted at startup
+  - implement/restore tick driver
+  - verify EventEmitter wiring into event bus + tlog
+  - ensure runtime actor registration
+- invariants:
+  - runtime_started must occur once per process
+  - tick must occur continuously
+  - fail-fast if only rustc actor present
 
 ---
 
 ### 2. Impact: CRITICAL
-Signal: Observe stage never executes
+Signal: State → decision never executes
 Evidence:
-- observe=0 across all logs
+- No decision events
+- No semantic-state-driven transitions
 
 Root Cause:
-- observe stage unreachable in current execution path
+- SemanticStateSummary never evaluated
+- Decision stage never triggered
 
 Repair Targets:
-- canon-loop::observe: guarantee execution after dispatch
-- emit exactly-once LoopObserved per cycle
-- fail-fast if observe not executed
+- canon-runtime:
+  - construct SemanticStateSummary at startup
+  - invoke decision evaluation each tick
+  - emit decision event
+- invariants:
+  - decision must occur per tick
 
 ---
 
-### 3. Impact: HIGH
-Signal: Pipeline fragmentation and cross-cycle leakage
+### 3. Impact: CRITICAL
+Signal: Routing never executes
 Evidence:
-- route (107) >> decision (30)
-- dispatch (87) >> decision (30)
+- route_events_present = 0
+- no RouteExecutor activity
 
 Root Cause:
-- stages invoked independently or reuse prior-cycle artifacts
+- Upstream failure: no decision → no routing
 
 Repair Targets:
-- bind decision → route → dispatch to same cycle ID
-- enforce strict 1:1:1 mapping per cycle
-- prevent reuse of stale outputs
+- canon-route:
+  - validate routing derives from SemanticStateSummary
+  - ensure RouteExecutor subscribes correctly
 
 ---
 
 ### 4. Impact: HIGH
-Signal: Dispatch not strictly gated by routing
+Signal: Loop fully inactive
 Evidence:
-- dispatch significantly exceeds decision count
+- no observe or LoopObserved events
+- no downstream plan/act/verify
 
 Root Cause:
-- dispatch bypasses canonical decision→route chain
+- Pipeline blocked before loop entry
 
 Repair Targets:
-- require dispatch to reference same-cycle RouteSelected
-- block dispatch without fresh routing
+- restore route → loop flow after upstream fix
 
 ---
 
 ### 5. Impact: HIGH
-Signal: Invariant violations accelerating
+Signal: System operating outside event-sourced model
 Evidence:
-- invariant_errors = 2275 (increasing)
+- Only rustc events recorded
+- No control events in log
 
 Root Cause:
-- invariants are logged but not enforced
+- Execution bypasses canonical event system
 
 Repair Targets:
-- convert invariants to fail-fast assertions
-- abort execution immediately on violation
+- enforce invariant:
+  - all control flow must emit events
+- audit hidden execution paths
 
 ---
 
 ## Planner Handoff
-1. Enforce atomic canonical loop execution (no partial execution)
-2. Guarantee observe stage execution (LoopObserved exactly-once)
-3. Bind decision→route→dispatch to same cycle
-4. Eliminate dispatch_without_route paths
-5. Convert invariants to fail-fast
+1. Restore runtime bootstrap (PRIMARY)
+2. Ensure runtime emits runtime_started + tick
+3. Emit RuntimeEvent from semantic state
+4. Enable decision stage execution
+5. Verify routing activation
+6. Restore loop execution
 
-## Notes
-- scheduler_len removal confirmed complete
-- primary failure remains loop fragmentation and non-completion
-- system degradation continues as invariant violations accumulate
+## Blockers
+- Runtime entrypoint not confirmed
+- Missing tracing between bootstrap and emitter
 

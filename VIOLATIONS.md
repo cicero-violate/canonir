@@ -1,68 +1,72 @@
 # Violations
 
-## 0. scheduler_len removal — RESOLVED
+## 1. Runtime not participating in event system (CRITICAL)
 - Evidence:
-  - Diagnostics confirm removal complete
-  - ConstraintState contains no scheduler_len field
-- Outcome:
-  - Queue-driven routing eliminated
-
-## 1. Canonical loop not executing atomically (CRITICAL)
-- Evidence:
-  - decision=30, route=107, dispatch=74, observe=0
-  - route >> decision, dispatch >> decision
+  - actors = {"rustc": ...} only
+  - No runtime actor present in event log
+  - No runtime_started or tick events
 - Issue:
-  - state → decision → route → dispatch → observe not executed as a single atomic cycle
+  - Canonical runtime is not emitting or recording events
+  - Entire system operates outside event-sourced control
 - Required fix:
-  - enforce single loop driver
-  - guarantee full ordered execution per cycle
+  - Ensure runtime bootstrap emits runtime_started
+  - Add tick driver that emits runtime/tick events
+  - Ensure runtime actor writes to event log
 
-## 2. Observe stage not executing (CRITICAL)
+## 2. Canonical control chain not initiated (CRITICAL)
 - Evidence:
-  - observe=0 across all logs
-  - no LoopObserved events
-  - executor claim contradicted by diagnostics
+  - No decision, route, dispatch, observe, or loop_observed events
 - Issue:
-  - observe stage unreachable in runtime
+  - Spec invariant (state → decision → transition → event log) completely broken
 - Required fix:
-  - guarantee observe executes after dispatch
-  - emit exactly-once LoopObserved per cycle
-  - fail-fast if skipped
+  - Restore state → decision emission
+  - Ensure each tick produces at least one decision
+  - Add fail-fast if no decision events occur
 
-## 3. Pipeline fragmentation / cross-cycle leakage
+## 3. RuntimeEvent emission/ingestion absent (CRITICAL)
 - Evidence:
-  - route (107) >> decision (30)
-  - dispatch (74) >> decision (30)
+  - No RuntimeEvent present in logs
+  - Only rustc-originated events recorded
 - Issue:
-  - stages executed independently or reuse stale outputs
+  - Runtime is not acting as an event producer
 - Required fix:
-  - bind decision → route → dispatch to single cycle ID
-  - enforce strict 1:1:1 mapping
+  - Identify and fix RuntimeEvent emission entrypoint
+  - Ensure emitter is wired into runtime loop
+  - Validate ingestion pipeline delivers runtime events
 
-## 4. Dispatch not gated by routing
+## 4. Routing layer never executes (CRITICAL)
 - Evidence:
-  - dispatch significantly exceeds decision count
+  - route_events_present = 0
+  - No RouteExecutor activity
 - Issue:
-  - dispatch bypasses canonical routing chain
+  - Routing cannot occur without decision events
 - Required fix:
-  - require same-cycle RouteSelected before dispatch
-  - block dispatch without fresh route
+  - Restore decision stage first
+  - Then enforce routing from SemanticStateSummary
 
-## 5. Invariants not enforced
+## 5. Canonical loop fully inactive (CRITICAL)
 - Evidence:
-  - invariant_errors = 2123 and increasing
+  - No observe or LoopObserved events
+  - No downstream stages (plan/act/verify)
 - Issue:
-  - violations logged but not enforced
+  - Loop never entered
 - Required fix:
-  - convert invariants to fail-fast
-  - abort execution on violation
+  - Restore pipeline entry before loop-level fixes
 
-## 6. System not spec-compliant
+## 6. System operating outside canonical architecture (CRITICAL)
 - Evidence:
-  - missing observe stage
-  - non-atomic pipeline
-  - LoopObserved invariant not satisfied
+  - Only rustc events present
+  - No canonical control-flow events
 - Issue:
-  - canonical control-flow (state → decision → transition) not fulfilled
+  - System not using event-sourced execution model required by spec
 - Required fix:
-  - achieve full atomic loop execution with exact invariants
+  - Ensure all control-flow is event-driven
+  - Eliminate non-event-driven execution paths
+
+## 7. System not spec-compliant
+- Evidence:
+  - No canonical stages executing
+- Issue:
+  - Core invariant (state → decision → route → loop → plan → act → verify) completely broken
+- Required fix:
+  - Restore full canonical pipeline starting from runtime event emission

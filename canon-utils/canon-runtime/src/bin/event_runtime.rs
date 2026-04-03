@@ -4,7 +4,6 @@ use canon_event_store::replay_graph_from_tlog;
 use canon_event_store::AnyEvent;
 use canon_event_store::{extract_rustc_event, read_any_events_from_path, read_any_events_from_path_with_start_seq};
 use canon_llm::repair_server::{repair_client_submit, RepairJobRequest, REPAIR_SERVER_ADDR};
-use canon_loop::LoopStageExecutor;
 use canon_route::RouteExecutor;
 use canon_runtime::bootstrap::{bootstrap_config, new_prompt_registry, prompts_dir, reload_prompt_file};
 use canon_runtime::consumers::agent_registry::{AgentRegistryConsumer, AgentRegistryHandle};
@@ -357,14 +356,16 @@ fn main() -> Result<()> {
     let harness_mode = false;
     let mut consumers: Vec<Box<dyn canon_event::EventConsumer>> = vec![
         Box::new(AnalystConsumer::new(tlog_path.clone())),
-        Box::new(LoopStageExecutor::new(workspace.clone(), tlog_path.clone()).with_agent_id("planner_chatgpt_group".to_string())),
         Box::new(RepairControlConsumer::new()),
         Box::new(RouteExecutor::new(workspace.clone())),
+        // FIX: Dispatch must occur BEFORE LoopStageExecutor so RouteSelected is delivered
+        Box::new(DispatchConsumer::new()),
+        // LoopStageExecutor must run AFTER dispatch to receive routed events
+        Box::new(canon_loop::executor::LoopStageExecutor::new(workspace.clone(), tlog_path.clone())),
         Box::new(ErrorLogger::new(None)),
         Box::new(CheckConsumer::new()),
         Box::new(DiagnosticsConsumer::new()),
         Box::new(AgentRegistryConsumer::new(agent_registry.clone())),
-        Box::new(DispatchConsumer::new()),
         Box::new(GoalGraphConsumer::new()),
         Box::new(WatchdogConsumer::new()),
     ];
@@ -415,6 +416,8 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
     }
 
     let mut runtime = EventRuntime::new(consumers);
+    // CRITICAL FIX: set tlog_path immediately after runtime construction
+    runtime.set_tlog_path(tlog_path.clone());
     // Hooks / middleware chain.
     if let Ok(cfg) = canon_llm::config::CapabilityConfig::snapshot_store_load() {
         let mut hooks = HookChain::new();
