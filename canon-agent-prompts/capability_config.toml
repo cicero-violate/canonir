@@ -69,7 +69,8 @@ max_tabs = 1
 [[llm.endpoints]]
 id = "mini_planner_chatgpt"
 url = [
-  "https://chatgpt.com/c/69d001ed-5e6c-8325-b7fb-7e589202677d",
+  "https://chatgpt.com/c/69d072f7-75b0-8330-9c1e-a62354dfab54",
+  # "https://chatgpt.com/c/69d001ed-5e6c-8325-b7fb-7e589202677d",
   # "https://chatgpt.com/c/69cf340f-f16c-8327-b945-8e58aba1b66f",
   "https://chatgpt.com/gg/69ca778f7ea0819c8437275ff608eb35",
   "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
