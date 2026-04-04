@@ -26,8 +26,16 @@ pub fn validate_event(event: &CanonEvent) -> Result<()> {
     // Allow capability_requested to bypass empty delta invariant
     // Allow capability_requested events (wrapped as code events from event-runtime) to bypass
     // Allow event-runtime generated events (code wrapper) to bypass delta invariant
-    if event.actor != "event-runtime" && is_zero_delta(&event.payload.delta) {
-        bail!("invariant violation: delta is zero / empty");
+    // Allow empty delta for control-flow events (they do not mutate state)
+    if is_zero_delta(&event.payload.delta) {
+        match event.kind {
+            EventKind::Tick | EventKind::RouteTick | EventKind::RouteSelected => {
+                // allowed: control-flow events may have empty delta
+            }
+            _ => {
+                bail!("invariant violation: delta is zero / empty");
+            }
+        }
     }
 
     Ok(())
@@ -240,7 +248,8 @@ mod tests {
             1,
             CanonPayload { input: json!({"x": 1}), output: json!({"y": 1}), delta: json!({}), meta: CanonPayloadMeta { file: "test".to_string(), line: 1 }, data: json!({}) },
         );
-        assert!(validate_event(&e).is_err());
+        // Control events (including RouteSelected) are allowed to have empty delta
+        assert!(validate_event(&e).is_ok());
     }
 
     #[test]

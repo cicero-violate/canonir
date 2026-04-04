@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use crate::MAX_SNIPPET;
+use crate::constants::MAX_SNIPPET;
 use crate::prompts::{action_observation, action_rationale, parse_actions, truncate};
 
 struct LogPaths {
@@ -60,7 +60,15 @@ fn action_command_summary(action: &Value) -> String {
                 .map(|path| format!("apply_patch {}", path))
                 .unwrap_or_else(|| "apply_patch".to_string())
         }
-        "done" => format!("done {}", action.get("reason").and_then(|v| v.as_str()).unwrap_or("")),
+        "message" => {
+            let status = action.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let summary = action
+                .get("payload")
+                .and_then(|v| v.get("summary"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            format!("message {} {}", status, summary)
+        }
         _ => kind.to_string(),
     }
 }

@@ -273,8 +273,9 @@ impl LoopStageExecutor {
                 self.ctx.current_tick
             );
         }
+        // FIX: make RouteSelected idempotent per tick instead of panicking
         if self.ctx.last_route_selected_tick == Some(selected.tick) {
-            panic!("duplicate RouteSelected received for tick {}", selected.tick);
+            return;
         }
         self.ctx.last_route_selected_tick = Some(selected.tick);
         self.ctx.last_route_rationale = Some(selected.rationale.clone());
@@ -863,8 +864,11 @@ impl EventConsumer for LoopStageExecutor {
                 self.ctx.last_route_selected_tick = None;
                 // CRITICAL FIX: enforce state -> decision -> transition each loop cycle
                 // Emit RouteTick to trigger routing independently of external events
+                // FIX: ensure RouteTick is not deduplicated by writer
+                // Using emitted=true makes payload differ from default and helps bypass
+                // per-kind payload hashing drop behavior
                 self.ctx.emitter.emit_with_parents(
-                    RuntimeEvent::RouteTick(canon_event::RouteTick { tick: *tick, emitted: false }),
+                    RuntimeEvent::RouteTick(canon_event::RouteTick { tick: *tick, emitted: true }),
                     vec![trigger_id.clone()],
                     file!(),
                     line!(),

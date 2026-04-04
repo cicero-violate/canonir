@@ -6,8 +6,9 @@ use std::io::Write;
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::fs;
 
-use crate::{
+use crate::constants::{
     diagnostics_file, MASTER_PLAN_FILE, MAX_FULL_READ_LINES, MAX_SNIPPET, SPEC_FILE,
     VIOLATIONS_FILE, WORKSPACE,
 };
@@ -37,13 +38,77 @@ fn patch_targets<'a>(patch: &'a str) -> Vec<&'a str> {
 }
 
 fn is_lane_plan(path: &str) -> bool {
-    if !path.starts_with("PLANS/") || !path.ends_with(".md") {
+    if !path.starts_with("PLANS/") {
+        return false;
+    }
+    let is_json = path.ends_with(".json");
+    let is_md = path.ends_with(".md");
+    if !is_json && !is_md {
         return false;
     }
     // Allow both legacy and instance-scoped lane plans:
-    // - PLANS/executor-<id>.md
-    // - PLANS/<instance>/executor-<id>.md
+    // - PLANS/executor-<id>.json
+    // - PLANS/<instance>/executor-<id>.json
+    // - legacy .md variants
     path.starts_with("PLANS/executor-") || path.contains("/executor-")
+}
+
+fn default_graph_out_dir(workspace: &Path, crate_name: &str) -> PathBuf {
+    workspace
+        .join("state")
+        .join("reports_out")
+        .join("crates")
+        .join(crate_name)
+}
+
+fn read_first_lines(path: &Path, max_lines: usize, max_bytes: usize) -> Result<String> {
+    let content = fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut out = String::new();
+    for (idx, line) in content.lines().enumerate() {
+        if idx >= max_lines || out.len() >= max_bytes {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+fn read_json_report(path: &Path, max_bytes: usize) -> Result<String> {
+    let content = fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let trimmed = truncate(&content, max_bytes);
+    Ok(trimmed.to_string())
+}
+
+fn load_graph_symbols(graph_json: &Path) -> Result<std::collections::HashMap<u32, (String, String)>> {
+    let content = fs::read_to_string(graph_json).with_context(|| format!("failed to read {}", graph_json.display()))?;
+    let value: Value = serde_json::from_str(&content)?;
+    let mut out = std::collections::HashMap::new();
+    let nodes = value.get("nodes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    for node in nodes {
+        let id = node.get("id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        if id == 0 {
+            continue;
+        }
+        let kind = node.get("kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let symbol = node.get("symbol").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        out.insert(id, (kind, symbol));
+    }
+    Ok(out)
+}
+
+fn symbol_label(map: &std::collections::HashMap<u32, (String, String)>, raw: &str) -> String {
+    let id = raw.parse::<u32>().ok();
+    if let Some(id) = id {
+        if let Some((kind, symbol)) = map.get(&id) {
+            if symbol.is_empty() {
+                return format!("{id} {kind}").trim().to_string();
+            }
+            return format!("{id} {kind} {symbol}").trim().to_string();
+        }
+        return id.to_string();
+    }
+    raw.to_string()
 }
 
 fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
@@ -72,7 +137,7 @@ fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
         role if role.starts_with("executor") => {
             if touches_spec || touches_master_plan || touches_lane || touches_violations || touches_diagnostics {
                 Some(
-                    "Executor may not patch spec, plan files, violations, or diagnostics. Execute code/tests only and report evidence in `done.reason`."
+                    "Executor may not patch spec, plan files, violations, or diagnostics. Execute code/tests only and report evidence in `message.payload`."
                         .to_string(),
                 )
             } else {
@@ -97,14 +162,14 @@ fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
         "planner" | "mini_planner" => {
             if touches_spec || touches_violations || touches_diagnostics || touches_other {
                 Some(
-                    "Planner may only patch `PLAN.md` and lane plans under `PLANS/<instance>/executor-<id>.md` (or legacy `PLANS/executor-<id>.md`) because planner derives plans from the spec and diagnostics."
+                    "Planner may only patch `PLAN.json` and lane plans under `PLANS/<instance>/executor-<id>.json` (or legacy `PLANS/executor-<id>.md`) because planner derives plans from the spec and diagnostics."
                         .to_string(),
                 )
             } else if touches_master_plan || touches_lane {
                 None
             } else {
                 Some(
-                    "Planner must update `PLAN.md` and lane plans; no other patches are allowed."
+                    "Planner must update `PLAN.json` and lane plans; no other patches are allowed."
                         .to_string(),
                 )
             }
@@ -443,42 +508,45 @@ fn execute_action(
         .unwrap_or("unknown")
         .to_string();
     tokio::task::block_in_place(|| match kind.as_str() {
-        "done" => {
-            let reason = action
-                .get("reason")
+        "message" => {
+            let status = action.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let payload = action.get("payload").cloned().unwrap_or_else(|| Value::Null);
+            let summary = payload
+                .get("summary")
                 .and_then(|v| v.as_str())
-                .unwrap_or("complete");
-            if !check_on_done {
-                return Ok((true, reason.to_string()));
-            }
-            eprintln!("[{role}] step={} done — running cargo build --workspace", step);
-            let (build_ok, build_out) = exec_run_command(workspace, "cargo build --workspace", WORKSPACE)
-                .unwrap_or_else(|e| (false, e.to_string()));
-            if !build_ok {
-                eprintln!("[{role}] step={} cargo build failed — rejecting done", step);
-                return Ok((
-                    false,
-                    format!(
-                        "done rejected: cargo build --workspace failed.\n\n{}",
-                        truncate(&build_out, MAX_SNIPPET)
-                    ),
-                ));
-            }
-            eprintln!("[{role}] step={} cargo build ok — running cargo test --workspace", step);
-            let (test_ok, test_out) = exec_run_command(workspace, "cargo test --workspace", WORKSPACE)
-                .unwrap_or_else(|e| (false, e.to_string()));
-            if test_ok {
-                eprintln!("[{role}] step={} cargo test ok — accepting done", step);
-                Ok((true, reason.to_string()))
+                .unwrap_or("message accepted");
+            if status == "complete" && check_on_done {
+                eprintln!("[{role}] step={} message complete — running cargo build --workspace", step);
+                let (build_ok, build_out) = exec_run_command(workspace, "cargo build --workspace", WORKSPACE)
+                    .unwrap_or_else(|e| (false, e.to_string()));
+                if !build_ok {
+                    eprintln!("[{role}] step={} cargo build failed — rejecting message", step);
+                    return Ok((
+                        false,
+                        format!(
+                            "message rejected: cargo build --workspace failed.\n\n{}",
+                            truncate(&build_out, MAX_SNIPPET)
+                        ),
+                    ));
+                }
+                eprintln!("[{role}] step={} cargo build ok — running cargo test --workspace", step);
+                let (test_ok, test_out) = exec_run_command(workspace, "cargo test --workspace", WORKSPACE)
+                    .unwrap_or_else(|e| (false, e.to_string()));
+                if test_ok {
+                    eprintln!("[{role}] step={} cargo test ok — accepting message", step);
+                    Ok((true, summary.to_string()))
+                } else {
+                    eprintln!("[{role}] step={} cargo test failed — rejecting message", step);
+                    Ok((
+                        false,
+                        format!(
+                            "message rejected: cargo test --workspace failed.\n\n{}",
+                            truncate(&test_out, MAX_SNIPPET)
+                        ),
+                    ))
+                }
             } else {
-                eprintln!("[{role}] step={} cargo test failed — rejecting done", step);
-                Ok((
-                    false,
-                    format!(
-                        "done rejected: cargo test --workspace failed.\n\n{}",
-                        truncate(&test_out, MAX_SNIPPET)
-                    ),
-                ))
+                Ok((true, summary.to_string()))
             }
         }
         "list_dir" => {
@@ -596,6 +664,222 @@ fn execute_action(
             eprintln!("[{role}] step={} {label} output_bytes={}", step, out.len());
             Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
         }
+        k @ ("rustc_hir" | "rustc_mir") => {
+            let action_kind = k;
+            let crate_name = action
+                .get("crate")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("{kind} missing 'crate'", kind = action_kind))?;
+            let mode = action
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or(if action_kind == "rustc_hir" { "hir-tree" } else { "mir" });
+            let extra = action
+                .get("extra")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let cmd = if extra.trim().is_empty() {
+                format!("cargo rustc -p {crate_name} -- -Zunpretty={mode}")
+            } else {
+                format!("cargo rustc -p {crate_name} -- -Zunpretty={mode} {extra}")
+            };
+            eprintln!("[{role}] step={} {action_kind} cmd={cmd}", step);
+            let (success, out) = exec_run_command(workspace, &cmd, WORKSPACE)?;
+            let label = if success {
+                format!("{action_kind} ok")
+            } else {
+                format!("{action_kind} failed")
+            };
+            eprintln!("[{role}] step={} {label} output_bytes={}", step, out.len());
+            Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
+        }
+        "graph_probe" => {
+            let crate_name = action.get("crate").and_then(|v| v.as_str());
+            let entry = action.get("entry").and_then(|v| v.as_str());
+            let tlog = action.get("tlog").and_then(|v| v.as_str());
+            let symbol_limit = action.get("symbol_limit").and_then(|v| v.as_u64()).unwrap_or(50);
+            let unreachable_limit = action.get("unreachable_limit").and_then(|v| v.as_u64()).unwrap_or(20);
+            let cfg_limit = action.get("cfg_limit").and_then(|v| v.as_u64()).unwrap_or(20);
+            let mut cmd = format!(
+                "cargo run -p canon-tools-analysis --bin graph_probe -- --workspace {} --symbol-limit {} --unreachable-limit {} --cfg-limit {}",
+                WORKSPACE, symbol_limit, unreachable_limit, cfg_limit
+            );
+            if let Some(name) = crate_name {
+                cmd.push_str(&format!(" --crate {name}"));
+            }
+            if let Some(val) = entry {
+                cmd.push_str(&format!(" --entry {val}"));
+            }
+            if let Some(path) = tlog {
+                cmd.push_str(&format!(" --tlog {path}"));
+            }
+            eprintln!("[{role}] step={} graph_probe cmd={cmd}", step);
+            let (success, out) = exec_run_command(workspace, &cmd, WORKSPACE)?;
+            let label = if success { "graph_probe ok" } else { "graph_probe failed" };
+            eprintln!("[{role}] step={} {label} output_bytes={}", step, out.len());
+            Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
+        }
+        k @ ("graph_call" | "graph_cfg") => {
+            let action_kind = k;
+            let crate_name = action
+                .get("crate")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("{kind} missing 'crate'", kind = action_kind))?;
+            let out_dir = action
+                .get("out_dir")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| default_graph_out_dir(workspace, crate_name));
+            let out_dir_str = out_dir.to_string_lossy();
+            let cmd = format!(
+                "cargo run -p canon-tools-analysis --bin graph_bin -- --workspace {} --crate {} --out {}",
+                WORKSPACE, crate_name, out_dir_str
+            );
+            eprintln!("[{role}] step={} {action_kind} cmd={cmd}", step);
+            let (success, out) = exec_run_command(workspace, &cmd, WORKSPACE)?;
+            let label = if success {
+                format!("{action_kind} ok")
+            } else {
+                format!("{action_kind} failed")
+            };
+            let target_path = if action_kind == "graph_call" {
+                out_dir.join("graphs").join("callgraph.csv")
+            } else {
+                out_dir.join("graphs").join("cfg.csv")
+            };
+            let preview = if target_path.exists() { read_first_lines(&target_path, 50, MAX_SNIPPET)? } else { String::new() };
+            let mut symbol_preview = String::new();
+            let mut symbol_path = None;
+            if target_path.exists() {
+                let mut out_lines = Vec::new();
+                let content = fs::read_to_string(&target_path)?;
+                let mut lines = content.lines();
+                let header = lines.next().unwrap_or("");
+                let header_cols: Vec<&str> = header.split(',').collect();
+                let has_symbol_cols = header_cols.iter().any(|c| *c == "caller_symbol" || *c == "callee_symbol");
+                let map = if !has_symbol_cols {
+                    let graph_json = out_dir.join("graph").join("graph.json");
+                    if graph_json.exists() {
+                        Some(load_graph_symbols(&graph_json)?)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let mut count = 0usize;
+                for line in lines {
+                    if count >= 200 {
+                        break;
+                    }
+                    let cols: Vec<&str> = line.split(',').collect();
+                    if has_symbol_cols {
+                        let caller_idx = header_cols.iter().position(|c| *c == "caller_symbol");
+                        let callee_idx = header_cols.iter().position(|c| *c == "callee_symbol");
+                        let caller = caller_idx.and_then(|i| cols.get(i)).map(|s| s.trim()).unwrap_or("");
+                        let callee = callee_idx.and_then(|i| cols.get(i)).map(|s| s.trim()).unwrap_or("");
+                        if !caller.is_empty() || !callee.is_empty() {
+                            out_lines.push(format!("{caller} -> {callee}"));
+                            count += 1;
+                            continue;
+                        }
+                    }
+                    if cols.len() < 2 {
+                        continue;
+                    }
+                    let src = cols[0].trim();
+                    let dst = cols[1].trim();
+                    if let Some(map) = map.as_ref() {
+                        out_lines.push(format!("{} -> {}", symbol_label(map, src), symbol_label(map, dst)));
+                    } else {
+                        out_lines.push(format!("{src} -> {dst}"));
+                    }
+                    count += 1;
+                }
+                if !out_lines.is_empty() {
+                    symbol_preview = out_lines.join("\n");
+                    let fname = if action_kind == "graph_call" { "callgraph.symbol.txt" } else { "cfg.symbol.txt" };
+                    let out_path = out_dir.join("graphs").join(fname);
+                    if let Some(parent) = out_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::write(&out_path, format!("{}\n", symbol_preview))?;
+                    symbol_path = Some(out_path);
+                }
+            }
+            let mut summary = format!(
+                "{label}\noutput_dir: {}\n{}",
+                out_dir_str,
+                target_path.display()
+            );
+            if !preview.is_empty() {
+                summary.push_str("\npreview:\n");
+                summary.push_str(&preview);
+            }
+            if let Some(path) = symbol_path {
+                summary.push_str(&format!("\nsymbol_edges: {}", path.display()));
+                if !symbol_preview.is_empty() {
+                    summary.push_str("\nsymbol_preview:\n");
+                    summary.push_str(&symbol_preview);
+                }
+            }
+            Ok((false, format!("{summary}\n\nfull_output:\n{}", truncate(&out, MAX_SNIPPET))))
+        }
+        k @ ("graph_dataflow" | "graph_reachability") => {
+            let action_kind = k;
+            let crate_name = action
+                .get("crate")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("{kind} missing 'crate'", kind = action_kind))?;
+            let tlog = action.get("tlog").and_then(|v| v.as_str());
+            let out_dir = action
+                .get("out_dir")
+                .and_then(|v| v.as_str())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| default_graph_out_dir(workspace, crate_name));
+            let out_dir_str = out_dir.to_string_lossy();
+            let mut cmd = format!(
+                "cargo run -p canon-tools-analysis --bin graph_reports -- --workspace {} --crate {} --out {}",
+                WORKSPACE, crate_name, out_dir_str
+            );
+            if let Some(path) = tlog {
+                cmd.push_str(&format!(" --tlog {path}"));
+            }
+            eprintln!("[{role}] step={} {action_kind} cmd={cmd}", step);
+            let (success, out) = exec_run_command(workspace, &cmd, WORKSPACE)?;
+            let label = if success {
+                format!("{action_kind} ok")
+            } else {
+                format!("{action_kind} failed")
+            };
+            let (report_path, report_label) = if action_kind == "graph_dataflow" {
+                (out_dir.join("metrics").join("dataflow_fanout_report.json"), "dataflow_fanout_report.json")
+            } else {
+                let runtime_path = out_dir.join("analysis").join("runtime_reachability_report.json");
+                if runtime_path.exists() {
+                    (runtime_path, "runtime_reachability_report.json")
+                } else {
+                    (out_dir.join("metrics").join("reachability_report.json"), "reachability_report.json")
+                }
+            };
+            let report_preview = if report_path.exists() {
+                read_json_report(&report_path, MAX_SNIPPET)?
+            } else {
+                String::new()
+            };
+            let mut summary = format!(
+                "{label}\noutput_dir: {}\nreport: {}",
+                out_dir_str,
+                report_path.display()
+            );
+            if !report_preview.is_empty() {
+                summary.push_str("\nreport_preview:\n");
+                summary.push_str(&report_preview);
+            } else {
+                summary.push_str(&format!("\nreport_note: {} not found", report_label));
+            }
+            Ok((false, format!("{summary}\n\nfull_output:\n{}", truncate(&out, MAX_SNIPPET))))
+        }
         "cargo_test" => {
             let crate_name = action
                 .get("crate")
@@ -676,7 +960,7 @@ fn execute_action(
         other => Ok((
             false,
             format!(
-                "unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, python, cargo_test, or done"
+                "unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, python, cargo_test, rustc_hir, rustc_mir, graph_probe, graph_call, graph_cfg, graph_dataflow, graph_reachability, or message"
             ),
         )),
     })

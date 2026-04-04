@@ -20,15 +20,15 @@ if idle_streak >= 3 {
 👉 This alone will kill 80% of wasted cycles.
 
 🧠 2. Normalize + validate actions BEFORE execution
-You’re rejecting bad done after the fact — too late.
+You’re rejecting bad message completion after the fact — too late.
 
 Fix:
 Create a validator layer:
 
 fn validate_action(action: &Action) -> Result<()> {
     match action.kind {
-        "done" => {
-            ensure!(action.reason.is_some(), "missing reason");
+        "message" if action.status == "complete" => {
+            ensure!(action.payload.is_some(), "missing payload");
             ensure!(action.rationale.is_some(), "missing rationale");
         }
         _ => {}
@@ -44,7 +44,7 @@ Instead of rejecting:
 
 👉 Fix it automatically:
 
-if action.kind == "done" && action.rationale.is_none() {
+if action.kind == "message" && action.status == "complete" && action.rationale.is_none() {
     action.rationale = Some("Auto-filled rationale to satisfy schema".into());
 }
 This turns the system from strict → cooperative.
@@ -74,16 +74,16 @@ enum StepIntent {
 }
 Attach it to each step → enforce flow:
 
-Explore → Modify → Verify → Done
+Explore → Modify → Verify → Complete
 
-NOT: idle → idle → idle → done
+NOT: idle → idle → idle → complete
 
-🧱 6. Make done a state, not just an action
+🧱 6. Make completion a state, not just an action
 Instead of trusting the agent:
 
-if action.kind == "done" {
+if action.kind == "message" && action.status == "complete" {
     if !has_meaningful_work_been_done() {
-        reject("done too early");
+        reject("completion too early");
     }
 }
 Track:
@@ -133,10 +133,10 @@ fallback defaults
 structured error messages fed back into loop
 
 ⚡ 10. Add a “fast-finish” path
-If the agent clearly outputs a valid done, don’t loop again.
+If the agent clearly outputs a valid completion, don’t loop again.
 
-if action.kind == "done" && validate(&action).is_ok() {
-    return Ok(action.reason);
+if action.kind == "message" && action.status == "complete" && validate(&action).is_ok() {
+    return Ok(action.payload);
 }
 💡 If you only implement 3 things:
 Do these first:

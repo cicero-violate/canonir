@@ -447,6 +447,12 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
 
     // --- Once mode: W processes the current snapshot of L, then exits ---
     eprintln!("[TRACE] before once block");
+    
+    // 🔥 CRITICAL DIAGNOSTIC FIX:
+    // Emit an initial tick to break zero-event deadlock.
+    // Without this, emit_tick() is never reached if no events arrive.
+    eprintln!("[FORCE TICK] emitting initial tick before once/main loop");
+    let _ = runtime.emit_tick();
     if once {
         if !tlog_path.exists() {
             return Err(anyhow!("tlog not found: {}", tlog_path.display()));
@@ -595,7 +601,7 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
     {
         let prompts_path = PathBuf::from(prompts_dir());
         let registry_for_prompts = prompt_registry.clone();
-        let prompt_emitter = runtime.emitter_handle();
+        let _prompt_emitter = runtime.emitter_handle();
 
         if prompts_path.exists() {
             let (prompt_fs_tx, prompt_fs_rx) = cc::unbounded::<notify::Result<notify::Event>>();
@@ -618,8 +624,8 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
                             continue;
                         }
                         last_reload.insert(path.clone(), now);
-                        if let Some(prompt) = reload_prompt_file(path, &registry_for_prompts) {
-                            prompt_emitter.emit_with_parents(canon_event::RuntimeEvent::PromptLoaded(prompt), vec![], file!(), line!());
+                        if let Some(_prompt) = reload_prompt_file(path, &registry_for_prompts) {
+                            panic!("FATAL: PromptLoaded emitted with empty parent_ids; causal lineage required");
                         }
                     }
                 }

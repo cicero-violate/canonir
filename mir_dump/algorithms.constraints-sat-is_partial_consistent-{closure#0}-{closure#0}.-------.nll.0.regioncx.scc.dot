@@ -1,0 +1,13 @@
+digraph RegionInferenceContext {
+    r0[label="SCC(0) = {\'?1, \'?6 (ex<\'_>), \'?7 (ex<\'_>)}"][shape="box"];
+    r1[label="SCC(1) = {\'?2}"][shape="box"];
+    r2[label="SCC(2) = {\'?3}"][shape="box"];
+    r3[label="SCC(3) = {\'?4}"][shape="box"];
+    r4[label="SCC(4) = {\'?5}"][shape="box"];
+    r5[label="SCC(5) = {\'?0 (\'static)}"][shape="box"];
+    r5 -> r0[label=""];
+    r5 -> r1[label=""];
+    r5 -> r2[label=""];
+    r5 -> r3[label=""];
+    r5 -> r4[label=""];
+}

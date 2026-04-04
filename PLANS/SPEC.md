@@ -419,3 +419,86 @@ Canon = semantic state + judgment + invariants + canonical transitions + event-s
 
 English: this version makes the identity explicit: **Canon is event-sourced**, while semantic state is still the routing authority and events are the canonical control/history substrate.
 
+## PLAN Protocol (Canonical)
+
+`PLAN.json` is the authoritative master plan. `PLAN.md` is a non-authoritative pointer only.
+
+Canonical structure:
+
+```json
+{
+  "plan_id": "<uuid>",
+  "version": 1,
+  "derived_from": {
+    "spec": "PLANS/SPEC.md",
+    "objectives": "PLANS/OBJECTIVES.md",
+    "invariants": "PLANS/INVARIANTS.md",
+    "violations": "VIOLATIONS.md",
+    "diagnostics": "PLANS/<instance>/diagnostics-<instance>.md"
+  },
+  "global_constraints": [
+    "SemanticStateSummary is source of truth",
+    "All transitions must follow spec",
+    "No role violates scope invariants"
+  ],
+  "lanes": [
+    {
+      "lane_id": "executor_pool",
+      "role": "Executor",
+      "tasks": []
+    }
+  ]
+}
+```
+
+## Task Protocol
+
+```json
+{
+  "task_id": "<uuid>",
+  "title": "<short deterministic label>",
+  "status": "ready | blocked | in_progress | done",
+  "priority": 1,
+  "inputs": [
+    "file:path",
+    "diagnostic:id"
+  ],
+  "actions": [
+    {
+      "type": "read | patch | test | command",
+      "target": "<file or cmd>",
+      "details": "<exact instruction>"
+    }
+  ],
+  "outputs": [
+    "file:path",
+    "test:result"
+  ],
+  "dependencies": ["task_id"],
+  "invariants": [
+    "explicit invariant linkage"
+  ],
+  "success_criteria": [
+    "cargo build passes",
+    "specific invariant holds"
+  ],
+  "failure_modes": [
+    "test fails",
+    "invariant violation"
+  ],
+  "next_on_success": ["task_id"],
+  "next_on_failure": ["task_id"]
+}
+```
+
+## Lane Execution Rules
+
+* Execute the top 1–10 tasks with `status=ready`
+* Do not reorder beyond the dependency graph
+* `ready(T_i)` is explicit: `status == "ready"` (do not infer)
+
+## Determinism Guarantees
+
+* Same inputs → same task graph
+* No hidden tasks
+* No implicit dependencies

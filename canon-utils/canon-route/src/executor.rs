@@ -2,8 +2,8 @@ use crate::{
     context::RouteContext,
     decision::RouteDecision,
     policy::{
-        apply_route_policy, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_recovery,
-        DeterministicRouteDecision, RouteEmitState, RoutePolicyRule, RoutePolicyState,
+        apply_route_policy, evaluate_route_emit, evaluate_route_recovery,
+        RouteEmitState, RoutePolicyRule, RoutePolicyState,
     },
 };
 // TRACE: global runtime introspection (file, line, function)
@@ -53,8 +53,8 @@ impl RouteExecutor {
     fn try_dispatch_route(&mut self, _trigger_event: &RuntimeEvent) {
         // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
         eprintln!("[ENTER] {}:{} {} - executor::try_dispatch_route", file!(), line!(), module_path!());
-        // SAFETY: guard entire executor to prevent runtime crash
-        let __route_exec_guard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Canonical execution must fail fast on invariant violations
+        {
             if self.dispatch_in_progress {
                 // Mark reroute, but do not recursively re-enter decision emission on the same stack.
                 // The active dispatch will finish and emit a RouteTick if reroute is still required.
@@ -67,16 +67,45 @@ impl RouteExecutor {
             let trace_id = TRACE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.last_decision_trace_id = Some(trace_id);
 
-            // Canonical route dispatch is semantic-only: RouteTick -> decision() -> RouteSelected.
-            self.emit_decision("", String::new());
+            // Canonical route dispatch: RouteTick -> decide_from_json -> RouteSelected
+            let model_json = crate::helpers::heuristic_route_json(&self.ctx);
+            let prompt = String::new();
 
-        }));
+            let decision = crate::decision::decide_from_json(
+                &self.ctx.semantic_summary,
+                &model_json,
+                prompt,
+                &mut self.controller,
+            ).expect("decision() failed — invariant violation");
 
-        if __route_exec_guard.is_err() {
-            eprintln!("[WARN] RouteExecutor panic suppressed to keep runtime alive");
+            let emitter = self.emitter.as_ref().expect("missing emitter — cannot emit RouteSelected");
+            let tid = self.current_trigger.clone().expect("decision emit without trigger");
+
+            let route_selected = canon_event::RouteSelected {
+                tick: self.ctx.scheduler_tick,
+                suggested_route: decision.suggested_route.as_str().to_string(),
+                prompt: "".to_string(),
+                approved_route: decision.suggested_route.as_str().to_string(),
+                rationale: decision.rationale.clone(),
+                confidence: Some(decision.confidence.unwrap_or(0.0)),
+                gate_note: "decision".to_string(),
+                gate_rules_fired: vec![],
+                gate_changed: false,
+                gate_should_stop: false,
+                model_json: model_json.clone(),
+            };
+
+            emitter.emit_with_parents(
+                RuntimeEvent::RouteSelected(route_selected),
+                vec![tid],
+                file!(),
+                line!(),
+            );
+
         }
     }
 
+    #[allow(dead_code)]
     fn emit_persisted_invariant_store_events(&self) {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
@@ -185,40 +214,7 @@ impl RouteExecutor {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::RouteExecutor;
-    use crate::decision::RouteDecision;
-    use crate::policy::{DeterministicRouteDecision, DeterministicRouteRule};
-    use canon_decision::RouteKind;
-    fn deterministic_decision(rule: DeterministicRouteRule, route: RouteKind) -> DeterministicRouteDecision {
-        DeterministicRouteDecision { route, rationale: format!("{rule:?}"), confidence: 0.99, prompt_tag: "deterministic:test", noop_reason: "test", rule }
-    }
-
-    #[test]
-    fn deterministic_bootstrap_refresh_observe_is_authoritative() {
-        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(DeterministicRouteRule::BootstrapRefreshObserve, RouteKind::Observe));
-        assert_eq!(decision.lane, RouteKind::Observe);
-        assert_eq!(decision.suggested_route, RouteKind::Observe);
-        assert!(!decision.changed);
-    }
-
-    #[test]
-    fn deterministic_no_semantic_progress_plan_is_authoritative() {
-        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(DeterministicRouteRule::NoSemanticProgressPlan, RouteKind::Plan));
-        assert_eq!(decision.lane, RouteKind::Plan);
-        assert_eq!(decision.suggested_route, RouteKind::Plan);
-        assert!(!decision.changed);
-    }
-
-    #[test]
-    fn deterministic_invalid_plan_replan_is_authoritative() {
-        let decision: RouteDecision = RouteExecutor::decision_from_deterministic(&deterministic_decision(DeterministicRouteRule::InvalidPlanReplan, RouteKind::Plan));
-        assert_eq!(decision.lane, RouteKind::Plan);
-        assert_eq!(decision.suggested_route, RouteKind::Plan);
-        assert!(!decision.changed);
-    }
-}
+// Deterministic routing tests removed: routing must originate from decision()
 
 impl EventConsumer for RouteExecutor {
     fn filter(&self) -> EventFilter {
@@ -349,9 +345,38 @@ impl EventConsumer for RouteExecutor {
                 static TRACE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
                 let trace_id = TRACE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.last_decision_trace_id = Some(trace_id);
+                // Semantic-state-driven decision
                 let prompt = String::new();
-                self.emit_decision("", prompt);
-                EventOutcome::NoOp("route_executor_route_tick")
+                let decision = crate::decision::decide_from_json(&self.ctx.semantic_summary, "", prompt, &mut self.controller)
+                    .expect("decision_from_json failed");
+                // Emit RouteSelected directly (canonical, no delegation)
+                let tid = self.current_trigger.clone().expect("decision emit without trigger");
+
+                let route_selected = canon_event::RouteSelected {
+                    tick: self.ctx.scheduler_tick,
+                    suggested_route: decision.suggested_route.as_str().to_string(),
+                    prompt: "".to_string(),
+                    approved_route: decision.suggested_route.as_str().to_string(),
+                    rationale: decision.rationale.clone(),
+                    confidence: Some(decision.confidence.unwrap_or(0.0)),
+                    gate_note: "decision".to_string(),
+                    gate_rules_fired: vec![],
+                    gate_changed: false,
+                    gate_should_stop: false,
+                    model_json: "".to_string(),
+                };
+
+                if let Some(emitter) = self.emitter.as_ref() {
+                    emitter.emit_with_parents(
+                        RuntimeEvent::RouteSelected(route_selected),
+                        vec![tid],
+                        file!(),
+                        line!(),
+                    );
+                } else {
+                    eprintln!("[ROUTE EXEC TRACE] emitter missing — skipping RouteSelected emission");
+                }
+                return EventOutcome::NoOp("route_executor_route_tick_emitted");
             }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
@@ -435,7 +460,7 @@ impl RouteExecutor {
     }
 
     fn emit_route_selected_from_decision(&mut self, decision: &RouteDecision, model_json: String) {
-        let Some(emitter) = self.emitter.as_ref() else {
+        let Some(_emitter) = self.emitter.as_ref() else {
             return;
         };
         // HARD INVARIANT: require decision_trace before emitting RouteSelected
@@ -489,7 +514,7 @@ impl RouteExecutor {
         };
         // STRICT INVARIANT: consume decision_trace to enforce exactly-one RouteSelected per decision
         self.last_decision_trace_id = None;
-        let Some(tid) = self.current_trigger.clone() else {
+        let Some(_tid) = self.current_trigger.clone() else {
             eprintln!("[WARN] emit_route_selected_from_decision called without current_trigger; skipping emission");
             return;
         };
@@ -503,64 +528,25 @@ impl RouteExecutor {
             // removed awaiting_control_successor
         );
         self.dispatch_in_progress = true;
-        emitter.emit_with_parents(route_event, vec![tid.clone()], file!(), line!());
+        // Emit RouteSelected via canonical emitter
+        if let Some(emitter) = self.emitter.as_ref() {
+            if let Some(tid) = self.current_trigger.clone() {
+                emitter.emit_with_parents(
+                    route_event,
+                    vec![tid],
+                    file!(),
+                    line!(),
+                );
+            } else {
+                eprintln!("[WARN] missing trigger id during RouteSelected emission");
+            }
+        } else {
+            eprintln!("[WARN] missing emitter during RouteSelected emission");
+        }
         self.dispatch_in_progress = false;
-
-        let emit_effects = evaluate_route_emit_effects(decision);
-        if emit_effects.clear_pending_request {
-            self.pending_request_id = None;
-        }
-        if emit_effects.clear_pending_prompt {
-            self.pending_prompt = None;
-        }
-        if emit_effects.set_halted {
-            self.ctx.halted = true;
-        }
-        if self.reroute_requested {
-            emitter.emit_child(RuntimeEvent::RouteTick(canon_event::RouteTick { tick: self.ctx.scheduler_tick, emitted: false }), vec![tid], file!(), line!());
-        }
     }
 
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    fn emit_deterministic_decision(&mut self, deterministic: &DeterministicRouteDecision, model_json: &str) {
-        let Some(_emitter) = self.emitter.as_ref() else {
-            return;
-        };
-        eprintln!(
-            "[route_executor][det] rule={} route={} trigger={:?} last_control={:?} pending_succ={:?}",
-            deterministic.prompt_tag,
-            deterministic.route.as_str(),
-            self.current_trigger,
-            None::<&str>,
-            None::<&str>,
-            // removed awaiting_control_successor
-        );
-        let _emit_eval = evaluate_route_emit(RouteEmitState {
-            // removed awaiting_control_successor
-            last_control_kind: None,
-            pending_required_successor: None,
-            ..Default::default()
-        });
-        let decision = Self::decision_from_deterministic(deterministic);
-        self.emit_route_selected_from_decision(&decision, model_json.to_string());
-    }
-
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    fn decision_from_deterministic(deterministic: &DeterministicRouteDecision) -> RouteDecision {
-        RouteDecision {
-            lane: deterministic.route,
-            suggested_route: deterministic.route,
-            rationale: deterministic.rationale.clone(),
-            confidence: Some(deterministic.confidence),
-            changed: false,
-            note: "deterministic_route".to_string(),
-            gate_rules_fired: vec![deterministic.prompt_tag.to_string()],
-            should_stop: false,
-            prompt: deterministic.prompt_tag.to_string(),
-        }
-    }
+    // Deterministic routing removed: all routing must originate from decision()
 
     #[allow(dead_code)]
     #[allow(dead_code)]
@@ -589,6 +575,7 @@ impl RouteExecutor {
 
     // removed: record_control_state (control-state eliminated)
 
+    #[allow(dead_code)]
     fn emit_decision(&mut self, _model_json: &str, prompt: String) {
         let Some(emitter) = self.emitter.as_ref() else {
             return;

@@ -345,8 +345,8 @@ impl LoopContext {
             observed.semantic_summary.failure_class = Some(failure_class.as_str().to_string());
             observed.semantic_summary.failure_scope = Some(failure_scope.as_str().to_string());
             // CRITICAL: emit LoopObserved event — previously only stored, never emitted
-            let event = canon_event::RuntimeEvent::LoopObserved(observed.clone());
-            self.emitter.emit_with_parents(event, vec![], file!(), line!());
+            let _event = canon_event::RuntimeEvent::LoopObserved(observed.clone());
+            panic!("FATAL: emit_with_parents called with empty parent_ids in LoopContext; all non-root events must have causal parents");
         }
         self.forced_primary_objective = Some(DevelopmentObjectiveKind::ReduceCompilerFailures);
         self.forced_primary_strategy = Some(DevelopmentStrategyKind::SimplifyPlanBatch);

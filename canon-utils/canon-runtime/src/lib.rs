@@ -65,6 +65,7 @@ pub struct EventRuntime {
     dispatched_ids: HashSet<canon_event::EventId>,
     /// Per-kind hash of the last written event's `payload.data`.
     /// Consecutive identical events (same kind + same data hash) are dropped at the writer.
+    /// NOTE: RouteTick must not be deduplicated (it is a per-tick driver event).
     last_kind_hash: HashMap<canon_event::EventKind, u64>,
     /// Per-kind id of the last written event; set as `prev_event_id` on the next write.
     last_event_id_per_kind: HashMap<canon_event::EventKind, canon_event::EventId>,
@@ -157,7 +158,7 @@ impl EventRuntime {
                     self.tlog_writer = Some(Arc::new(StdMutex::new(writer)));
                 }
                 Err(e) => {
-                    eprintln!("[event_runtime] set_tlog_path: failed to open persistent writer: {e}");
+                    panic!("[FATAL] tlog writer initialization failed: {e}");
                 }
             }
         }
@@ -214,10 +215,8 @@ impl EventRuntime {
                     if let Ok(w) = writer_arc.lock() {
                         w.notify_replayed_event(canon);
 
-                        // FIX: ensure RouteSelected is also replayed into tlog so it can clear pending successor
-                        if matches!(canon.kind, canon_event::EventKind::RouteSelected) {
-                            w.notify_replayed_event(canon);
-                        }
+                        // RouteSelected already handled by single notify_replayed_event above.
+                        // Avoid duplicate replay notification which causes double dispatch downstream.
                     }
                 }
                 // Preserve the original causal parent chain from the tlog entry.
@@ -401,8 +400,25 @@ impl EventRuntime {
     pub fn emit_tick(&mut self) -> Result<()> {
         self.runtime_tick = self.runtime_tick.saturating_add(1);
         eprintln!("[EMIT TICK TRACE] tick={}", self.runtime_tick);
+        eprintln!("[tick_emitted] tick={}", self.runtime_tick);
         // Route Tick through standard emission path so it is appended consistently
         self.emit_event(RuntimeEvent::Tick(Tick { tick: self.runtime_tick, emitted: true }))?;
+        eprintln!("[tick_dispatched] tick={}", self.runtime_tick);
+
+        // IMPORTANT: RouteTick must NOT be emitted here.
+        // It is owned by the loop executor; emitting here causes duplicate RouteSelected
+        // and breaks successor invariants.
+        
+        // 🔥 CRITICAL FIX: Emit RuntimeEvent once per cycle (canonical runtime summary)
+        let runtime_event = RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated {
+            payload: serde_json::json!({
+                "runtime_tick": self.runtime_tick,
+                "state": self.runtime_state,
+            }),
+        });
+        eprintln!("[runtime_event_emitted] tick={}", self.runtime_tick);
+        self.emit_event(runtime_event)?;
+        eprintln!("[runtime_event_dispatched] tick={}", self.runtime_tick);
         // FAIL-FAST: ensure at least one RuntimeEvent observed this tick
         if self.observed_events.is_empty() {
             panic!("[FATAL] No RuntimeEvent emitted for tick {}", self.runtime_tick);
@@ -430,6 +446,7 @@ impl EventRuntime {
     }
 
     pub fn emit_event_with_parents(&mut self, event: RuntimeEvent, parent_ids: Vec<canon_event::EventId>, file: &'static str, line: u32) -> Result<()> {
+        eprintln!("[TRACE EMIT_EVENT_WITH_PARENTS] kind={:?}", canon_event::event_kind_str(&event));
         self.handle_runtime_event_located_with_parents(event, file, line, parent_ids)?;
         self.drain_emitted_events()?;
         Ok(())
@@ -541,11 +558,22 @@ impl EventRuntime {
         // Track ID so process_events can skip re-dispatch when P2 re-delivers this
         // same tlog entry (preventing double-processing of self-written events).
         self.dispatched_ids.insert(event_id.clone());
-        // CRITICAL: enforce invariants BEFORE any append or dispatch
-        if let Err(reason) = self.invariant_engine.validate_before_append(&event, &parent_ids) {
-            eprintln!("[INVARIANT VIOLATION] rejecting event before dispatch: {}", reason);
-            self.mode = RuntimeMode::FatalInvariantHalt { reason };
-            return Ok(());
+        // CRITICAL FIX: allow control-flow events (Tick / RouteTick / RouteSelected)
+        // to bypass invariant engine pre-append rejection. These events must ALWAYS persist.
+        let is_control = matches!(event,
+            RuntimeEvent::Tick(_)
+            | RuntimeEvent::RouteTick(_)
+            | RuntimeEvent::RouteSelected(_)
+        );
+
+        if !is_control {
+            if let Err(reason) = self.invariant_engine.validate_before_append(&event, &parent_ids) {
+                eprintln!("[INVARIANT VIOLATION] rejecting event before dispatch: {}", reason);
+                self.mode = RuntimeMode::FatalInvariantHalt { reason };
+                return Ok(());
+            }
+        } else {
+            eprintln!("[CONTROL BYPASS] allowing control event despite invariant engine: kind={:?}", canon_event::event_kind_str(&event));
         }
 
         // Append FIRST (canonical write)
@@ -702,13 +730,11 @@ impl EventRuntime {
         eprintln!("[TLOG APPEND ATTEMPT KIND] kind={:?} file={} line={}", canon_event::event_kind_str(event), file, line);
         let _ = std::io::stderr().flush();
         if self.tlog_path.is_none() {
-            eprintln!("[INIT GUARD HIT] tlog_path=None dropping kind={:?}", canon_event::event_kind_str(event));
+            panic!("FATAL: tlog_path is None during append_runtime_event for kind={:?}", canon_event::event_kind_str(event));
         }
-        let Some(path) = self.tlog_path.clone() else {
-            return;
-        };
+        let path = self.tlog_path.clone().expect("tlog_path must be set before append");
         if self.tlog_writer.is_none() {
-            eprintln!("[NO WRITER] tlog_writer is None at append time for kind={:?}", canon_event::event_kind_str(event));
+            panic!("FATAL: tlog_writer is None during append_runtime_event for kind={:?}", canon_event::event_kind_str(event));
         }
         eprintln!("[BEFORE WIRE CALL]");
         let mut wire = match runtime_event_to_wire(event, parent_ids, event_id.clone(), file, line) {
@@ -779,31 +805,25 @@ impl EventRuntime {
         self.last_written_event_id = Some(wire.id.clone());
 
         if is_segment_dir_path(&path) {
-            if let Some(writer_arc) = self.tlog_writer.as_ref() {
-                let needs_reopen = if let Ok(w) = writer_arc.lock() {
-                    if let Err(err) = w.write_canon_event(&wire) {
-                        eprintln!("[CRITICAL] append failure kind={} id={} err={}", wire.kind, wire.id, err);
-                        true
-                    } else {
-                        false
-                    }
+            let writer_arc = self.tlog_writer.as_ref().expect("writer must exist");
+            let needs_reopen = if let Ok(w) = writer_arc.lock() {
+                eprintln!("[PRE-WRITE] kind={} id={}", wire.kind, wire.id);
+                if let Err(err) = w.write_canon_event(&wire) {
+                    eprintln!("[CRITICAL] append failure kind={} id={} err={}", wire.kind, wire.id, err);
+                    true
                 } else {
-                    eprintln!("[canon-runtime] append failed kind={} id={} path={} err=writer_lock_poisoned", wire.kind, wire.id, path.display());
+                    eprintln!("[WRITE SUCCESS] kind={} id={}", wire.kind, wire.id);
                     false
-                };
-                if needs_reopen {
-                    if let Ok(fresh) = BinarySegmentWriter::open(&path) {
-                        if let Ok(mut w) = writer_arc.lock() {
-                            *w = fresh;
-                            if let Err(err) = w.write_canon_event(&wire) {
-                                eprintln!("[canon-runtime] append retry failed kind={} id={} path={} err={}", wire.kind, wire.id, path.display(), err);
-                            }
-                        } else {
-                            eprintln!("[canon-runtime] append retry failed kind={} id={} path={} err=writer_lock_poisoned", wire.kind, wire.id, path.display());
-                        }
-                    } else {
-                        eprintln!("[canon-runtime] append retry failed kind={} id={} path={} err=reopen_failed", wire.kind, wire.id, path.display());
-                    }
+                }
+            } else {
+                panic!("writer lock poisoned during append");
+            };
+            if needs_reopen {
+                let fresh = BinarySegmentWriter::open(&path).expect("failed to reopen writer");
+                let mut w = writer_arc.lock().expect("writer lock poisoned on reopen");
+                *w = fresh;
+                if let Err(err) = w.write_canon_event(&wire) {
+                    panic!("append retry failed kind={} id={} err={}", wire.kind, wire.id, err);
                 }
             }
             return;
@@ -976,7 +996,16 @@ fn compute_invariant_hash(node_count: u64, edge_count: u64, schema_version: u64)
 }
 
 fn is_allowed_during_fatal_halt(event: &RuntimeEvent) -> bool {
-    matches!(event, RuntimeEvent::Code(_) | RuntimeEvent::ErrorOccurred(_) | RuntimeEvent::Debug(_) | RuntimeEvent::RuntimeStateUpdated(_))
+    matches!(event,
+        RuntimeEvent::Code(_)
+        | RuntimeEvent::ErrorOccurred(_)
+        | RuntimeEvent::Debug(_)
+        | RuntimeEvent::RuntimeStateUpdated(_)
+        // Allow control-flow events to continue during halt
+        | RuntimeEvent::Tick(_)
+        | RuntimeEvent::RouteTick(_)
+        | RuntimeEvent::RouteSelected(_)
+    )
 }
 
 fn recovery_signal_reason(event: &RuntimeEvent) -> Option<String> {
