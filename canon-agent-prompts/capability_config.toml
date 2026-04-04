@@ -178,6 +178,7 @@ max_tabs = 2
 [[llm.endpoints]]
 id = "exec_pool"
 url = [
+  "https://chatgpt.com/",
   "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679",
   "https://chatgpt.com/gg/69bb69adfe54819f9b4100d97cbd3912",
   "https://chatgpt.com/gg/69bca5997968819c90b2dbe13d4290b6",
