@@ -1,135 +1,174 @@
 # Violations
 
-## 1. Runtime validation objectives not implemented (CRITICAL)
+## 8. Executor-driven routing still present (CRITICAL)
 - Evidence:
-  - OBJECTIVES.md requires validation of EventBus delivery, per-cycle guarantees, determinism, and async propagation
-  - No instrumentation, counters, or verification logic present in runtime or tests
+  - RouteExecutor::try_dispatch_route directly calls emit_decision()
+  - Routing not strictly initiated from SemanticStateSummary → decision → RouteSelected pipeline
 - Issue:
-  - System correctness under execution is unproven
-  - Violates OBJECTIVES.md requirement to validate behavior, not just architecture
+  - Violates SPEC semantic authority and "no hidden routing paths"
 - Required fix:
-  - Add instrumentation for emitted vs received events
-  - Add per-cycle tracking (decision count, RouteSelected presence)
-  - Add validation checks or tests for objectives
+  - Ensure all routing originates exclusively from semantic-state-derived decision()
+  - Remove any executor-triggered decision shortcuts
 
-## 2. EventBus delivery not verified (HIGH)
+## 9. Missing per-cycle validation instrumentation (CRITICAL)
 - Evidence:
-  - No mechanism comparing emitted vs consumed events
-  - delivered counter increments only on Error outcomes, not on every consumer delivery
-  - consumer lock failure (`if let Ok(...)`) silently skips delivery
+  - No cycle_id tracking or enforcement of Tick → RouteTick → Decision → RouteSelected
 - Issue:
-  - Cannot prove no-drop invariant at runtime
-  - Delivery accounting is incorrect and incomplete
-  - Consumers may be skipped without visibility
+  - Violates Objective 3 and 4
 - Required fix:
-  - Add logging or counters per event_id across consumers
-  - Validate equality of emitted vs received sets
-  - Increment delivery counter for every successful consumer invocation
-  - Fail or log when a consumer lock cannot be acquired
-  - Add assertion: delivered == sync_consumers_len (or explicit accounting)
+  - Add explicit cycle tracking and assertions for exactly-one decision and RouteSelected per cycle
 
-## 3. Per-cycle guarantees not enforced or validated (HIGH)
+## 10. EventBus completeness not enforced (CRITICAL)
 - Evidence:
-  - No cycle-level tracking of Tick → RouteTick → Decision → RouteSelected
+  - No proof that all emitted events reach all consumers
 - Issue:
-  - Cannot guarantee loop integrity
+  - Violates Objective 1
 - Required fix:
-  - Introduce cycle_id tracking and assertions
+  - Add delivery accounting and hard-fail on missing delivery
 
-## 4. Exactly-one decision per cycle not validated (HIGH)
+## 11. Hook mutation/suppression not prevented (CRITICAL)
 - Evidence:
-  - No counters or assertions on decision frequency
+  - No enforcement layer ensuring hooks preserve event identity
 - Issue:
-  - Potential for duplicate or missing decisions
+  - Violates Objective 2
 - Required fix:
-  - Track decisions per cycle and enforce invariant
+  - Add before/after equality checks and reject mutation/suppression
 
-## 5. Deterministic decision behavior not verified (MEDIUM)
+## 12. Determinism not validated (HIGH)
 - Evidence:
-  - No replay or comparison mechanism for identical semantic input
+  - No replay or equivalence testing for identical SemanticStateSummary
 - Issue:
-  - Cannot prove determinism requirement
+  - Violates Objective 5
 - Required fix:
-  - Add deterministic replay validation
+  - Add deterministic replay checks
 
-## 6. Async event propagation not verified (MEDIUM)
+## 13. Async propagation not verified (HIGH)
 - Evidence:
-  - No validation that async events re-enter loop and affect decisions
+  - No trace ensuring async events influence future decisions
 - Issue:
-  - Possible silent loss or non-observation of async events
+  - Violates Objective 6
 - Required fix:
-  - Add tracing from async emission → EventBus → loop consumption
+  - Add tracing from async emission → decision impact
 
-## 7. No-hidden-routing-paths objective not fully verified (MEDIUM)
+## Summary
+- Queue-local control reductions are partially complete
+- Core semantic routing invariants still not fully enforced
+- Runtime validation objectives remain largely unimplemented
+- System is NOT yet compliant with SPEC.md
+## 1. EventBus delivery not enforced (CRITICAL)
 - Evidence:
-  - No explicit audit confirming all RouteSelected emissions originate from decision()
+  - Dispatch now records receipts and emits `dispatch_delivery_gap` and `dispatch_consumer_lock_failed`
+  - Lock failures and delivery gaps are observable but do not halt or reject execution
 - Issue:
-  - Potential for hidden routing paths
+  - System detects incomplete delivery but still allows it
+  - Violates OBJECTIVES.md Objective 1 (must reach all consumers, not just report failures)
 - Required fix:
-  - Search and assert single routing path
+  - Treat delivery gaps and lock failures as invariant violations
+  - Halt or reject event when delivery is incomplete
 
-## 8. Runtime loop not exercised (CRITICAL)
+## 2. Hook mutation/suppression not enforced (CRITICAL)
 - Evidence:
-  - Runtime executed in `--once` mode exits before main loop
-  - No evidence of Tick → RouteTick → Decision → RouteSelected progression under execution
+  - Hook decisions (Mutate/Deny) emit audit/debug/error events
+  - Protected control events trigger error events but are not blocked
 - Issue:
-  - Violates OBJECTIVES.md requirement to validate behavior under execution
-  - No proof that control loop actually produces lawful transitions
+  - Hooks can still influence control flow indirectly
+  - Violates Objective 2 (must NOT mutate or suppress)
 - Required fix:
-  - Run full loop (non-once mode) with tracing enabled
-  - Capture and verify full per-cycle progression
+  - Reject or block mutation/deny for protected control events
+  - Enforce equality of event before/after hooks
 
-## 9. Exactly-one decision invariant not enforced (CRITICAL)
+## 3. Replay suppression still introduces non-semantic control paths (HIGH)
 - Evidence:
-  - No runtime counter or assertion enforcing 1 decision per cycle
-  - Only isolated policy tests exist
+  - Replay emits audit events for suppression (`replay_suppressed_*`)
 - Issue:
-  - Violates deterministic control requirement in SPEC.md
-  - System may emit 0 or multiple decisions per cycle without detection
+  - Suppression still exists as a conditional branch outside SemanticStateSummary
+  - Violates SPEC requirement for semantic-state-driven control
 - Required fix:
-  - Add per-cycle decision counter
-  - Assert exactly one decision per cycle at runtime
+  - Encode replay suppression decisions into semantic state or event log
+  - Eliminate hidden conditional replay paths
 
-## 10. Determinism not proven at runtime (HIGH)
+## 4. Per-cycle control flow guarantees not implemented (HIGH)
 - Evidence:
-  - Determinism only validated via unit tests in policy layer
-  - No runtime replay or equivalence validation
+  - No cycle tracking for Tick → RouteTick → Decision → RouteSelected
 - Issue:
-  - SPEC.md requires deterministic routing from semantic state
-  - Runtime behavior may diverge due to ordering, async, or state drift
+  - Cannot verify loop correctness
 - Required fix:
-  - Add runtime replay or snapshot comparison for identical SemanticStateSummary
-  - Assert identical RouteSelected outcomes
+  - Add cycle_id tracking and assertions
 
-## 11. EventBus still allows silent delivery gaps (HIGH)
+## 5. Exactly-one decision per cycle not enforced (HIGH)
 - Evidence:
-  - `if let Ok(mut locked)` allows consumer lock failure to skip delivery silently
-  - No assertion that all consumers receive each event
+  - No decision counters or validation
 - Issue:
-  - Violates EventBus integrity objective (no-drop requirement)
-  - Delivery completeness is not guaranteed
+  - Duplicate or missing decisions possible
 - Required fix:
-  - Fail or log on lock acquisition failure
-  - Track delivery per consumer and assert completeness
+  - Enforce 1 decision per cycle invariant
 
-## 12. Async event propagation not verified (HIGH)
+## 6. Deterministic decision behavior not validated (MEDIUM)
 - Evidence:
-  - No runtime evidence that async events re-enter loop and affect decisions
+  - No runtime replay validation using identical SemanticStateSummary
 - Issue:
-  - Violates OBJECTIVES.md async propagation requirement
-  - System may drop or ignore async events silently
+  - Determinism is assumed, not proven
 - Required fix:
-  - Add tracing from async emit → bus → loop
-  - Validate observation and effect on future decisions
+  - Add deterministic replay tests or runtime checks
 
-## 8. Deterministic decision invariant violated (CRITICAL)
+## 7. Async event propagation not verified (MEDIUM)
 - Evidence:
-  - Failing test: policy::tests::route_transition_rows_cover_deterministic_and_rewrite_cases
-  - Panic: assertion failed: eval.deterministic.is_some() || event.is_none()
+  - No validation that async events affect subsequent decisions
 - Issue:
-  - Decision system does not consistently produce deterministic evaluation results
-  - Violates OBJECTIVES.md Objective 5 (Deterministic Decision Behavior)
+  - Async events may be lost or ignored
 - Required fix:
-  - Ensure every decision evaluation produces deterministic output when event is present
-  - Audit policy/decision evaluation path for missing deterministic assignment
-  - Enforce invariant at decision boundary
+  - Trace async events through loop and decision impact
+
+## Summary
+- Structural correctness improvements exist
+- Runtime correctness and OBJECTIVES.md validation remain unimplemented
+- System is not yet proven compliant with SPEC.md
+
+## 8. Routing not derived from SemanticStateSummary (CRITICAL)
+- Evidence:
+  - canon-route/src/executor.rs uses `emit_decision("", String::new())` with no semantic input
+  - Comment explicitly states: "decision wiring will be added after full integration"
+  - No visible construction of DecisionState from SemanticStateSummary in executor
+- Issue:
+  - Violates SPEC.md semantic authority requirement
+  - Routing is not provably derived from SemanticStateSummary
+  - Placeholder / incomplete decision path means control truth is not semantic
+- Required fix:
+  - Construct DecisionState directly from SemanticStateSummary
+  - Pass semantic state into canonical decide()
+  - Remove placeholder decision calls with empty inputs
+  - Add tests proving identical SemanticStateSummary → identical RouteSelected
+
+## 8. pending_act still gates control flow via Noop (CRITICAL)
+- Evidence:
+  - In act.rs: if pending.request_id != c.request_id → returns LoopStageResult::Noop
+- Issue:
+  - This is still a control-flow decision based on queue-local state (pending_act)
+  - Violates canonical law: SemanticStateSummary must be sole authority
+- Required fix:
+  - Remove Noop-based gating tied to pending_act
+  - Convert to telemetry-only or semantic-state-derived decision
+
+## 8. Queue-local pending_plan still influences control flow (CRITICAL)
+- Evidence:
+  - plan.rs execute_complete restores pending_plan and returns Noop on request_id mismatch
+  - plan.rs returns Noop when action parsing fails (actions.is_empty)
+- Issue:
+  - Control progression depends on queue-local pending_plan state and parsing outcomes
+  - Noop halts semantic progression without emitting canonical events
+  - Violates SPEC requirement: SemanticStateSummary must be sole authority for control flow
+- Required fix:
+  - Eliminate Noop-based control gating tied to pending_plan
+  - Always emit canonical events (Debug or PlanningCompleted) to advance semantic pipeline
+  - Ensure mismatches and parse failures are represented as semantic events, not silent control stalls
+
+## 9. Queue-local pending_act still influences control flow (CRITICAL)
+- Evidence:
+  - act.rs execute_complete restores pending_act and returns Noop on request_id mismatch
+- Issue:
+  - Control flow still branches on queue-local pending_act identity
+  - Silent Noop introduces non-semantic control path
+  - Violates SPEC requirement for semantic-state-driven control
+- Required fix:
+  - Replace Noop with explicit semantic events (Debug/Error) and allow loop to progress
+  - Remove request_id equality as a control gate; treat mismatch as observable semantic inconsistency

@@ -43,14 +43,13 @@ pub fn execute_dispatch(_rs: RouteSelected, ctx: &mut LoopContext, trigger_id: E
         }
     }
     let _exit_guard = __ActExitTraceGuard;
-    // FIX: scheduler empty after bootstrap — allow Act to continue without forcing emit
+    // FIX: scheduler empty after bootstrap — telemetry only.
     if ctx.scheduler.len() == 0 {
-        eprintln!("[ACT FIX] scheduler empty → continuing without early return");
+        eprintln!("[ACT FIX] scheduler empty → telemetry only");
     }
 
     if ctx.pending_act.is_some() {
-        emit_act_stall(ctx, &trigger_id, "pending_act already present; cannot dispatch a new action");
-        return Ok(LoopStageResult::Noop);
+        emit_act_stall(ctx, &trigger_id, "pending_act already present; telemetry only");
     }
     let filtered_batch_id = ctx.active_batch_llm_request_id.clone();
     // scheduler_len removed — no quantitative scheduler dependency
@@ -230,18 +229,17 @@ fn emit_act_stall_with_context(ctx: &LoopContext, trigger_id: &EventId, reason: 
     // FIX: enforce single propagation event; fold error into debug payload instead of emitting second event
 }
 
-// HARD GUARD: prevent Act selection when scheduler is empty
-#[allow(dead_code)]
-fn can_execute_act(ctx: &LoopContext) -> bool {
-    if ctx.scheduler.is_empty() {
-        {
+    // Telemetry only: scheduler length is not control authority.
+    #[allow(dead_code)]
+    fn can_execute_act(ctx: &LoopContext) -> bool {
+        if ctx.scheduler.is_empty() {
             let emitter = &ctx.emitter;
             emitter.emit_child(
                 RuntimeEvent::Debug(canon_event::DebugEvent {
                     source: "act_stage".to_string(),
-                    kind: "act_blocked_empty_scheduler".to_string(),
+                    kind: "act_empty_scheduler_telemetry".to_string(),
                     payload: serde_json::json!({
-                        "reason": "scheduler empty; blocking Act",
+                        "reason": "scheduler empty; telemetry only",
                         "scheduler_empty": ctx.scheduler.is_empty(),
                     }),
                 }),
@@ -250,10 +248,8 @@ fn can_execute_act(ctx: &LoopContext) -> bool {
                 line!(),
             );
         }
-        return false;
+        true
     }
-    true
-}
 
 pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     // DEBUG: trace Act entry conditions
@@ -273,45 +269,46 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_
             line!(),
         );
     }
-    // HARD GUARD: prevent panic; safely handle invalid entry instead
-    if ctx.scheduler.is_empty() && ctx.pending_act.is_none() {
+    // Queue-local scheduler state is telemetry only here.
+    // Capability completion validity is determined solely by the pending request bookkeeping.
+    if ctx.pending_act.is_none() {
+        let emitter = &ctx.emitter;
+        emitter.emit_child(
+            RuntimeEvent::Debug(canon_event::DebugEvent {
+                source: "act_stage".to_string(),
+                kind: "execute_complete_skipped_invalid_state".to_string(),
+                payload: serde_json::json!({
+                    "reason": "no_pending_act"
+                }),
+            }),
+            vec![_trigger_id.clone()],
+            file!(),
+            line!(),
+        );
+        // FIX: do not gate control flow on pending_act; emit debug and continue
         return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
             source: "act_stage".to_string(),
-            kind: "execute_complete_skipped_invalid_state".to_string(),
-            payload: serde_json::json!({
-                "reason": "empty_scheduler_and_no_pending_act"
-            }),
+            kind: "execute_complete_no_pending_act".to_string(),
+            payload: serde_json::json!({"semantic_violation": true}),
         })));
     }
     let Some(pending) = ctx.pending_act.take() else {
-        return Ok(LoopStageResult::Noop);
+        unreachable!("pending_act checked above");
     };
     if pending.request_id != c.request_id {
         ctx.pending_act = Some(pending);
-        return Ok(LoopStageResult::Noop);
+        // FIX: do not suppress control flow on pending_act mismatch; emit telemetry
+        return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "act_stage".to_string(),
+            kind: "pending_act_mismatch_telemetry".to_string(),
+            payload: serde_json::json!({"semantic_violation": true}),
+        })));
     }
     let (stdout, stderr, exit_code, duration_ms, success) = extract_result_fields(&c.result, pending.started_at);
-    let action_kind = pending.action_kind.clone();
     let llm_request_id = pending.llm_request_id.clone();
     let tool_result_id = Uuid::new_v4().to_string();
     let tool_event = emit_tool_result(ctx, &pending, tool_result_id.clone(), c.result.clone(), success);
     ctx.mark_batch_completion(llm_request_id.as_deref(), success);
-    if ctx.pending_required_successor.as_deref() != Some("loop_acted") {
-        return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
-            source: "act_stage".to_string(),
-            kind: "act_suppressed".to_string(),
-            payload: decision_trace_payload(
-                "act completion suppressed because control FSM expects a different successor",
-                serde_json::json!({
-                    "reason": "loop_acted would violate pending successor",
-                    "pending_required_successor": ctx.pending_required_successor,
-                    "last_control_kind": ctx.last_control_kind,
-                    "last_control_event_id": ctx.last_control_event_id,
-                    "action_kind": action_kind,
-                }),
-            ),
-        })));
-    }
     // determine actionability BEFORE moving stdout/stderr
     let has_output = !stdout.is_empty() || !stderr.is_empty();
     let acted_event = emit_acted(pending, stdout, stderr, exit_code, duration_ms, success, Some(tool_result_id));
@@ -327,11 +324,19 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, _trigger_
 
 pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, _trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_act.take() else {
-        return Ok(LoopStageResult::Noop);
+        return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "act_stage".to_string(),
+            kind: "pending_act_missing_telemetry".to_string(),
+            payload: serde_json::json!({"semantic_violation": true}),
+        })));
     };
     if pending.request_id != f.request_id {
         ctx.pending_act = Some(pending);
-        return Ok(LoopStageResult::Noop);
+        return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "act_stage".to_string(),
+            kind: "pending_act_failed_mismatch_telemetry".to_string(),
+            payload: serde_json::json!({"semantic_violation": true}),
+        })));
     }
     let duration_ms = pending.started_at.elapsed().as_millis() as u64;
     let action_kind = pending.action_kind.clone();
@@ -346,37 +351,6 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, _trigger_id: E
         false,
     ));
     ctx.mark_batch_completion(llm_request_id.as_deref(), false);
-    if ctx.pending_required_successor.as_deref() != Some("loop_acted") {
-        events.push(RuntimeEvent::Debug(canon_event::DebugEvent {
-            source: "act_stage".to_string(),
-            kind: "act_suppressed".to_string(),
-            payload: decision_trace_payload(
-                "failed act completion suppressed because control FSM expects a different successor",
-                serde_json::json!({
-                    "reason": "loop_acted would violate pending successor",
-                    "pending_required_successor": ctx.pending_required_successor,
-                    "last_control_kind": ctx.last_control_kind,
-                    "last_control_event_id": ctx.last_control_event_id,
-                    "action_kind": action_kind,
-                }),
-            ),
-        }));
-        events.push(RuntimeEvent::ErrorOccurred(new_error_occurred(
-            "act_stall",
-            "act_stage",
-            "failed act completion arrived after control moved past loop_acted".to_string(),
-            "warning",
-            serde_json::json!({
-                "pending_required_successor": ctx.pending_required_successor,
-                "last_control_kind": ctx.last_control_kind,
-                "last_control_event_id": ctx.last_control_event_id,
-                "recoverable": true,
-            }),
-            None,
-        )));
-        events.extend(abort_active_batch(ctx));
-        return Ok(LoopStageResult::EmitMany(events));
-    }
     // GUARD: prevent loop_acted emission when no actionable execution occurred
     if !f.error.is_empty() {
         events.push(emit_acted(pending, String::new(), f.error.clone(), None, duration_ms, false, Some(tool_result_id)));
@@ -1440,10 +1414,6 @@ pub fn check_act_timeout(ctx: &mut LoopContext) -> Vec<RuntimeEvent> {
         events.extend(abort_active_batch(ctx));
     }
     // HARD GUARD: do not emit synthetic loop_acted without real actionable execution
-    if false {
-        // HARD BLOCK: prevent any future accidental emission without tool_result_id
-        debug_assert!(false, "[ACT][INVARIANT] attempted LoopActed emission without tool_result_id");
-    }
     events
 }
 

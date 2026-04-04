@@ -72,21 +72,14 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
     let Some(observed) = ctx.last_observed.clone() else {
         // NO BOOTSTRAP: allow zero-task planning → observe recovery
         eprintln!("[PLAN] no observed state → zero-task PlanningCompleted (observe recovery)");
-        let scheduler_empty_after = ctx.scheduler.is_empty();
         eprintln!("[PLAN RESULT] no_tasks_produced");
-        if scheduler_empty_after {
-            eprintln!("[PLAN ERROR] no tasks produced");
-        }
-        if scheduler_empty_after {
-            // NO FALLBACK: preserve zero-task planning to trigger observe recovery
-        }
 
         // CRITICAL FIX: ensure bootstrap path ALSO returns PlanningCompleted synchronously
         return Ok(LoopStageResult::Emit(
             RuntimeEvent::PlanningCompleted(PlanningCompleted {
                 tick: rs.tick,
                 llm_request_id: None,
-                planned_count: if ctx.scheduler.is_empty() { 0 } else { 1 },
+                planned_count: 0,
                 status: "missing_semantic_context".to_string(),
             })
         ));
@@ -172,41 +165,13 @@ fn deterministic_bootstrap_plan(rs: &RouteSelected, ctx: &mut LoopContext, obser
 
 pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_id: EventId) -> anyhow::Result<LoopStageResult> {
     let Some(pending) = ctx.pending_plan.take() else {
-        eprintln!("[EXIT] plan produced_tasks=0 scheduler_len_after={}", ctx.scheduler.len());
-        // CRITICAL FIX: this is the real zero-task exit path → must seed scheduler
-        if ctx.scheduler.len() == 0 {
-            eprintln!("[PLAN FIX] execute_complete pending=None → injecting fallback task");
-            ctx.scheduler.push(crate::scheduler::ScheduledTask {
-                priority: crate::scheduler::TaskPriority::Normal,
-                enqueued_at: std::time::Instant::now(),
-                seq: 0,
-                agent_id: None,
-                plan: canon_event::LoopPlanned {
-                    tick: 0,
-                    action_kind: "complete_fallback".to_string(),
-                    action_payload: serde_json::json!({}),
-                    reason: "execute_complete fallback".to_string(),
-                    llm_request_id: None,
-                    trace_id: None,
-                    execution_id: None,
-                    span_id: None,
-                    parent_span_id: None,
-                    plan_id: Some("complete_fallback".to_string()),
-                    plan_step_id: None,
-                    action_id: None,
-                    signals: None,
-                    depends_on: Vec::new(),
-                },
-            });
-        }
-        return Ok(LoopStageResult::Emit(
-            RuntimeEvent::PlanningCompleted(PlanningCompleted {
-                tick: 0,
-                llm_request_id: None,
-                planned_count: 1,
-                status: "complete_fallback".to_string(),
-            })
-        ));
+        eprintln!("[EXIT] plan produced_tasks=0 pending_plan missing");
+        // FIX: do not derive control outcome from pending_plan; emit debug and allow semantic pipeline to decide
+        return Ok(LoopStageResult::Emit(RuntimeEvent::Debug(canon_event::DebugEvent {
+            source: "plan_stage".to_string(),
+            kind: "pending_plan_missing_telemetry".to_string(),
+            payload: serde_json::json!({"semantic_violation": true}),
+        })));
     };
     if pending.request_id != c.request_id {
         ctx.pending_plan = Some(pending);
@@ -571,32 +536,6 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
             )),
         RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: pending.tick, llm_request_id: Some(req_id), planned_count: 0, status: "invalid_plan".to_string() }),
     ]);
-        // CRITICAL FIX: even invalid plans must seed scheduler to avoid deadlock
-        if ctx.scheduler.len() == 0 {
-            eprintln!("[PLAN FIX] invalid_plan branch → injecting fallback task");
-            ctx.scheduler.push(crate::scheduler::ScheduledTask {
-                priority: crate::scheduler::TaskPriority::Normal,
-                enqueued_at: std::time::Instant::now(),
-                seq: 0,
-                agent_id: None,
-                plan: canon_event::LoopPlanned {
-                    tick: pending.tick,
-                    action_kind: "invalid_fallback".to_string(),
-                    action_payload: serde_json::json!({}),
-                    reason: "invalid-plan fallback".to_string(),
-                    llm_request_id: None,
-                    trace_id: None,
-                    execution_id: None,
-                    span_id: None,
-                    parent_span_id: None,
-                    plan_id: Some("invalid_fallback".to_string()),
-                    plan_step_id: None,
-                    action_id: None,
-                    signals: None,
-                    depends_on: Vec::new(),
-                },
-            });
-        }
         return Ok(LoopStageResult::EmitMany(events));
     }
     // Action-batch dedup: if LLM returned identical actions to the previous plan, skip.
@@ -616,38 +555,11 @@ pub fn execute_complete(c: CapabilityCompleted, ctx: &mut LoopContext, trigger_i
     ctx.last_emitted_plan_hash = Some(action_batch_hash);
     let mut events: Vec<RuntimeEvent> = out.into_iter().map(RuntimeEvent::LoopPlanned).collect();
     if events.is_empty() {
-        // Prevent emitting PlanningCompleted with no actionable work
-        eprintln!("[PLAN FIX] empty events → injecting fallback task");
-        ctx.scheduler.push(crate::scheduler::ScheduledTask {
-            priority: crate::scheduler::TaskPriority::Normal,
-            enqueued_at: std::time::Instant::now(),
-            seq: 0,
-            agent_id: None,
-            plan: canon_event::LoopPlanned {
-                tick: pending.tick,
-                action_kind: "fallback".to_string(),
-                action_payload: serde_json::json!({}),
-                reason: "empty-plan fallback".to_string(),
-                llm_request_id: None,
-                trace_id: None,
-                execution_id: None,
-                span_id: None,
-                parent_span_id: None,
-                plan_id: Some("fallback".to_string()),
-                plan_step_id: None,
-                action_id: None,
-                signals: None,
-                depends_on: Vec::new(),
-            },
-        });
-        let scheduler_len_after = ctx.scheduler.len();
-        eprintln!("[PLAN RESULT] scheduler_len_after={}", scheduler_len_after);
-        assert!(scheduler_len_after > 0, "Plan produced zero tasks — deadlock risk");
         return Ok(LoopStageResult::EmitMany(vec![RuntimeEvent::PlanningCompleted(PlanningCompleted {
             tick: pending.tick,
             llm_request_id: Some(req_id),
-            planned_count: 1,
-            status: "fallback".to_string(),
+            planned_count: 0,
+            status: "empty_plan".to_string(),
         })]));
     }
     events.push(RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: pending.tick, llm_request_id: Some(req_id), planned_count: events.len(), status: "planned".to_string() }));
@@ -888,7 +800,7 @@ pub fn execute_failed(f: CapabilityFailed, ctx: &mut LoopContext, trigger_id: Ev
 }
 
 fn handle_observed(ctx: &mut LoopContext, observed: &LoopObserved, trigger_id: EventId, route_rationale: Option<String>, route_confidence: Option<f32>) -> anyhow::Result<LoopStageResult> {
-    if ctx.pending_plan.is_some() || ctx.last_planned_observed_tick == Some(observed.tick) {
+    if ctx.last_planned_observed_tick == Some(observed.tick) {
         return Ok(LoopStageResult::Noop);
     }
     let semantic_summary = match planning_semantic_summary(Some(observed)) {

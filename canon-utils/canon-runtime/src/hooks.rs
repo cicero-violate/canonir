@@ -12,6 +12,12 @@ pub enum HookDecision {
     Mutate { replacement: RuntimeEvent },
 }
 
+#[derive(Debug, Clone)]
+pub struct PreHookReport {
+    pub hook_name: Option<&'static str>,
+    pub decision: HookDecision,
+}
+
 pub trait PreHook: Send + Sync {
     fn name(&self) -> &'static str;
     fn on_pre(&self, event: &RuntimeEvent) -> HookDecision;
@@ -39,16 +45,28 @@ impl HookChain {
         self.post.push(h);
     }
 
-    pub fn run_pre(&self, event: &RuntimeEvent) -> HookDecision {
+    pub fn run_pre(&self, event: &RuntimeEvent) -> PreHookReport {
         for hook in &self.pre {
             match hook.on_pre(event) {
                 HookDecision::Allow => continue,
-                // Enforce invariant: no mutation or drop allowed
-                HookDecision::Deny { .. } => continue,
-                HookDecision::Mutate { .. } => continue,
+                decision @ HookDecision::Deny { .. } => {
+                    return PreHookReport {
+                        hook_name: Some(hook.name()),
+                        decision,
+                    };
+                }
+                decision @ HookDecision::Mutate { .. } => {
+                    return PreHookReport {
+                        hook_name: Some(hook.name()),
+                        decision,
+                    };
+                }
             }
         }
-        HookDecision::Allow
+        PreHookReport {
+            hook_name: None,
+            decision: HookDecision::Allow,
+        }
     }
 
     pub fn run_post(&self, event: &RuntimeEvent, outcome: &EventOutcome) {
@@ -242,6 +260,22 @@ impl PreHook for WatchdogPreHook {
             _ => HookDecision::Allow,
         }
     }
+}
+
+pub fn is_protected_control_event(event: &RuntimeEvent) -> bool {
+    matches!(
+        event,
+        RuntimeEvent::Tick(_)
+            | RuntimeEvent::RouteTick(_)
+            | RuntimeEvent::RouteSelected(_)
+            | RuntimeEvent::LoopObserved(_)
+            | RuntimeEvent::LoopPlanned(_)
+            | RuntimeEvent::PlanningCompleted(_)
+            | RuntimeEvent::LoopActed(_)
+            | RuntimeEvent::LoopVerified(_)
+            | RuntimeEvent::VerifierPolicyUpdated(_)
+            | RuntimeEvent::LoopRewarded(_)
+    )
 }
 
 // Helper for ErrorOccurred emission

@@ -2,8 +2,9 @@ use crate::harness_repair::{HarnessRepairState, HarnessRepairTarget};
 use crate::merge::{ContextMerger, FileWriteTracker, WorkspaceDirtyTracker};
 use crate::scheduler::{DependencyTracker, Scheduler};
 use canon_event::{EventEmitterHandle, LoopActed, LoopObserved, LoopPlanned, LoopVerified, ToolResult};
-use canon_semantic_state::{DevelopmentObjectiveKind, DevelopmentStrategyKind, ObjectiveTrendState, SemanticActionIntent, SemanticExecutionResultRecord};
-use std::collections::HashMap;
+use canon_semantic_state::{DevelopmentObjectiveKind, DevelopmentStrategyKind, ObjectiveTrendState, SemanticActionIntent, SemanticExecutionResultRecord, SemanticStateSummary};
+use std::collections::{hash_map::DefaultHasher, HashMap};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -165,13 +166,10 @@ pub struct LoopContext {
     pub last_context_base_id: Option<u64>,
     pub last_delta_hash: Option<u64>,
     pub last_route_rationale: Option<String>,
-    // decision invariant tracking
-    // --- decision invariant tracking ---
-    pub last_decision_tick: Option<u64>,
-    pub decision_emitted_this_tick: bool,
     pub last_route_confidence: Option<f64>,
     pub last_route_rationale_non_empty: Option<String>,
     pub last_route_confidence_non_empty: Option<f64>,
+    pub last_route_selected_tick: Option<u64>,
     pub last_invalid_plan_reason: Option<String>,
     pub last_invalid_plan_planned_count: Option<usize>,
     pub consecutive_invalid_plan_batches: u32,
@@ -258,6 +256,7 @@ impl LoopContext {
             last_route_confidence: None,
             last_route_rationale_non_empty: None,
             last_route_confidence_non_empty: None,
+            last_route_selected_tick: None,
             last_invalid_plan_reason: None,
             last_invalid_plan_planned_count: None,
             consecutive_invalid_plan_batches: 0,
@@ -267,8 +266,6 @@ impl LoopContext {
             pending_act: None,
             artifact_dir: default_artifact_dir(&workspace),
             artifact_counter: next_tool_artifact_counter(&default_artifact_dir(&workspace)),
-            last_decision_tick: None,
-            decision_emitted_this_tick: false,
             active_batch_llm_request_id: None,
             queued_artifact_index: HashMap::new(),
             act_batch_tracker: HashMap::new(),
@@ -308,6 +305,14 @@ impl LoopContext {
             forced_primary_objective: None,
             forced_primary_strategy: None,
         }
+    }
+
+    pub fn semantic_observed_hash(&self, observed: &LoopObserved, semantic_summary: &SemanticStateSummary) -> u64 {
+        let mut h = DefaultHasher::new();
+        observed.error_count.hash(&mut h);
+        observed.goal_text.hash(&mut h);
+        semantic_summary.hash(&mut h);
+        h.finish()
     }
 
     pub fn harness_repair_state(&self) -> HarnessRepairState {

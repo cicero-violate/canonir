@@ -84,10 +84,6 @@ impl EventConsumer for ForwardConsumer {
 
         // REMOVED: duplicate pre-forward for LoopPlanned (handled in match below)
         // FIX: do NOT force LoopObserved here — must respect invariant ordering
-        use std::collections::HashSet;
-        use std::sync::Mutex;
-        static LOOP_OBSERVED_SEEN_TICKS: once_cell::sync::Lazy<Mutex<HashSet<u64>>> =
-            once_cell::sync::Lazy::new(|| Mutex::new(HashSet::new()));
         if let RuntimeEvent::ErrorOccurred(_err) = event {
             eprintln!("[DISPATCH FIX] ErrorOccurred received — no forced observe");
             return EventOutcome::NoOp("error_passthrough");
@@ -103,13 +99,6 @@ impl EventConsumer for ForwardConsumer {
                 forward(&self.parent, event.clone());
             }
             RuntimeEvent::LoopObserved(_) => {
-                if let RuntimeEvent::LoopObserved(o) = event {
-                    let mut seen = LOOP_OBSERVED_SEEN_TICKS.lock().unwrap();
-                    if seen.contains(&o.tick) {
-                        panic!("Duplicate LoopObserved propagation detected for tick {}", o.tick);
-                    }
-                    seen.insert(o.tick);
-                }
                 // CRITICAL FIX: do NOT re-emit LoopObserved
                 // Observe stage is the single source of truth for this event
                 // Forwarding here causes duplicate propagation cycles

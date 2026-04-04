@@ -1,9 +1,9 @@
 use crate::{
     context::RouteContext,
-    decision::{decide_from_json, RouteDecision},
+    decision::RouteDecision,
     policy::{
         apply_route_policy, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_recovery,
-        DeterministicRouteDecision, RouteEmitRule, RouteEmitState, RoutePolicyRule, RoutePolicyState,
+        DeterministicRouteDecision, RouteEmitState, RoutePolicyRule, RoutePolicyState,
     },
 };
 // TRACE: global runtime introspection (file, line, function)
@@ -14,32 +14,19 @@ use canon_judgment::GuardConfig;
 use canon_proc_macros::must_emit;
 use canon_runtime_supervisor::judgment_loop::RouteController;
 // decision wiring will be added after full integration
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-
-// GLOBAL dedup state (required because executor is recreated per loop tick)
-static GLOBAL_LAST_DECISION: OnceLock<Mutex<Option<canon_invariant::Decision>>> = OnceLock::new();
 
 pub struct RouteExecutor {
     ctx: RouteContext,
     workspace: PathBuf,
+    #[allow(dead_code)]
     controller: RouteController,
     emitter: Option<EventEmitterHandle>,
     pending_request_id: Option<String>,
     pending_prompt: Option<String>,
-    // reintroduced for compilation (will be fully removed after call-site cleanup)
-    last_route_emitted_for_control_id: Option<String>,
-    last_route_prompt_hash: Option<u64>,
-    last_route_selected: Option<RouteSelected>,
-    pending_required_successor: Option<&'static str>,
     dispatch_in_progress: bool,
     reroute_requested: bool,
     current_trigger: Option<EventId>,
-    // dispatch deduplication state
-    #[allow(dead_code)]
-    last_decision: Option<canon_invariant::Decision>,
     // STRICT: decision → route invariant tracking
     last_decision_trace_id: Option<u64>,
     // removed scheduler_len mirror — routing must not depend on queue-derived state
@@ -54,14 +41,9 @@ impl RouteExecutor {
             emitter: None,
             pending_request_id: None,
             pending_prompt: None,
-            last_route_emitted_for_control_id: None,
-            last_route_prompt_hash: None,
-            last_route_selected: None,
-            pending_required_successor: None,
             dispatch_in_progress: false,
             reroute_requested: false,
             current_trigger: None,
-            last_decision: None,
             last_decision_trace_id: None,
             // scheduler_len removed
         }
@@ -73,163 +55,20 @@ impl RouteExecutor {
         eprintln!("[ENTER] {}:{} {} - executor::try_dispatch_route", file!(), line!(), module_path!());
         // SAFETY: guard entire executor to prevent runtime crash
         let __route_exec_guard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if self.dispatch_in_progress {
-            // Mark reroute, but do not recursively re-enter decision emission on the same stack.
-            // The active dispatch will finish and emit a RouteTick if reroute is still required.
-            eprintln!("[ROUTE FIX] dispatch_in_progress detected — deferring recursive dispatch");
-            self.reroute_requested = true;
-            return;
-        }
-
-        // semantic-only: remove planned_pending dependency
-        let goal_unfinished = self.ctx.context_ready && self.ctx.mission_goal_spec.is_some() && !self.ctx.finish_ready;
-
-        // correlation id for decision ↔ route tracing
-        static TRACE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let trace_id = TRACE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        // HARD INVARIANT: decision_trace must exist before any RouteSelected emission.
-        // Route authority remains semantic-state driven, but the canonical trace marker must
-        // be installed on the route path itself before emit_decision() can emit RouteSelected.
-        self.last_decision_trace_id = Some(trace_id);
-
-        // FIX: align has_plan with context semantics (RouteContext does NOT have pending_plan)
-        // derive from available signals in RouteContext
-        let has_plan = self.ctx.mission_goal_spec.is_some() || self.ctx.context_ready;
-
-        // CRITICAL FIX: execute decision every cycle (including RouteTick)
-        // Decision must be derived from SemanticStateSummary, not events
-        let prompt = String::new();
-        self.emit_decision("", prompt);
-        return;
-
-        // dummy placeholder to satisfy compiler (unreachable due to panic)
-        #[allow(unused_variables)]
-        let decision = canon_invariant::Decision::Observe;
-
-        // REMOVED: non-canonical no_progress heuristic (must not influence routing decisions)
-
-        // SAFETY: pre-format values to isolate potential panic sources
-        // (removed unreachable trace block after fail-fast panic)
-
-        // TEMP FIX: bypass dedup + trace block due to persistent panic
-        eprintln!("[WARN] bypassing dedup block to prevent runtime crash");
-        // CRITICAL FIX: prohibit any early-return path; RouteExecutor must never terminate event flow
-        if false { /* no-op: early return removed */ }
-
-        // STRICT: always apply dedup based purely on decision + scheduler state
-        // TEMP FIX: disable decision comparison due to persistent panic
-        let _is_same_decision = false;
-
-        // TEMP FIX: removed dedup skip block entirely due to persistent panic
-
-        // TEMP FIX: disable dedup state mutation due to persistent panic
-        // self.last_decision = Some(decision);
-        // removed non-semantic scheduler_len state
-        // TEMP FIX: remove Debug formatting entirely
-        let safe_decision_str = "<decision>".to_string();
-        eprintln!(
-            "[DISPATCH STATE] decision={}",
-            safe_decision_str
-        );
-
-        // FIX: allow Plan to proceed even when scheduler is empty (needed to seed work)
-        // (removed invalid decision reference; decision must not exist in this scope)
-
-        // FIX: remove early override so Plan can execute
-        // (removed invalid decision reference)
-
-        // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
-        // TEMP FIX: avoid Debug formatting of decision
-        eprintln!(
-            "[ROUTE TRACE PRE] trace_id={} {}:{} {} decision=<elided> has_plan={}",
-            trace_id,
-            file!(),
-            line!(),
-            module_path!(),
-            has_plan
-        );
-
-        let route = match decision {
-            canon_invariant::Decision::Observe => RouteKind::Observe,
-            canon_invariant::Decision::Plan => RouteKind::Plan,
-            canon_invariant::Decision::Act => RouteKind::Act,
-            canon_invariant::Decision::Verify => RouteKind::Verify,
-        };
-
-        // FIX: do not force Act; allow Plan to generate work
-
-        // FIX: do NOT mutate scheduler_len here; let Plan/Act manage real work
-
-        if route == RouteKind::Plan {
-            eprintln!("[EXECUTOR] invoking plan stage via control flow fix");
-        }
-
-        // CRITICAL FIX: do NOT initialize dedup state here — this resets state every tick
-        // Dedup state must only be updated in the strict guard section below
-
-        eprintln!("[ROUTE TRACE POST] trace_id={} {}:{} {} route={:?}", trace_id, file!(), line!(), module_path!(), route);
-
-        // executor must NOT override routing decisions; rely on policy output only
-        let route = route;
-
-        // executor must not force RouteSelected; emission is owned by policy/transition
-
-        // STRICT: remove ALL dedup bypass/reset logic (no exceptions allowed)
-
-        // DISPATCH DEDUP GUARD (prevent identical decision spam)
-        eprintln!("[DEDUP DEBUG ENTRY] decision={:?}", decision);
-        {
-            // GLOBAL dedup (executor is recreated per tick)
-            let mut last_decision = GLOBAL_LAST_DECISION
-                .get_or_init(|| Mutex::new(None))
-                .lock()
-                .unwrap();
-            // removed GLOBAL_LAST_SCHED_LEN (non-semantic dedup state)
-
-            eprintln!(
-                "[DEDUP DEBUG] prev_decision={:?} current_decision={:?}",
-                *last_decision,
-                decision
-            );
-
-            if *last_decision == Some(decision) {
-                eprintln!("[DISPATCH SKIP] identical decision (semantic dedup only; no scheduler_len dependency)");
+            if self.dispatch_in_progress {
+                // Mark reroute, but do not recursively re-enter decision emission on the same stack.
+                // The active dispatch will finish and emit a RouteTick if reroute is still required.
+                eprintln!("[ROUTE FIX] dispatch_in_progress detected — deferring recursive dispatch");
+                self.reroute_requested = true;
+                return;
             }
 
-            *last_decision = Some(decision);
-            // removed last_len (scheduler-derived state)
-        }
-        eprintln!(
-            "[DISPATCH STATE] decision={:?}",
-            decision
-        );
+            static TRACE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let trace_id = TRACE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.last_decision_trace_id = Some(trace_id);
 
-        // FIX: do NOT force Act — allow Plan to proceed and seed work
-        let route = route;
-
-        let decision_obj = RouteDecision {
-            lane: route,
-            should_stop: false,
-            changed: true,
-            note: "centralized_decision".to_string(),
-            gate_rules_fired: Vec::new(),
-            confidence: Some(1.0),
-            // FIX: remove scheduler_len from rationale — derive from semantic state only
-            rationale: format!("centralized decision: semantic_progress={} goal_unfinished={}", canon_semantic_state::latest_semantic_progress(&self.ctx.recent_execution_results), goal_unfinished),
-            prompt: "centralized_decision".to_string(),
-            suggested_route: route,
-        };
-
-        // enforce that route emission must always follow a decision
-        debug_assert!(true, "route emitted without prior decision trace");
-        eprintln!("[ROUTE TRACE EMIT] {}:{} {} route={:?}", file!(), line!(), module_path!(), route);
-
-        self.emit_route_selected_from_decision(&decision_obj, "centralized_decision".to_string());
-
-        // CRITICAL FIX: ensure canonical loop is triggered after routing decision
-        // CRITICAL FIX: remove invalid Tick emission (schema unknown);
-        // rely on RouteSelected propagation instead of constructing malformed events
+            // Canonical route dispatch is semantic-only: RouteTick -> decision() -> RouteSelected.
+            self.emit_decision("", String::new());
 
         }));
 
@@ -379,12 +218,6 @@ mod tests {
         assert_eq!(decision.suggested_route, RouteKind::Plan);
         assert!(!decision.changed);
     }
-}
-
-fn hash_str(value: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 impl EventConsumer for RouteExecutor {
@@ -597,29 +430,8 @@ impl RouteExecutor {
         }
     }
 
-    fn control_successor_for_route(route: RouteKind) -> &'static str {
-        match route {
-            RouteKind::Observe => "loop_observed",
-            RouteKind::Plan => "planning_completed",
-            RouteKind::Act => "loop_acted",
-            RouteKind::Verify => "loop_verified",
-            RouteKind::Conclude => "loop_rewarded",
-            RouteKind::Decompose => "planning_completed",
-        }
-    }
-
-    fn advance_control_state(&mut self, event: &RuntimeEvent) {
-        let event_kind = canon_event::event_kind_str(event);
-        // FIX: disable executor-local successor tracking
-        // Canonical flow must not depend on pending_required_successor
-        if self.pending_required_successor == Some(event_kind) {
-            self.pending_required_successor = None;
-            if event_kind != "route_selected" {
-                self.last_route_selected = None;
-            }
-        }
-        // REMOVED: setting pending_required_successor
-        // Routing must be driven by SemanticStateSummary, not executor-local FSM
+    fn advance_control_state(&mut self, _event: &RuntimeEvent) {
+        // Canonical flow must not depend on executor-local successor tracking.
     }
 
     fn emit_route_selected_from_decision(&mut self, decision: &RouteDecision, model_json: String) {
@@ -630,19 +442,9 @@ impl RouteExecutor {
         if self.last_decision_trace_id.is_none() {
             panic!("RouteSelected emitted without preceding decision_trace");
         }
-        // STRICT INVARIANT: exactly one RouteSelected per decision (by prompt hash)
-        // FIX: dedup based on decision lane (stable), not prompt (unstable)
-        let current_lane = decision.lane;
-        if self.last_route_selected.as_ref().map(|r| r.approved_route.as_str()) == Some(current_lane.as_str()) {
-            eprintln!("[DEDUP] skipping duplicate route emission: {:?}", current_lane);
-            return;
-        }
-        // REMOVED: suppression based on pending_required_successor
-        // This was blocking legitimate recovery paths (e.g., observe) and causing deadlocks
-        // CRITICAL FIX: remove executor-level deduplication
-        // Routing must emit exactly once per decision by construction,
-        // not by suppressing duplicate emissions here.
-        // Any duplicate indicates upstream invariant violation.
+        // No executor-local suppression is allowed here.
+        // Exactly-once RouteSelected must be enforced by canonical runtime invariants,
+        // not by comparing against cached prior route state.
         // REQUIRED RUNTIME OBSERVABILITY (DO NOT GATE)
         // INVARIANT: every RouteSelected emission MUST have exactly one preceding ROUTE TRACE
         eprintln!(
@@ -682,11 +484,9 @@ impl RouteExecutor {
             model_json,
         });
 
-        let RuntimeEvent::RouteSelected(route_payload) = &route_event else {
+        let RuntimeEvent::RouteSelected(_route_payload) = &route_event else {
             unreachable!("route_event must be route_selected");
         };
-        self.last_route_prompt_hash = Some(hash_str(&decision.prompt));
-        self.last_route_selected = Some(route_payload.clone());
         // STRICT INVARIANT: consume decision_trace to enforce exactly-one RouteSelected per decision
         self.last_decision_trace_id = None;
         let Some(tid) = self.current_trigger.clone() else {
@@ -706,8 +506,6 @@ impl RouteExecutor {
         emitter.emit_with_parents(route_event, vec![tid.clone()], file!(), line!());
         self.dispatch_in_progress = false;
 
-        self.last_route_emitted_for_control_id = None;
-        self.pending_required_successor = Some(Self::control_successor_for_route(decision.lane));
         let emit_effects = evaluate_route_emit_effects(decision);
         if emit_effects.clear_pending_request {
             self.pending_request_id = None;
@@ -726,7 +524,7 @@ impl RouteExecutor {
     #[allow(dead_code)]
     #[allow(dead_code)]
     fn emit_deterministic_decision(&mut self, deterministic: &DeterministicRouteDecision, model_json: &str) {
-        let Some(emitter) = self.emitter.as_ref() else {
+        let Some(_emitter) = self.emitter.as_ref() else {
             return;
         };
         eprintln!(
@@ -738,39 +536,12 @@ impl RouteExecutor {
             None::<&str>,
             // removed awaiting_control_successor
         );
-        let emit_eval = evaluate_route_emit(RouteEmitState {
+        let _emit_eval = evaluate_route_emit(RouteEmitState {
             // removed awaiting_control_successor
             last_control_kind: None,
-            pending_required_successor: self.pending_required_successor,
+            pending_required_successor: None,
             ..Default::default()
         });
-        if false && !emit_eval.allowed {
-            let reason = emit_eval.reason.unwrap_or_else(|| "illegal control emit".to_string());
-            let kind = if matches!(emit_eval.rule, RouteEmitRule::DuplicateEmitBeforeSuccessor | RouteEmitRule::IllegalControlReentry) {
-                "duplicate_route_emit_before_successor"
-            } else {
-                "illegal_control_reentry"
-            };
-            let payload = self.suppression_payload(
-                &reason,
-                "recoverable",
-                "attempt_expected_successor_recovery",
-                serde_json::json!({
-                    "attempted_kind": "route_selected",
-                    "attempted_route": deterministic.route.as_str(),
-                    "deterministic_rule": deterministic.prompt_tag,
-                }),
-            );
-            let tid = self.current_trigger.clone().expect("emit_deterministic_decision called without current_trigger set");
-            // include parent id to avoid identical payload hashes across iterations
-            let mut enriched = payload.clone();
-            if let Some(obj) = enriched.as_object_mut() {
-                obj.insert("parent_event_id".to_string(), serde_json::json!(tid.to_string()));
-            }
-            emitter.emit_child(RuntimeEvent::Debug(canon_event::DebugEvent { source: "route_executor".to_string(), kind: kind.to_string(), payload: enriched }), vec![tid.clone()], file!(), line!());
-            self.emit_recovery_for_expected_successor(emitter, tid);
-            return;
-        }
         let decision = Self::decision_from_deterministic(deterministic);
         self.emit_route_selected_from_decision(&decision, model_json.to_string());
     }
@@ -822,34 +593,37 @@ impl RouteExecutor {
         let Some(emitter) = self.emitter.as_ref() else {
             return;
         };
-        let emit_eval = evaluate_route_emit(RouteEmitState {
+        let _emit_eval = evaluate_route_emit(RouteEmitState {
             // removed awaiting_control_successor
             last_control_kind: None,
-            pending_required_successor: self.pending_required_successor,
+            pending_required_successor: None,
             ..Default::default()
         });
-        if false && !emit_eval.allowed {
-            let _reason = emit_eval.reason.unwrap_or_else(|| "illegal control emit".to_string());
-            let _kind = if matches!(emit_eval.rule, RouteEmitRule::DuplicateEmitBeforeSuccessor | RouteEmitRule::IllegalControlReentry) {
-                "duplicate_route_emit_before_successor"
-            } else {
-                "illegal_control_reentry"
-            };
-            // REMOVED: suppression/debug side-channel emission
-            // Canonical flow requires direct progression without duplicate/debug fanout
-        }
-        let semantic_json = serde_json::to_string(&self.ctx.semantic_summary).unwrap_or_default();
-        let mut decision = decide_from_json(&self.ctx.semantic_summary, &semantic_json, prompt.clone(), &mut self.controller).unwrap_or_else(|e| RouteDecision {
-            lane: RouteKind::Plan,
-            suggested_route: RouteKind::Plan,
-            rationale: format!("gatekeeper error: {e}"),
-            confidence: None,
+        let _semantic_json = serde_json::to_string(&self.ctx.semantic_summary).unwrap_or_default();
+        // FIX: use canonical decision from canon-invariant instead of decide_from_json
+        let invariant_decision = canon_invariant::decide(canon_invariant::DecisionState {
+            has_plan: false,
+        });
+
+        let mut decision = RouteDecision {
+            lane: match invariant_decision {
+                canon_invariant::Decision::Observe => RouteKind::Observe,
+                canon_invariant::Decision::Act => RouteKind::Act,
+                _ => RouteKind::Plan,
+            },
+            suggested_route: match invariant_decision {
+                canon_invariant::Decision::Observe => RouteKind::Observe,
+                canon_invariant::Decision::Act => RouteKind::Act,
+                _ => RouteKind::Plan,
+            },
+            rationale: "canonical_invariant_decision".to_string(),
+            confidence: Some(1.0),
             changed: false,
-            note: "error".to_string(),
-            gate_rules_fired: vec!["error".to_string()],
+            note: "canonical_invariant".to_string(),
+            gate_rules_fired: vec![],
             should_stop: false,
             prompt,
-        });
+        };
         let rules = apply_route_policy(&self.ctx, RoutePolicyState {}, &mut decision);
         self.emit_persisted_invariant_store_events();
         if rules.contains(&RoutePolicyRule::ForcePlanOnObjectiveContradiction) {
@@ -872,4 +646,3 @@ impl RouteExecutor {
         self.emit_route_selected_from_decision(&decision, "".to_string());
     }
 }
-        // (removed invalid fallback block — was inserted outside valid function scope)

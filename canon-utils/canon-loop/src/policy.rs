@@ -199,7 +199,7 @@ pub fn recovery_rules_for_expected_successor(expected_successor: &str) -> Vec<Lo
     }
 }
 
-pub fn evaluate_loop_transition(pending_required_successor: Option<&str>, planning_status: Option<&str>, error_kind: Option<&str>, expected_successor: Option<&str>) -> LoopTransitionEvaluation {
+pub fn evaluate_loop_transition(_pending_required_successor: Option<&str>, planning_status: Option<&str>, error_kind: Option<&str>, expected_successor: Option<&str>) -> LoopTransitionEvaluation {
     let mut recovery_rules = Vec::new();
     if let Some(status) = planning_status {
         recovery_rules.extend(recovery_rules_for_planning_status(status));
@@ -212,12 +212,12 @@ pub fn evaluate_loop_transition(pending_required_successor: Option<&str>, planni
     }
     let trigger_observe = recovery_rules.contains(&LoopRecoveryRule::TriggerObserveOnActStall);
     let force_reward_recovery = recovery_rules.contains(&LoopRecoveryRule::RecoverLoopRewarded);
-    let observe_blocked_by_successor = pending_required_successor.is_some_and(|expected| expected != "loop_observed");
+    let observe_blocked_by_successor = expected_successor.is_some_and(|expected| expected != "loop_observed");
     LoopTransitionEvaluation { recovery_rules, trigger_observe, force_reward_recovery, observe_blocked_by_successor }
 }
 
 pub fn evaluate_loop_runtime(
-    halted: bool, force_observe_recovery: bool, trigger_observe: bool, suppress_observe_on_invariant: bool, pending_required_successor: Option<&str>, is_route_selected_event: bool,
+    halted: bool, force_observe_recovery: bool, trigger_observe: bool, suppress_observe_on_invariant: bool, _pending_required_successor: Option<&str>, is_route_selected_event: bool,
 ) -> LoopRuntimeEvaluation {
     let mut rules = Vec::new();
     let observe_mode = if force_observe_recovery && !halted {
@@ -226,9 +226,6 @@ pub fn evaluate_loop_runtime(
     } else if trigger_observe && !halted && suppress_observe_on_invariant {
         rules.push(LoopRuntimeRule::SuppressObserveOnInvariant);
         ObserveExecutionMode::SuppressedByInvariant
-    } else if trigger_observe && !halted && pending_required_successor.is_some_and(|expected| expected != "loop_observed") {
-        rules.push(LoopRuntimeRule::SuppressObserveOnPendingSuccessor);
-        ObserveExecutionMode::SuppressedByPendingSuccessor
     } else if trigger_observe && !halted {
         rules.push(LoopRuntimeRule::ExecuteTriggeredObserve);
         ObserveExecutionMode::Triggered
@@ -248,12 +245,9 @@ pub fn evaluate_loop_runtime(
     LoopRuntimeEvaluation { observe_mode, halt_blocks_stage, warn_route_selected_while_halted, rules }
 }
 
-pub fn evaluate_recovery_event(expected_successor: Option<&str>, pending_required_successor: Option<&str>, has_last_verified: bool) -> RecoveryEventEvaluation {
+pub fn evaluate_recovery_event(expected_successor: Option<&str>, _pending_required_successor: Option<&str>, has_last_verified: bool) -> RecoveryEventEvaluation {
     match expected_successor {
         Some("loop_observed") => RecoveryEventEvaluation { rule: RecoveryEventRule::ForceObserve, force_observe_recovery: true, execute_reward_recovery: false },
-        Some("loop_rewarded") if pending_required_successor != Some("loop_rewarded") => {
-            RecoveryEventEvaluation { rule: RecoveryEventRule::SkipRewardAlreadySatisfied, force_observe_recovery: false, execute_reward_recovery: false }
-        }
         Some("loop_rewarded") if !has_last_verified => RecoveryEventEvaluation { rule: RecoveryEventRule::MissingRewardContext, force_observe_recovery: false, execute_reward_recovery: false },
         Some("loop_rewarded") => RecoveryEventEvaluation { rule: RecoveryEventRule::ExecuteRewardRecovery, force_observe_recovery: false, execute_reward_recovery: true },
         _ => RecoveryEventEvaluation { rule: RecoveryEventRule::None, force_observe_recovery: false, execute_reward_recovery: false },
@@ -489,6 +483,30 @@ mod tests {
     }
 
     #[test]
+    fn loop_runtime_triggered_observe_ignores_pending_successor_mirror() {
+        let eval = evaluate_loop_runtime(false, false, true, false, Some("route_selected"), false);
+        assert_eq!(eval.observe_mode, ObserveExecutionMode::Triggered);
+        assert!(eval.rules.contains(&LoopRuntimeRule::ExecuteTriggeredObserve));
+        assert!(!eval.rules.contains(&LoopRuntimeRule::SuppressObserveOnPendingSuccessor));
+    }
+
+    #[test]
+    fn loop_transition_blocks_observe_only_for_explicit_expected_successor() {
+        let mirror_only = evaluate_loop_transition(Some("route_selected"), None, None, None);
+        assert!(!mirror_only.observe_blocked_by_successor);
+
+        let explicit_successor = evaluate_loop_transition(None, None, None, Some("route_selected"));
+        assert!(explicit_successor.observe_blocked_by_successor);
+    }
+
+    #[test]
+    fn reward_recovery_ignores_pending_successor_mirror_when_verifier_context_exists() {
+        let eval = evaluate_recovery_event(Some("loop_rewarded"), Some("route_selected"), true);
+        assert_eq!(eval.rule, RecoveryEventRule::ExecuteRewardRecovery);
+        assert!(eval.execute_reward_recovery);
+    }
+
+    #[test]
     fn single_no_semantic_progress_does_not_force_corrective_retry_context() {
         let results = vec![SemanticExecutionResultRecord::new("no_semantic_progress", "action failed", Vec::new(), false)];
         assert_eq!(retry_policy_for_planning_context(None, 0, &results, &ObjectiveTrendState::default()), RetryPolicy::None);
@@ -543,7 +561,7 @@ mod tests {
     #[test]
     fn loop_transition_rows_cover_recovery_and_successor_state() {
         let rows = [
-            (evaluate_loop_transition(Some("loop_acted"), None, Some("act_stall"), None), true, false, true),
+            (evaluate_loop_transition(Some("loop_acted"), None, Some("act_stall"), None), true, false, false),
             (evaluate_loop_transition(Some("loop_rewarded"), None, None, Some("loop_rewarded")), false, true, true),
         ];
 

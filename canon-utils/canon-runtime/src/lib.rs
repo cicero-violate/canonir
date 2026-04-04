@@ -34,6 +34,7 @@ struct CapabilityFailedOwned {
 use invariants::InvariantEngine;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
@@ -56,6 +57,7 @@ pub struct EventRuntime {
     execute_capabilities: bool,
     emitter: EventEmitterHandle,
     emitter_rx: crossbeam_channel::Receiver<canon_event::LocatedEvent>,
+    emitter_replay_blocked: Arc<AtomicBool>,
     observed_events: Vec<RuntimeEvent>,
     /// IDs of events dispatched in-memory by the live path (emit_event / drain_emitted_events).
     /// When P2 re-delivers the same tlog entry, process_events checks this set and skips
@@ -82,7 +84,11 @@ impl EventRuntime {
         let mut bus = EventBus::new(queue_size, hooks.clone());
         eprintln!("[RUNTIME NEW] EventBus created");
         let (emitter_tx, emitter_rx) = crossbeam_channel::unbounded();
-        let emitter: EventEmitterHandle = Arc::new(RuntimeEmitterImpl { sender: emitter_tx });
+        let emitter_replay_blocked = Arc::new(AtomicBool::new(false));
+        let emitter: EventEmitterHandle = Arc::new(RuntimeEmitterImpl {
+            sender: emitter_tx,
+            replay_blocked: emitter_replay_blocked.clone(),
+        });
         // FIX: do NOT inject LoopStageExecutor here; it must be explicitly ordered after RouteExecutor
         let consumers = consumers;
 
@@ -105,6 +111,7 @@ impl EventRuntime {
             execute_capabilities: false,
             emitter,
             emitter_rx,
+            emitter_replay_blocked,
             observed_events: Vec::new(),
             dispatched_ids: HashSet::new(),
             last_kind_hash: HashMap::new(),
@@ -166,6 +173,7 @@ impl EventRuntime {
         self.tick = 0;
         self.runtime_tick = 0;
         self.runtime_state = serde_json::json!({});
+        self.emitter_replay_blocked.store(false, Ordering::SeqCst);
         self.observed_events.clear();
         self.dispatched_ids.clear();
         self.last_kind_hash.clear();
@@ -439,41 +447,33 @@ impl EventRuntime {
         eprintln!("[REPLAY TRACE] entering handle_replayed_event with {:?}", event);
         self.observed_events.push(event.clone());
 
-        // FIX: prevent replay-driven duplication of LoopObserved
-        if canon_event::event_kind_str(&event) == "loop_observed" {
-            static SEEN_REPLAY_LOOP_OBSERVED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
-            let store = SEEN_REPLAY_LOOP_OBSERVED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
-            let mut guard = store.lock().unwrap();
-            // Use semantic fingerprint instead of event_id (since replay creates new IDs)
-            let key = format!("{:?}", event);
-            if !guard.insert(key) {
-                return Ok(());
-            }
-        }
-
         let event_id = canon_event::EventId::new(canon_event::new_event_id());
         // Dispatch only — do NOT write to tlog (event is already there).
         // CRITICAL FIX: guard against early replay before consumers are registered
         if self.bus.sync_consumers_len() == 0 {
-            eprintln!("[REPLAY GUARD] skipping dispatch: no consumers registered yet");
-            return Ok(());
+            return Err(anyhow::anyhow!(
+                "replay dispatch failure: no consumers registered for kind={}",
+                canon_event::event_kind_str(&event)
+            ));
         }
+        self.emitter_replay_blocked.store(true, Ordering::SeqCst);
         let consumer_count = self.bus.dispatch(event.clone(), event_id.clone());
+        self.emitter_replay_blocked.store(false, Ordering::SeqCst);
 
-        // CRITICAL FIX: forward event into emitter pipeline so it can be persisted
-        // Without this, emit_event() events (e.g. Tick) never reach tlog
-        if let Some(emitter) = Some(&self.emitter) {
-            let _ = emitter.emit_located(event.clone(), file!(), line!());
-        }
+        // Replay must never re-enter the live emitter pipeline.
+        // These events are already persisted in the canonical tlog and should only dispatch.
         eprintln!("[REPLAY TRACE] dispatched to {} consumers", consumer_count);
         if consumer_count == 0 {
             const SILENT_KINDS: &[&str] = &["debug", "runtime_state_updated", "code", "edit", "analysis", "cargo", "file", "bash", "llm"];
             let kind_str = canon_event::event_kind_str(&event);
             if !SILENT_KINDS.contains(&kind_str) {
-                eprintln!("[canon-runtime] WARN: event kind={kind_str} id={event_id} delivered to 0 consumers (replay)");
+                return Err(anyhow::anyhow!(
+                    "replay dispatch failure: event kind={kind_str} id={event_id} delivered to 0 consumers"
+                ));
             }
         }
-        // Synthetic derived error events still need to be written and dispatched live.
+        // Replay is state reconstruction only.
+        // Do not synthesize new live events while replaying already-persisted input.
         let derived: Option<RuntimeEvent> = match &event {
             RuntimeEvent::CapabilityFailed(payload) => Some(RuntimeEvent::ErrorOccurred(new_error_occurred(
                 "capability_failed",
@@ -490,7 +490,14 @@ impl EventRuntime {
             _ => None,
         };
         if let Some(err_event) = derived {
-            self.handle_runtime_event_located_with_parents(err_event, "", 0, vec![event_id])?;
+            self.observed_events.push(RuntimeEvent::Debug(DebugEvent {
+                source: "event-runtime".to_string(),
+                kind: "replay_suppressed_derived_event".to_string(),
+                payload: serde_json::json!({
+                    "replayed_kind": canon_event::event_kind_str(&event),
+                    "suppressed_kind": canon_event::event_kind_str(&err_event)
+                }),
+            }));
         }
         let _ = parent_ids; // parents already encoded in tlog; not needed for bus dispatch
         Ok(())
@@ -644,6 +651,20 @@ impl EventRuntime {
             self.handle_runtime_event_located_with_parents(event, file, line, parent_ids)?;
         }
         Ok(())
+    }
+
+    fn discard_emitted_events(&mut self) -> usize {
+        let mut dropped = 0usize;
+        while let Ok(located) = self.emitter_rx.try_recv() {
+            dropped = dropped.saturating_add(1);
+            eprintln!(
+                "[REPLAY DROP EMITTED] kind={:?} file={} line={}",
+                canon_event::event_kind_str(&located.event),
+                located.file,
+                located.line
+            );
+        }
+        dropped
     }
 
     fn is_fatal_halt_active(&self) -> bool {
@@ -915,14 +936,33 @@ fn empty_state() -> RustcState {
 
 struct RuntimeEmitterImpl {
     sender: crossbeam_channel::Sender<canon_event::LocatedEvent>,
+    replay_blocked: Arc<AtomicBool>,
 }
 
 impl EventEmitter for RuntimeEmitterImpl {
     fn emit_with_parents(&self, event: RuntimeEvent, parents: Vec<canon_event::EventId>, file: &'static str, line: u32) {
+        if self.replay_blocked.load(Ordering::SeqCst) {
+            eprintln!(
+                "[REPLAY DROP LIVE EMIT] kind={:?} file={} line={}",
+                canon_event::event_kind_str(&event),
+                file,
+                line
+            );
+            return;
+        }
         let _ = self.sender.send(canon_event::LocatedEvent { event, file, line, parent_ids: parents });
     }
 
     fn emit_located(&self, event: RuntimeEvent, file: &'static str, line: u32) {
+        if self.replay_blocked.load(Ordering::SeqCst) {
+            eprintln!(
+                "[REPLAY DROP LIVE EMIT] kind={:?} file={} line={}",
+                canon_event::event_kind_str(&event),
+                file,
+                line
+            );
+            return;
+        }
         let _ = self.sender.send(canon_event::LocatedEvent { event, file, line, parent_ids: Vec::new() });
     }
 }

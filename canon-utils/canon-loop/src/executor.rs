@@ -266,6 +266,17 @@ impl LoopStageExecutor {
     }
 
     fn handle_route_selected(&mut self, selected: &canon_event::RouteSelected) {
+        if selected.tick != self.ctx.current_tick {
+            panic!(
+                "RouteSelected tick {} did not match active tick {}",
+                selected.tick,
+                self.ctx.current_tick
+            );
+        }
+        if self.ctx.last_route_selected_tick == Some(selected.tick) {
+            panic!("duplicate RouteSelected received for tick {}", selected.tick);
+        }
+        self.ctx.last_route_selected_tick = Some(selected.tick);
         self.ctx.last_route_rationale = Some(selected.rationale.clone());
         self.ctx.last_route_confidence = selected.confidence.map(|c| c as f64);
         if !selected.rationale.is_empty() {
@@ -365,12 +376,8 @@ impl LoopStageExecutor {
         self.ctx.errors_before = observed.error_count;
         self.ctx.objective_trend_state.record_observation(observed.error_count, &observed.semantic_summary);
 
-        // HARD INVARIANT: LoopObserved must immediately trigger decision pipeline
-        if self.ctx.pending_required_successor.is_some() {
-            panic!("LoopObserved cannot be blocked by pending successor; violates observe→decision invariant");
-        }
-        // Mark that a decision is now required (enforced downstream)
-        self.ctx.pending_required_successor = Some("decision".to_string());
+        // Queue-local successor mirrors are bookkeeping only; semantic observation is authoritative.
+        self.ctx.pending_required_successor = None;
     }
 
     fn handle_agent_registered(&mut self, payload: &serde_json::Value) {
@@ -560,7 +567,7 @@ impl LoopStageExecutor {
     }
 
     fn apply_planning_transition_effects(&mut self, planning_status: Option<&str>, error_kind: Option<&str>) -> bool {
-        let transition = evaluate_loop_transition(self.ctx.pending_required_successor.as_deref(), planning_status, error_kind, None);
+        let transition = evaluate_loop_transition(None, planning_status, error_kind, None);
 
         if transition.recovery_rules.contains(&LoopRecoveryRule::ClearPlannerSuppressionOnInvalidPlan) {
             self.reset_plan_window_state();
@@ -670,80 +677,17 @@ impl LoopStageExecutor {
         }
 
         // Route selection is owned by canon-route via SemanticStateSummary -> decision -> RouteSelected.
-        // Loop executor must not synthesize decision or route events from local successor mirrors.
-        let mut _route_selected_emitted = false;
-        if false && self.ctx.pending_required_successor.as_deref() == Some("decision") {
-            // HARD GUARD: prevent duplicate decision consumption within same tick
-            if self.ctx.last_observed_tick == Some(self.ctx.current_tick) && self.ctx.last_route_rationale.is_some() {
-                panic!("duplicate decision→RouteSelected emission in same tick; violates exactly-once invariant");
-            }
-            {
-                let emitter = &self.ctx.emitter;
-                let route = "plan".to_string();
-                emitter.emit_child(
-                    RuntimeEvent::Debug(canon_event::DebugEvent {
-                        source: "decision".to_string(),
-                        kind: "decision_trace".to_string(),
-                        payload: canon_invariant::decision_trace_payload(
-                            "decision_consumed",
-                            serde_json::json!({ "route": route })
-                        ),
-                    }),
-                    vec![trigger_id.clone()],
-                    file!(),
-                    line!(),
-                );
-                emitter.emit_child(
-                    RuntimeEvent::RouteSelected(canon_event::RouteSelected {
-                        tick: self.ctx.current_tick,
-                        suggested_route: route.clone(),
-                        prompt: String::new(),
-                        approved_route: route,
-                        rationale: "decision_pipeline".to_string(),
-                        confidence: None,
-                        gate_note: String::new(),
-                        gate_rules_fired: Vec::new(),
-                        gate_changed: false,
-                        gate_should_stop: false,
-                        model_json: String::new(),
-                    }),
-                    vec![trigger_id.clone()],
-                    file!(),
-                    line!(),
-                );
-                _route_selected_emitted = true;
-            }
-            self.ctx.pending_required_successor = Some("route_selected".to_string());
-        }
+        // Loop executor must not retain dormant local decision→route fallback paths.
 
-        // Decision validation is owned by runtime proof surfaces, not by a loop-local hidden route path.
-        if false && self.ctx.pending_required_successor.as_deref() == Some("decision") && !_route_selected_emitted {
-            panic!("decision stage failed to emit RouteSelected; violates canonical flow");
-        }
-
-        // FIX: fail-safe — clear stuck pending successor if it remains after any subsequent event
-        if self.ctx.pending_required_successor.as_deref() == Some("route_selected") {
-            // FAIL-FAST: ensure route leads to loop execution
-            if self.ctx.last_observed_tick != Some(self.ctx.current_tick) {
-                panic!("route_selected did not lead to loop execution (LoopObserved missing)");
-            }
-            self.ctx.pending_required_successor = None;
-        }
-
-        // ENFORCE INVARIANT: pending_required_successor must drive control flow
+        // Queue-local successor mirrors are telemetry only and must not gate runtime control.
         let runtime_eval = evaluate_loop_runtime(
             self.ctx.halted,
             force_observe_recovery,
             trigger_observe,
             suppress_observe_on_invariant,
-            self.ctx.pending_required_successor.as_deref(),
+            None,
             false,
         );
-
-        // FIX: clear pending_required_successor when RouteSelected is observed
-        if matches!(event, RuntimeEvent::RouteSelected(_)) {
-            self.ctx.pending_required_successor = None;
-        }
 
         self.handle_runtime_observe_mode(trigger_id, event, runtime_eval.observe_mode);
 
@@ -776,7 +720,7 @@ impl LoopStageExecutor {
         None
     }
 
-    fn build_recovery_eval(event: &RuntimeEvent, pending_required_successor: Option<&str>, has_last_verified: bool) -> Option<(Option<String>, crate::policy::RecoveryEventEvaluation)> {
+    fn build_recovery_eval(event: &RuntimeEvent, _pending_required_successor: Option<&str>, has_last_verified: bool) -> Option<(Option<String>, crate::policy::RecoveryEventEvaluation)> {
         let RuntimeEvent::Debug(debug) = event else {
             return None;
         };
@@ -784,7 +728,7 @@ impl LoopStageExecutor {
             return None;
         }
         let expected = debug.payload.get("context").and_then(|v| v.get("expected_successor")).and_then(|v| v.as_str()).map(str::to_string);
-        Some((expected.clone(), evaluate_recovery_event(expected.as_deref(), pending_required_successor, has_last_verified)))
+        Some((expected.clone(), evaluate_recovery_event(expected.as_deref(), None, has_last_verified)))
     }
 
     fn recovery_forces_observe(recovery_eval: &Option<(Option<String>, crate::policy::RecoveryEventEvaluation)>) -> bool {
@@ -805,10 +749,10 @@ impl LoopStageExecutor {
             RuntimeEvent::LoopRewarded(_) => None,
             _ => None,
         };
-        if let Some(expected) = next {
+        if next.is_some() {
             self.ctx.last_control_event_id = Some(trigger_id.to_string());
             self.ctx.last_control_kind = Some(canon_event::event_kind_str(event).to_string());
-            self.ctx.pending_required_successor = Some(expected.to_string());
+            self.ctx.pending_required_successor = None;
         }
     }
 
@@ -894,7 +838,7 @@ impl EventConsumer for LoopStageExecutor {
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         println!("[PROBE] on_event entry: kind={}, tick={}", canon_event::event_kind_str(event), self.ctx.current_tick);
-        let recovery_eval = Self::build_recovery_eval(event, self.ctx.pending_required_successor.as_deref(), self.ctx.last_verified.is_some());
+        let recovery_eval = Self::build_recovery_eval(event, None, self.ctx.last_verified.is_some());
         if let Some(outcome) = self.handle_recovery_event(event, &trigger_id, &recovery_eval) {
             return outcome;
         }
@@ -916,6 +860,7 @@ impl EventConsumer for LoopStageExecutor {
             }
             RuntimeEvent::Tick(Tick { tick, .. }) => {
                 self.ctx.current_tick = *tick;
+                self.ctx.last_route_selected_tick = None;
                 // CRITICAL FIX: enforce state -> decision -> transition each loop cycle
                 // Emit RouteTick to trigger routing independently of external events
                 self.ctx.emitter.emit_with_parents(
@@ -977,10 +922,12 @@ impl EventConsumer for LoopStageExecutor {
             RuntimeEvent::ToolResult(r) if r.kind != "llm.plan" => {
                 self.handle_tool_result(r);
             }
+            RuntimeEvent::RouteTick(canon_event::RouteTick { tick, .. }) => {
+                self.ctx.current_tick = *tick;
+            }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
             | RuntimeEvent::Edit(_)
-            | RuntimeEvent::RouteTick(_)
             | RuntimeEvent::Cargo(_)
             | RuntimeEvent::File(_)
             | RuntimeEvent::Bash(_)
@@ -1023,5 +970,45 @@ impl EventConsumer for LoopStageExecutor {
         }
 
         self.execute_stage_event(&trigger_id, event)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LoopStageExecutor;
+    use canon_event::{EventConsumer, EventId, EventOutcome, RouteSelected, RuntimeEvent, Tick};
+    use std::path::PathBuf;
+
+    #[test]
+    fn duplicate_route_selected_in_same_tick_panics() {
+        let workspace = PathBuf::from("/tmp/canon-loop-test-workspace");
+        let tlog_path = PathBuf::from("/tmp/canon-loop-test.tlog");
+        let mut executor = LoopStageExecutor::new(workspace, tlog_path);
+
+        let tick_event = RuntimeEvent::Tick(Tick { tick: 1, emitted: true });
+        let _ = executor.on_event(&tick_event, EventId::new("tick-1".to_string()));
+
+        let route_event = RuntimeEvent::RouteSelected(RouteSelected {
+            tick: 1,
+            suggested_route: "Plan".to_string(),
+            prompt: String::new(),
+            approved_route: "Plan".to_string(),
+            rationale: "semantic_state_routing".to_string(),
+            confidence: Some(0.9),
+            gate_note: "semantic_state_routing".to_string(),
+            gate_rules_fired: Vec::new(),
+            gate_changed: false,
+            gate_should_stop: false,
+            model_json: String::new(),
+        });
+
+        let first = executor.on_event(&route_event, EventId::new("route-1".to_string()));
+        assert!(matches!(first, EventOutcome::NoOp(_)));
+
+        let duplicate = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = executor.on_event(&route_event, EventId::new("route-2".to_string()));
+        }));
+
+        assert!(duplicate.is_err(), "duplicate RouteSelected within the same tick must panic");
     }
 }
