@@ -2,7 +2,7 @@ use anyhow::Result;
 use canon_decision::RouteKind;
 use canon_runtime_supervisor::judgment_loop::RouteController;
 
-use crate::context::RouteContext;
+use canon_semantic_state::SemanticStateSummary;
 
 pub struct RouteDecision {
     pub lane: RouteKind,
@@ -16,11 +16,11 @@ pub struct RouteDecision {
     pub prompt: String,
 }
 
-pub fn decide_from_json(ctx: &RouteContext, _model_json: &str, prompt: String, _controller: &mut RouteController) -> Result<RouteDecision> {
-    // Minimal SemanticStateSummary-driven routing
-    let route = if ctx.semantic_summary.validation_blocked_by_preconditions {
+pub fn decide_from_json(semantic: &SemanticStateSummary, _model_json: &str, prompt: String, _controller: &mut RouteController) -> Result<RouteDecision> {
+    // Strict SemanticStateSummary-driven routing
+    let route = if semantic.validation_blocked_by_preconditions {
         RouteKind::Plan
-    } else if ctx.semantic_summary.compiler_repair_required {
+    } else if semantic.compiler_repair_required {
         RouteKind::Act
     } else {
         RouteKind::Plan

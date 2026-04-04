@@ -69,16 +69,6 @@ impl EventBus {
                 self.hooks.run_post(&base_event, &outcome);
 
                 match outcome {
-                    EventOutcome::Emit { event, file, line } => {
-                        consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
-                        delivered += 1;
-                    }
-                    EventOutcome::EmitMany { events, file, line } => {
-                        for event in events {
-                            consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
-                            delivered += 1;
-                        }
-                    }
                     EventOutcome::NoOp(_) => {}
                     EventOutcome::Error { event, file, line } => {
                         consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);

@@ -179,8 +179,6 @@ impl PostHook for AuditLogHook {
     fn on_post(&self, event: &RuntimeEvent, outcome: &EventOutcome) {
         let kind = format!("{event:?}");
         let outcome_kind = match outcome {
-            EventOutcome::Emit { .. } => "emit",
-            EventOutcome::EmitMany { .. } => "emit_many",
             EventOutcome::NoOp(_) => "noop",
             EventOutcome::Error { .. } => "error",
         };

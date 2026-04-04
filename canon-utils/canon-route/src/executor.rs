@@ -2,13 +2,13 @@ use crate::{
     context::RouteContext,
     decision::{decide_from_json, RouteDecision},
     policy::{
-        apply_route_policy, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_failure, evaluate_route_recovery,
+        apply_route_policy, evaluate_route_emit, evaluate_route_emit_effects, evaluate_route_recovery,
         DeterministicRouteDecision, RouteEmitRule, RouteEmitState, RoutePolicyRule, RoutePolicyState,
     },
 };
 // TRACE: global runtime introspection (file, line, function)
 use canon_decision::RouteKind;
-use canon_event::{new_error_occurred, CapabilityResult, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RouteSelected, RuntimeEvent, ToolBatchSettled};
+use canon_event::{new_error_occurred, EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RouteSelected, RuntimeEvent, ToolBatchSettled};
 use canon_invariant::{decision_trace_payload, drain_persisted_store_events, meta_invariant_verifier_sequence_contract, MetaInvariantVerifierSequenceStep, PersistedInvariantStoreEventKind};
 use canon_judgment::GuardConfig;
 use canon_proc_macros::must_emit;
@@ -507,26 +507,18 @@ impl EventConsumer for RouteExecutor {
                 if Some(&done.request_id) != self.pending_request_id.as_ref() || done.capability != "llm.call" {
                     return EventOutcome::NoOp("route_executor_unrelated_completion");
                 }
-                let prompt = self.pending_prompt.clone().unwrap_or_default();
+                let _prompt = self.pending_prompt.clone().unwrap_or_default();
                 self.pending_request_id = None;
                 self.pending_prompt = None;
-                let model_json = match &done.result {
-                    CapabilityResult::Llm(res) => res.response.to_string(),
-                    CapabilityResult::Process(proc) => proc.stdout.clone(),
-                    CapabilityResult::Empty => String::new(),
-                };
-                self.emit_decision(&model_json, prompt);
                 EventOutcome::NoOp("route_executor_completion")
             }
             RuntimeEvent::CapabilityFailed(failed) => {
                 if Some(&failed.request_id) != self.pending_request_id.as_ref() || failed.capability != "llm.call" {
                     return EventOutcome::NoOp("route_executor_unrelated_failure");
                 }
-                let prompt = self.pending_prompt.clone().unwrap_or_default();
+                let _prompt = self.pending_prompt.clone().unwrap_or_default();
                 self.pending_request_id = None;
                 self.pending_prompt = None;
-                let failure_eval = evaluate_route_failure(&self.ctx);
-                self.emit_decision(&failure_eval.model_json, prompt);
                 EventOutcome::NoOp("route_executor_failure_reroute")
             }
             RuntimeEvent::RouteTick(_) => {
@@ -853,7 +845,8 @@ impl RouteExecutor {
             // REMOVED: suppression/debug side-channel emission
             // Canonical flow requires direct progression without duplicate/debug fanout
         }
-        let mut decision = decide_from_json(&self.ctx, "", prompt.clone(), &mut self.controller).unwrap_or_else(|e| RouteDecision {
+        let semantic_json = serde_json::to_string(&self.ctx.semantic_summary).unwrap_or_default();
+        let mut decision = decide_from_json(&self.ctx.semantic_summary, &semantic_json, prompt.clone(), &mut self.controller).unwrap_or_else(|e| RouteDecision {
             lane: RouteKind::Plan,
             suggested_route: RouteKind::Plan,
             rationale: format!("gatekeeper error: {e}"),

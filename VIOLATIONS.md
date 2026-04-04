@@ -1,55 +1,50 @@
 # Violations
 
-## 1. RouteTick is not handled → decision not loop-driven (CRITICAL)
+## 1. Decision not structurally restricted to SemanticStateSummary (CRITICAL)
 - Evidence:
-  - RouteTick is not present in the event match arms
-  - Large group of events (including LoopObserved, LoopPlanned, etc.) are treated as NoOp
-  - No explicit RouteTick → emit_decision path exists
+  - decide_from_json(ctx: &RouteContext, ...) still accepts full RouteContext
+  - Routing logic reads ctx.semantic_summary but has access to entire ctx
 - Issue:
-  - Decision is not executed per loop cycle
-  - Violates SPEC: control must be loop-driven via semantic state
+  - Violates canonical law: SemanticStateSummary must be the sole source of routing authority
+  - Current implementation relies on discipline, not enforcement
 - Required fix:
-  - Add explicit RuntimeEvent::RouteTick handler
-  - Invoke emit_decision unconditionally from RouteTick
-  - Fail-fast if decision is not produced
+  - Change decision signature to accept SemanticStateSummary directly
+  - Remove RouteContext from decision interface
 
-## 2. Decision stage remains event-gated (CRITICAL)
+## 2. SemanticStateSummary not isolated as authority boundary (HIGH)
 - Evidence:
-  - emit_decision is only invoked in CapabilityCompleted/Failed paths (previously observed)
-  - No loop-driven trigger present in current match
+  - RouteContext contains mixed state (journal, tool results, verifier outputs, etc.)
+  - semantic_summary is embedded, not isolated
 - Issue:
-  - Decision depends on external capability events
-  - Violates invariant: one decision per cycle
+  - Non-semantic fields remain accessible to decision logic
+  - Future regressions are likely
 - Required fix:
-  - Remove event-gated decision triggers as primary path
-  - Ensure decision is executed every cycle via RouteTick
+  - Enforce architectural boundary: decision = f(SemanticStateSummary)
+  - Prevent decision code from accessing RouteContext
 
-## 3. Routing authority not proven SemanticStateSummary-derived (CRITICAL)
+## 3. RouteController still present in decision interface (MEDIUM)
 - Evidence:
-  - No explicit SemanticStateSummary passed into decision path
-  - Routing still mediated through decide_from_json interface
+  - decide_from_json includes RouteController parameter
+  - Not used in current logic
 - Issue:
-  - No proof routing is derived from semantic state
+  - Suggests potential for non-semantic influence path
 - Required fix:
-  - Replace decision interface with SemanticStateSummary input
-  - Enforce routing = f(SemanticStateSummary)
+  - Remove RouteController from decision unless proven semantic-safe
 
-## 4. Multiple control successors imply non-canonical flow (HIGH)
+## 4. Semantic source population not verified (HIGH)
 - Evidence:
-  - control_successor_for_event maps multiple events (PlanningCompleted, LoopActed, etc.) directly to RouteSelected
+  - No proof semantic_summary is derived exclusively from observe pipeline
 - Issue:
-  - Multiple implicit routing entry points exist
-  - Violates single decision authority invariant
+  - Could still be mutated from multiple sources
+  - Violates single-source-of-truth invariant
 - Required fix:
-  - Ensure only decision stage produces RouteSelected
-  - Remove implicit routing transitions from other events
+  - Verify semantic_summary is populated only from canonical observation events
+  - Enforce immutability or controlled update path
 
-## 5. System not spec-compliant
+## 5. System not fully spec-compliant
 - Evidence:
-  - RouteTick intended but not implemented as decision driver
-  - Decision still event-gated and not semantic-state-driven
+  - Decision is semantically driven in implementation but not enforced at type level
 - Issue:
-  - Core control loop invariant is broken
+  - Lacks hard guarantees required by spec
 - Required fix:
-  - Implement RouteTick-driven decision execution
-  - Ensure semantic-state-only routing authority
+  - Enforce SemanticStateSummary-only routing at type level

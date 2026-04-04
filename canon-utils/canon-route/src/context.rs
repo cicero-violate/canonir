@@ -62,6 +62,7 @@ pub struct RouteContext {
     pub goodness: Option<f32>,
     pub delta_g: Option<f32>,
     pub objective_trend_state: ObjectiveTrendState,
+    /// Canonical semantic state summary — single source of truth for routing decisions
     /// Set to Some(...) when the last pending tool result lands; cleared after the executor emits ToolBatchSettled.
     pub batch_settled: Option<(u32, bool)>, // (result_count, any_failed)
     batch_result_count: u32,
@@ -221,15 +222,6 @@ impl RouteContext {
     pub fn update_from_event(&mut self, event: &RuntimeEvent, workspace: &Path) {
         match event {
             RuntimeEvent::RustcGraphArtifactWritten(written) => {
-                self.semantic_summary.apply_graph_artifact_summary(
-                    written.artifact_id.clone(),
-                    written.node_count as usize,
-                    written.edge_count as usize,
-                    written.file_count as usize,
-                    written.call_edge_count as usize,
-                    written.module_edge_count as usize,
-                    written.cfg_edge_count as usize,
-                );
                 self.push_journal(
                     "observe",
                     format!(
@@ -243,7 +235,6 @@ impl RouteContext {
             }
             RuntimeEvent::RustcCaptureFailed(failed) => {
                 self.context_ready = true;
-                self.semantic_summary.apply_rustc_capture_failure(&failed.message);
                 self.push_journal("observe", format!("rustc_capture_failed crate={} message={}", failed.crate_name, failed.message));
             }
             RuntimeEvent::LoopObserved(LoopObserved { goal_text, error_count, semantic_summary, .. }) => {

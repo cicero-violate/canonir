@@ -1,126 +1,109 @@
-# PLAN: Make RouteTick the Canonical Per-Cycle Decision Driver
+# PLAN: Remove Queue-Local Control Authority and Rustc Capture Artifact Leaks
 
 ## A. Authoritative Context
 
 ### Canonical Law
-- `SemanticStateSummary` is the exclusive authority for route selection truth.
-- `RouteTick` must be the explicit per-cycle decision boundary.
-- Arbitrary incoming events may update state, but may not authoritatively trigger routing.
-- `model_json`, capability output text, controller signals, and local executor mirrors are not routing truth.
+- `SemanticStateSummary` is the single source of truth for routing and control-flow correctness.
+- Queue counters such as `scheduler_len`, `planned_count`-seeding hacks, and executor-local fallback injection are not root truth.
+- Zero-work, blocked-work, and repair-required states must be represented through canonical semantic/control events, not hidden scheduler seeding.
 
-### Current Verified State
-- Fail-fast is enforced across pipeline stages.
-- `RouteTick` emission was introduced upstream.
-- The decision -> `RouteSelected` emission path exists structurally.
+### Verified Progress This Cycle
+- Latest verifier summary says `decision input restricted to SemanticStateSummary at type level`.
+- Latest verifier summary says `semantic_summary assigned from LoopObserved event`.
+- Latest verifier summary says `no additional mutation sites for semantic_summary found`.
+- Core architectural concern is no longer semantic-state routing authority; remaining unverified work is runtime behavior and fresh source-side control drift.
 
-### Current Broken State
-- Decision is not loop-driven.
-- `RouteTick` is not the unconditional per-cycle decision driver.
-- `RouteExecutor::on_event` is still the central event-driven gateway.
-- `RouteController::evaluate_model_output(model_json, signals)` still parses route truth from `model_json`.
-- `decide_from_json` remains in the route-layer interface surface.
-- `try_dispatch_route` still derives from local or controller state instead of explicit semantic-state truth.
+### Still Broken
+- `canon-utils/canon-loop/src/stage/plan.rs::execute_complete` still injects fallback work when `ctx.pending_plan` is `None` and `ctx.scheduler.len() == 0`.
+- `canon-utils/canon-loop/src/stage/plan.rs` still asserts `scheduler_len_after > 0` after fallback insertion, preserving queue-count authority over control recovery.
+- `canon-utils/canon-runtime/src/bin/harness_repair.rs::local_planner_fallback` still constructs fallback/debug strings in a shape that diagnostics tie to fresh rustc capture invariant violations.
+- Legacy semantic decision naming/wiring drift remains in `canon-utils/canon-route/src/decision.rs`, `canon-utils/canon-route/src/executor.rs`, and `canon-utils/canon-route/src/lib.rs`, but this is now follow-on cleanup rather than the top blocker.
 
 ## B. Ranked Root Failures
 
-### 0. `RouteTick` DOES NOT DRIVE UNCONDITIONAL PER-CYCLE DECISION EXECUTION (PRIMARY BLOCKER)
+### 1. PLAN STAGE STILL USES QUEUE-LOCAL SCHEDULER STATE AS CONTROL AUTHORITY (CRITICAL)
 Evidence:
-- Diagnostics show `tick=1218` and `decision=3`.
-- Diagnostics show `RouteTick` is currently used only to drain deferred reroutes.
+- `canon-utils/canon-loop/src/stage/plan.rs:173-209`:
+  - `execute_complete(...)` checks `ctx.scheduler.len()` when `ctx.pending_plan.take()` is `None`.
+  - It injects a fallback scheduled task and emits `PlanningCompleted { planned_count: 1, status: "complete_fallback" }`.
+- `canon-utils/canon-loop/src/stage/plan.rs:643-650`:
+  - `let scheduler_len_after = ctx.scheduler.len();`
+  - `assert!(scheduler_len_after > 0, "Plan produced zero tasks — deadlock risk");`
+  - Emits `PlanningCompleted { planned_count: 1, status: "fallback" }`.
 
 Required outcome:
-- `RuntimeEvent::RouteTick(_)` must execute authoritative decision every cycle.
+- Remove queue-count-driven fallback injection and queue-count assertions as control authority.
+- Represent zero-task, blocked, or no-work outcomes via canonical semantic/control events and explicit statuses.
+- Ensure plan completion truth is derived from semantic state and validated planner outcomes, not hidden scheduler seeding.
 
-### 1. DECISION EXECUTION IS STILL EVENT-GATED THROUGH `on_event`
+### 2. HARNESS FALLBACK STRING GENERATION IS LEAKING DEBUG/CLOSURE ARTIFACTS INTO RUSTC CAPTURE (HIGH)
 Evidence:
-- Diagnostics show the current control architecture is `incoming event -> mutate context -> maybe route`.
-- `CapabilityCompleted` and `CapabilityFailed` remain plausible decision-trigger surfaces.
+- Diagnostics tie fresh invariant violations in `state/event_log/event.tlog.d/00000000000000012400.log` and `00000000000000012437.log` to leaked fallback/debug string shapes.
+- `canon-utils/canon-runtime/src/bin/harness_repair.rs:355-384`:
+  - `prompt_primary` is formatted for debug output.
+  - `fallback` is synthesized via `extract_primary_file_line(prompt).map(|(path, line)| format!(...))` inside the fallback chain.
+  - Diagnostics match this closure/formatted source shape to the leaked interner name artifact.
 
 Required outcome:
-- Incoming events should update semantic state only.
-- Decision must run from the cycle boundary, not opportunistically from arbitrary events.
+- Precompute and sanitize fallback action strings before any debug/capture path.
+- Eliminate closure-shaped or debug-shaped formatted expressions from values that can cross the rustc capture boundary.
+- Audit the fallback/capture boundary so diagnostic prints cannot become interner names.
 
-### 2. ROUTE AUTHORITY IS STILL MODEL-JSON-DRIVEN, NOT `SemanticStateSummary`-DRIVEN
+### 3. LEGACY DECISION API NAMING AND NON-SEMANTIC SCAFFOLDING STILL REMAIN (MEDIUM)
 Evidence:
-- `canon-utils/canon-runtime-supervisor/src/judgment_loop.rs::evaluate_model_output(model_json, signals)` calls `parse_route_selection(model_json, ...)`.
-- Diagnostics confirm `SemanticStateSummary` is absent from the authoritative decision input.
+- Diagnostics report `canon-utils/canon-route/src/decision.rs` still uses `decide_from_json(...)` naming and still carries `_model_json` / `_controller` scaffolding.
+- Prior live source reads showed executor/lib wiring still exports and calls the stale API shape.
 
 Required outcome:
-- Route truth must be computed directly from `SemanticStateSummary`, invariant context, and canonical policy evaluation.
+- Rename the decision API to a semantic-state authority name.
+- Remove stale `RouteController` / `_model_json` scaffolding from decision wiring.
+- Keep this behind the two active high-impact failures above.
 
-### 3. `decide_from_json` REMAINS A NON-CANONICAL DECISION INTERFACE
-Evidence:
-- `canon-utils/canon-route/src/executor.rs` still imports `decide_from_json`.
+## C. Dependency-Ordered Work
 
-Required outcome:
-- Replace JSON or model-driven decision interfaces with a semantic entrypoint such as `decide_from_semantic_state(summary: SemanticStateSummary)`.
+### Phase 1 — Remove scheduler-count control authority from the plan stage
+1. Read `canon-utils/canon-loop/src/stage/plan.rs` around `execute_complete`, empty-plan handling, and `PlanningCompleted` emission.
+2. Patch `execute_complete(...)` so `pending_plan = None` does not seed scheduler fallback work from `ctx.scheduler.len()`.
+3. Replace queue-count-driven recovery with canonical semantic/control outcomes such as explicit zero-work / blocked / no-action statuses and lawful events.
+4. Remove `scheduler_len_after` assertions as control truth.
+5. Ensure `PlanningCompleted.planned_count` reflects actual emitted planned actions, not synthetic scheduler seeding.
+6. Test: `cargo test -p canon-loop` and any directly affected workspace tests.
 
-### 4. `try_dispatch_route` IS STILL CENTERED ON LOCAL OR CONTROLLER STATE
-Evidence:
-- Diagnostics cite `goal_unfinished`, `has_plan`, and local `RouteContext` surfaces inside `try_dispatch_route`.
+### Phase 2 — Stop rustc capture artifact leaks from harness fallback generation
+1. Read `canon-utils/canon-runtime/src/bin/harness_repair.rs` around `local_planner_fallback`, `derive_post_read_action`, and nearby debug printing.
+2. Patch fallback generation so extracted file/line data is precomputed into sanitized plain strings before formatting or logging.
+3. Remove any closure-shaped or debug-shaped formatted expression from values that can enter capture/interner paths.
+4. Audit nearby debug prints so logged fallback artifacts cannot be captured as names.
+5. Test: `cargo test -p canon-runtime --bin harness_repair` if available, otherwise `cargo test -p canon-runtime`.
 
-Required outcome:
-- `try_dispatch_route` must consume canonical semantic decision outputs only, or be removed from the route-authority path entirely.
-
-### 5. DOWNSTREAM INVARIANT, SUCCESSOR, AND EMISSION FAILURES ARE LIVE BUT SECONDARY
-Evidence:
-- Diagnostics still show live invariant violations.
-- Diagnostics identify these as downstream symptoms of incorrect decision authority and trigger semantics.
-
-Required outcome:
-- Re-verify successor discharge, duplicate-control handling, observe/plan/act legality, and emission behavior only after loop-driven semantic authority is fixed.
-
-## C. Dependency Order
-1. Make `RouteTick` the explicit unconditional per-cycle decision driver in `canon-utils/canon-route/src/executor.rs`.
-2. Separate event ingestion from decision execution so arbitrary incoming events update semantic state but do not authoritatively trigger routing.
-3. Remove model-json-driven route authority from `canon-utils/canon-runtime-supervisor/src/judgment_loop.rs`.
-4. Replace `decide_from_json` with a semantic-state-driven decision entrypoint and route decision data flow.
-5. Rebuild `try_dispatch_route` so it consumes semantic decision outputs instead of local or controller mirrors.
-6. Only after steps 1 through 5, re-verify downstream invariants, successor discharge, duplicate-control handling, and emission legality.
+### Phase 3 — Clean up stale semantic decision API naming and scaffolding
+1. Read `canon-utils/canon-route/src/decision.rs`, `canon-utils/canon-route/src/executor.rs`, and `canon-utils/canon-route/src/lib.rs`.
+2. Rename `decide_from_json` to a semantic-state authority name such as `decide_from_semantic_state`.
+3. Remove `_model_json`, `RouteController`, and other obsolete non-authoritative scaffolding from the decision interface and callers.
+4. Test: `cargo test -p canon-route`.
 
 ## D. READY NOW
 
-### Executor: executor_pool
-1. Read and patch `canon-utils/canon-route/src/executor.rs::on_event` so `RuntimeEvent::RouteTick(_)` is the explicit unconditional driver of decision execution every cycle.
-   - Add a clear `RouteTick` branch that runs authoritative decision each cycle.
-   - Do not keep `RouteTick` only as deferred reroute drain.
-   - Test: run `cargo test -p canon-route`.
+1. REMOVE QUEUE-COUNT FALLBACK AUTHORITY FROM `canon-loop` PLAN STAGE
+   - Read `canon-utils/canon-loop/src/stage/plan.rs` around `execute_complete`, empty-plan fallback emission, and `PlanningCompleted` construction.
+   - Patch `execute_complete(...)` so `ctx.pending_plan = None` does not inject fallback scheduled tasks based on `ctx.scheduler.len()`.
+   - Remove `scheduler_len_after`-based assertions and any synthetic `planned_count: 1` fallback completion that is not backed by real planned actions.
+   - Encode zero-work / blocked / no-action outcomes as canonical semantic/control results instead of queue seeding.
+   - Test: `cargo test -p canon-loop`.
 
-2. Read and patch `canon-utils/canon-route/src/executor.rs` so arbitrary incoming events no longer authoritatively trigger routing.
-   - Keep event ingestion for semantic-state or context updates.
-   - Move authoritative decision execution to the cycle boundary.
-   - Remove or constrain `CapabilityCompleted` and `CapabilityFailed` as decision triggers.
-   - Test: run `cargo test -p canon-route`.
+2. REMOVE RUSTC CAPTURE ARTIFACT LEAKS FROM `local_planner_fallback`
+   - Read `canon-utils/canon-runtime/src/bin/harness_repair.rs` around `local_planner_fallback`, `derive_post_read_action`, and fallback/debug logging.
+   - Patch fallback generation so extracted prompt file/line information is precomputed and sanitized before formatting.
+   - Remove closure-shaped fallback expression construction from any value that can cross capture/logging boundaries.
+   - Audit `eprintln!` payloads in the same path so debug artifacts cannot become interner names.
+   - Test: `cargo test -p canon-runtime`.
 
-3. Read and patch `canon-utils/canon-runtime-supervisor/src/judgment_loop.rs` to remove `RouteController::evaluate_model_output(model_json, signals)` from route authority.
-   - Delete or isolate `parse_route_selection(model_json, ...)` from the canonical decision path.
-   - Ensure controller or signal logic is not the source of route truth.
-   - Test: rebuild the touched crates after the interface change.
+3. RUN TARGETED STRUCTURAL VERIFICATION ON THE TWO ACTIVE FAILURES
+   - Run `rg -n "scheduler\.len\(|complete_fallback|status: \"fallback\"|status: \"complete_fallback\"" canon-utils/canon-loop/src/stage/plan.rs`.
+   - Run `rg -n "local_planner_fallback|extract_primary_file_line\(prompt\)|local_planner_debug|local_planner_dispatch" canon-utils/canon-runtime/src/bin/harness_repair.rs`.
+   - Confirm queue-count control recovery and capture-leak patterns are removed or reduced to non-authoritative safe forms.
+   - Run the relevant crate tests after each patch.
 
-4. Read and patch the decision interface so `decide_from_json` no longer exists on the authoritative path.
-   - Start with `canon-utils/canon-route/src/executor.rs` and the crate that defines the decision API.
-   - Replace JSON or model-driven decision entrypoints with `decide_from_semantic_state(summary: SemanticStateSummary)` or equivalent.
-   - Remove any residual model-json dependency from `RouteDecision` construction.
-   - Test: run the touched crate tests plus `cargo test -p canon-route`.
-
-5. Read and patch `canon-utils/canon-route/src/executor.rs::try_dispatch_route` so it no longer derives route truth from `RouteContext`, `RouteController`, `ctx.signals`, `goal_unfinished`, `has_plan`, or similar local mirrors.
-   - Make it consume canonical semantic decision outputs only, or remove it from authoritative routing entirely.
-   - Eliminate panic-driven placeholder behavior.
-   - Test: run `cargo test -p canon-route`.
-
-6. After steps 1 through 5, audit downstream control correctness in this order:
-   - `canon-utils/canon-runtime/src/lib.rs`
-   - `canon-utils/canon-runtime/src/bus.rs`
-   - `canon-utils/canon-route/src/helpers.rs`
-   - `canon-utils/canon-loop/src/executor.rs`
-   Focus only on successor discharge, duplicate-control handling, invariant authority, and emission legality as follow-on work.
-
-7. After each patch set, run targeted verification and source scans.
-   - Use `rg` to confirm the authoritative path no longer depends on `decide_from_json`, `evaluate_model_output(model_json`, `parse_route_selection(model_json`, or event-gated decision triggers.
-   - Use Python to inspect fresh `state/event_log/event.tlog.d` segments for `tick`, `decision`, `RouteSelected`, `invariant violation`, `missing required successor`, and duplicate-control signals.
-   - Confirm decision activity tracks cycle ticks much more closely before declaring the lane complete.
-
-## E. BLOCKED / NOT READY YET
-- Do not prioritize blocked-emission success cleanup ahead of fixing loop-driven semantic decision authority.
-- Do not prioritize downstream bus or hook-chain cleanup ahead of making `RouteTick` the canonical decision driver and removing model-json route authority.
-- Do not spend cycles on fallback planning or mini-agent prompt/response cleanup until the decision stage is rebuilt around `SemanticStateSummary` and true per-cycle execution.
+## E. Blocked Follow-On Work
+- Do not prioritize stale semantic-boundary rewrites first; verifier evidence says core semantic-state authority is already restored.
+- Keep decision API rename/scaffolding cleanup behind the plan-stage control fix and harness capture fix unless those tasks expose a direct dependency.
