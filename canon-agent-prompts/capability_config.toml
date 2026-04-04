@@ -253,7 +253,8 @@ executor_pool = 100
 
 [llm.roles.executor]
 burst = 2
-response_timeout_secs = 600
+# response_timeout_secs = 600
+response_timeout_secs = 30
 [llm.roles.executor.weights]
 executor_pool = 100
 
