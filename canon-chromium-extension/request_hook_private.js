@@ -59,24 +59,42 @@
 
         // Replace the placeholder text with actual prompt
         if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
-          const lastMessage = payload.messages[payload.messages.length - 1];
-          if (lastMessage?.content?.parts) {
-            // console.log('[RequestHook] Original parts:', lastMessage.content.parts);
-            // Only replace if parts contain the <PROMPT> placeholder
-            if (lastMessage.content.parts.some(part => typeof part === 'string' && part.includes('<PROMPT>'))) {
-              // Combine queue and pending (filter out nulls)
-              const parts = [...window.__promptInjectionQueue];
-              if (window.__pendingPromptInjection) {
-                parts.push(window.__pendingPromptInjection);
-              }
-              const combined = parts.join('\n\n');
-              lastMessage.content.parts = [combined];
-              window.__promptInjectionQueue = [];
-              // console.log('[RequestHook] Replaced <PROMPT> with injection');
-            } else {
-              // console.log('[RequestHook] No <PROMPT> placeholder found, skipping injection');
+          // Find all messages that contain the <PROMPT> placeholder
+          const withPlaceholder = [];
+          for (let i = 0; i < payload.messages.length; i++) {
+            const msg = payload.messages[i];
+            const parts = msg?.content?.parts;
+            if (Array.isArray(parts) && parts.some(part => typeof part === 'string' && part.includes('<PROMPT>'))) {
+              withPlaceholder.push(i);
             }
-            // console.log('[RequestHook] Injected prompt:', window.__pendingPromptInjection.substring(0, 100) + '...');
+          }
+
+          if (withPlaceholder.length > 0) {
+            // Combine queue and pending (filter out nulls)
+            const parts = [...window.__promptInjectionQueue];
+            if (window.__pendingPromptInjection) {
+              parts.push(window.__pendingPromptInjection);
+            }
+            const combined = parts.join('\n\n');
+
+            // Replace the first placeholder with the combined prompt.
+            const first = payload.messages[withPlaceholder[0]];
+            if (first?.content?.parts) {
+              first.content.parts = [combined];
+            }
+
+            // Clear any additional placeholders to avoid sending literal <PROMPT>.
+            for (let j = 1; j < withPlaceholder.length; j++) {
+              const msg = payload.messages[withPlaceholder[j]];
+              if (msg?.content?.parts) {
+                msg.content.parts = [""];
+              }
+            }
+
+            window.__promptInjectionQueue = [];
+            // console.log('[RequestHook] Replaced <PROMPT> with injection');
+          } else {
+            // console.log('[RequestHook] No <PROMPT> placeholder found, skipping injection');
           }
         }
         

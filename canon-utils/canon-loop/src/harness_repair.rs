@@ -1,6 +1,6 @@
 use crate::{compiler_hints::classify_failure_metadata, context::LoopContext};
 use canon_invariant::{meta_invariant_harness_self_repair_missing_capabilities, meta_invariant_harness_self_repair_ready, HarnessCapabilityState, HarnessPrimitiveCapability};
-use canon_semantic_state::FailureScopeKind;
+use canon_semantic_state::{FailureScopeKind, SemanticStateSummary};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HarnessRepairTarget {
@@ -69,6 +69,29 @@ pub struct HarnessRepairState {
     pub progress_stalled: bool,
 }
 
+fn semantic_actionable_failure(summary: &SemanticStateSummary) -> bool {
+    summary.validation_blocked_by_preconditions
+        || summary.compiler_repair_required
+        || !summary.planning_preconditions.is_empty()
+        || !summary.repair_intents.is_empty()
+        || !summary.module_gaps.is_empty()
+        || summary.has_actionable_compiler_hints()
+}
+
+fn semantic_requires_replan(summary: &SemanticStateSummary) -> bool {
+    !summary.complete || summary.validation_blocked_by_preconditions || !summary.planning_preconditions.is_empty()
+}
+
+fn semantic_verifier_ready(summary: &SemanticStateSummary) -> bool {
+    summary.complete
+        && !summary.validation_blocked_by_preconditions
+        && summary.planning_preconditions.is_empty()
+        && !summary.compiler_repair_required
+        && summary.repair_intents.is_empty()
+        && summary.module_gaps.is_empty()
+        && !summary.has_actionable_compiler_hints()
+}
+
 impl HarnessRepairState {
     pub fn from_loop_context(ctx: &LoopContext) -> Self {
         let semantic = ctx.last_observed.as_ref().map(|observed| &observed.semantic_summary);
@@ -76,31 +99,22 @@ impl HarnessRepairState {
         let failure_scope = semantic.and_then(|summary| summary.failure_scope.as_deref());
         let verify_failed = ctx.last_verifier_outcome.as_deref().map(|value| value != "passed").unwrap_or(false);
         let (_, fallback_scope) = classify_failure_metadata(ctx.last_acted.as_ref().map(|acted| acted.stderr.as_str()).unwrap_or(""));
+        let actionable_failure = semantic.map(semantic_actionable_failure).unwrap_or(false) || verify_failed;
 
         Self {
             capabilities: HarnessCapabilityState { read_search: true, structured_edit: true, apply_patch: true, run_verifier: true, observe_diagnostics: true },
             drift_detected: false,
-            actionable_failure: semantic
-                .map(|summary| {
-                    summary.validation_blocked_by_preconditions
-                        || summary.compiler_repair_required
-                        || !summary.planning_preconditions.is_empty()
-                        || !summary.repair_intents.is_empty()
-                        || !summary.module_gaps.is_empty()
-                        || summary.has_actionable_compiler_hints()
-                })
-                .unwrap_or(false)
-                || verify_failed,
+            actionable_failure,
             failure_class_no_actionable: failure_class == Some("no_actionable_failure"),
             failure_scope_localized: matches!(failure_scope, Some("localized")),
             failure_scope_workspace: matches!(failure_scope, Some("workspace")) || (failure_scope.is_none() && fallback_scope == FailureScopeKind::Workspace),
             failure_scope_tooling: matches!(failure_scope, Some("tooling")) || (failure_scope.is_none() && fallback_scope == FailureScopeKind::Tooling),
-            verifier_ready: ctx.pending_act.is_none() && ctx.pending_plan.is_none(),
+            verifier_ready: semantic.map(semantic_verifier_ready).unwrap_or(false) && !actionable_failure,
             cargo_check_passed: ctx.last_verifier_outcome.as_deref() == Some("passed"),
             stronger_verification_requested: ctx.error_count == 0 && ctx.warning_count == 0,
             last_action_was_mutation: matches!(ctx.last_action_kind.as_str(), "apply_patch" | "write_file" | "edit_file" | "run_command"),
             single_action_batch_required: true,
-            needs_replan: ctx.consecutive_invalid_plan_batches > 0 || ctx.pending_plan.is_none(),
+            needs_replan: semantic.map(|summary| semantic_requires_replan(summary) && !semantic_verifier_ready(summary)).unwrap_or(ctx.last_observed.is_none()),
             progress_stalled: ctx.objective_trend_state.current_no_progress_streak > 0,
         }
     }
@@ -284,10 +298,54 @@ fn cargo_test_command(target: &HarnessRepairTarget) -> String {
 #[cfg(test)]
 mod tests {
     use super::{build_harness_repair_directive, evaluate_harness_repair_loop, HarnessRepairAction, HarnessRepairPhase, HarnessRepairState, HarnessRepairTarget};
+    use crate::context::{LoopContext, PendingAct, PendingPlan};
     use canon_invariant::{meta_invariant_harness_self_repair_missing_capabilities, meta_invariant_harness_self_repair_ready, HarnessCapabilityState};
+    use canon_semantic_state::SemanticStateSummary;
+    use std::{path::PathBuf, sync::Arc, time::Instant};
 
     fn ready_caps() -> HarnessCapabilityState {
         HarnessCapabilityState { read_search: true, structured_edit: true, apply_patch: true, run_verifier: true, observe_diagnostics: true }
+    }
+
+    fn noop_emitter() -> canon_event::EventEmitterHandle {
+        struct N;
+        impl canon_event::EventEmitter for N {
+            fn emit_with_parents(&self, _event: canon_event::RuntimeEvent, _parents: Vec<canon_event::EventId>, _file: &'static str, _line: u32) {}
+        }
+        Arc::new(N)
+    }
+
+    fn ready_semantic_summary() -> SemanticStateSummary {
+        SemanticStateSummary {
+            complete: true,
+            path_exists: true,
+            repo_initialized: true,
+            cargo_project: true,
+            ..SemanticStateSummary::default()
+        }
+    }
+
+    fn context_with_summary(summary: SemanticStateSummary) -> LoopContext {
+        let workspace = std::env::temp_dir().join(format!("canon_loop_harness_repair_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(
+            workspace.join("Cargo.toml"),
+            "[package]\nname = \"harness_repair_ctx\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let goal_text = Some("repair harness failure".to_string());
+        let mut ctx = LoopContext::new(workspace, PathBuf::from("/tmp/test.tlog"), noop_emitter());
+        ctx.goal_text = goal_text.clone();
+        ctx.last_observed = Some(canon_event::LoopObserved {
+            tick: 0,
+            error_count: 0,
+            warning_count: 0,
+            compiler_errors: Vec::new(),
+            goal_text,
+            semantic_summary: summary,
+            observe_diagnostics: Vec::new(),
+        });
+        ctx
     }
 
     #[test]
@@ -312,6 +370,62 @@ mod tests {
         );
         assert_eq!(directive.decision.action, HarnessRepairAction::RunCargoTest);
         assert_eq!(directive.verifier_command.as_deref(), Some("cargo test -p canon-route policy::tests::foo -- --nocapture"));
+    }
+
+    #[test]
+    fn harness_repair_state_ignores_queue_local_fields_when_semantics_match() {
+        let mut stable_ctx = context_with_summary(ready_semantic_summary());
+        stable_ctx.last_action_kind = "apply_patch".to_string();
+
+        let mut queue_noisy_ctx = context_with_summary(ready_semantic_summary());
+        queue_noisy_ctx.last_action_kind = "apply_patch".to_string();
+        queue_noisy_ctx.pending_plan = Some(PendingPlan { tick: 7, request_id: "plan".to_string(), ..PendingPlan::default() });
+        queue_noisy_ctx.pending_act = Some(PendingAct {
+            tick: 7,
+            action_kind: "apply_patch".to_string(),
+            tool_kind: "bash".to_string(),
+            request_id: "req".to_string(),
+            tool_call_id: "tool".to_string(),
+            node_id: "node".to_string(),
+            started_at: Instant::now(),
+            trace_id: None,
+            execution_id: None,
+            parent_span_id: None,
+            plan_id: None,
+            plan_step_id: None,
+            action_id: None,
+            artifact_n: 0,
+            llm_request_id: None,
+        });
+        queue_noisy_ctx.consecutive_invalid_plan_batches = 9;
+
+        let stable_state = HarnessRepairState::from_loop_context(&stable_ctx);
+        let queue_noisy_state = HarnessRepairState::from_loop_context(&queue_noisy_ctx);
+
+        assert_eq!(stable_state.verifier_ready, queue_noisy_state.verifier_ready);
+        assert_eq!(stable_state.needs_replan, queue_noisy_state.needs_replan);
+        assert_eq!(evaluate_harness_repair_loop(&stable_state), evaluate_harness_repair_loop(&queue_noisy_state));
+        assert!(stable_state.verifier_ready);
+        assert!(!stable_state.needs_replan);
+        assert_eq!(evaluate_harness_repair_loop(&stable_state).action, HarnessRepairAction::RunCargoCheck);
+    }
+
+    #[test]
+    fn constraint_state_ignores_pending_plan_when_semantic_preconditions_match() {
+        let mut summary = ready_semantic_summary();
+        summary.planning_preconditions = vec!["refresh semantic facts".to_string()];
+
+        let without_queue_plan = context_with_summary(summary.clone());
+        let mut with_queue_plan = context_with_summary(summary);
+        with_queue_plan.pending_plan = Some(PendingPlan { tick: 1, request_id: "plan".to_string(), ..PendingPlan::default() });
+
+        let without_queue_state = without_queue_plan.to_constraint_state();
+        let with_queue_state = with_queue_plan.to_constraint_state();
+
+        assert_eq!(without_queue_state.has_plan, with_queue_state.has_plan);
+        assert_eq!(without_queue_state.validation_blocked, with_queue_state.validation_blocked);
+        assert!(!without_queue_state.has_plan);
+        assert!(without_queue_state.validation_blocked);
     }
 
     fn bool_at(bits: u16, shift: u8) -> bool {

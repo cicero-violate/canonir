@@ -19,10 +19,14 @@
     injectScript("request_gemini.js");
   } else {
     injectScript("inject.js");
-    // Inject both hooks — SPA navigation can change /gg/ → /c/ after load,
-    // so both must be present from the start. Targets don't overlap.
-    injectScript("request_hook_private.js");
-    injectScript("request_hook_group.js");
+    // Inject only the relevant hook based on URL shape:
+    // - group chat: /gg/...
+    // - private chat: /c/... or root
+    if (location.pathname.startsWith("/gg/")) {
+      injectScript("request_hook_group.js");
+    } else {
+      injectScript("request_hook_private.js");
+    }
   }
 
 

@@ -328,22 +328,8 @@ impl BinarySegmentWriter {
         self.write_canon_event_inner(event)?;
 
         if event.kind.class() == EventClass::Control {
-            let mut next = invariants::required_successor(event).map(|p| PendingState { expected: p.expected, parent: p.parent, source_kind: p.source_kind, note: p.note });
-            // CRITICAL FIX: suppress loop_acted expectation at the tlog layer (true source of deadlock)
-            let mut next_expected = next.as_ref().map(|p| p.expected.to_string());
-
-            // FIX: clear pending successor when RouteSelected is observed
-            // AND prevent LoopObserved from reintroducing the requirement
-            if matches!(event.kind, EventKind::RouteSelected | EventKind::LoopObserved) {
-                next_expected = None;
-                next = None;
-            }
-            let mut next = next;
-            if next_expected.as_deref() == Some("loop_acted") {
-                eprintln!("[TLOG FIX] suppressing loop_acted expectation at source");
-                next_expected = None;
-                next = None; // CRITICAL: actually clear pending, not just log
-            }
+            let next = invariants::required_successor(event).map(|p| PendingState { expected: p.expected, parent: p.parent, source_kind: p.source_kind, note: p.note });
+            let next_expected = next.as_ref().map(|p| p.expected.to_string());
             eprintln!("[tlog][pending_set] after_kind={} after_id={} next_expected={:?}", event.kind, event.id, next_expected);
             *self.pending.lock().expect("pending poisoned") = next;
         }

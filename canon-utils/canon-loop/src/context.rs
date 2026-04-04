@@ -82,28 +82,52 @@ impl DestructiveCmdPolicy {
 impl LoopContext {
     /// Build canonical ConstraintState for centralized decision engine
     pub fn to_constraint_state(&self) -> canon_invariant::ConstraintState {
-        // FIX: decouple has_plan from scheduler; derive from semantic/plan signals
+        let semantic = self.last_observed.as_ref().map(|observed| &observed.semantic_summary);
+        let failure_class = semantic.and_then(|summary| summary.failure_class.as_deref());
+        let failure_scope = semantic.and_then(|summary| summary.failure_scope.as_deref());
+        let verify_failed = self.last_verifier_outcome.as_deref().map(|value| value != "passed").unwrap_or(false);
         let semantic_goal_exists = self.goal_text.is_some() || self.last_prompted_goal.is_some();
-        let has_plan = self.pending_plan.is_some() || semantic_goal_exists;
+        let has_plan = semantic
+            .map(|summary| {
+                !summary.validation_blocked_by_preconditions
+                    && summary.planning_preconditions.is_empty()
+                    && (semantic_goal_exists
+                        || !summary.repair_intents.is_empty()
+                        || !summary.module_gaps.is_empty()
+                        || summary.has_actionable_compiler_hints())
+            })
+            .unwrap_or(semantic_goal_exists);
 
-        println!("[STATE DETAIL] goal_text_present={} pending_plan_present={}", self.goal_text.is_some(), self.pending_plan.is_some());
+        println!("[STATE DETAIL] goal_text_present={} semantic_observed={}", self.goal_text.is_some(), semantic.is_some());
 
-        eprintln!("[STATE] {}:{} {} has_plan={} (source=pending_plan|semantic_goal)", file!(), line!(), module_path!(), has_plan);
+        eprintln!("[STATE] {}:{} {} has_plan={} (source=semantic_summary|semantic_goal)", file!(), line!(), module_path!(), has_plan);
 
         canon_invariant::ConstraintState {
-            semantic_path_exists: true,
-            semantic_cargo_project: true,
-            real_path_exists: true,
-            real_cargo_project: true,
-            actionable_failure: false,
-            validation_blocked: false,
-            entrypoint_missing: false,
-            module_gaps_present: false,
-            recent_no_semantic_progress: false,
-            failure_class_no_actionable: false,
-            failure_scope_localized: false,
-            failure_scope_workspace: false,
-            failure_scope_tooling: false,
+            semantic_path_exists: semantic.map(|summary| summary.path_exists).unwrap_or(false),
+            semantic_cargo_project: semantic.map(|summary| summary.cargo_project).unwrap_or(false),
+            real_path_exists: self.workspace.exists(),
+            real_cargo_project: self.workspace.join("Cargo.toml").exists(),
+            actionable_failure: semantic
+                .map(|summary| {
+                    summary.validation_blocked_by_preconditions
+                        || summary.compiler_repair_required
+                        || !summary.planning_preconditions.is_empty()
+                        || !summary.repair_intents.is_empty()
+                        || !summary.module_gaps.is_empty()
+                        || summary.has_actionable_compiler_hints()
+                })
+                .unwrap_or(false)
+                || verify_failed,
+            validation_blocked: semantic
+                .map(|summary| summary.validation_blocked_by_preconditions || !summary.planning_preconditions.is_empty())
+                .unwrap_or(false),
+            entrypoint_missing: semantic.map(|summary| summary.entrypoint_kind.is_none() && summary.cargo_project).unwrap_or(false),
+            module_gaps_present: semantic.map(|summary| !summary.module_gaps.is_empty()).unwrap_or(false),
+            recent_no_semantic_progress: self.objective_trend_state.current_no_progress_streak > 0,
+            failure_class_no_actionable: failure_class == Some("no_actionable_failure"),
+            failure_scope_localized: matches!(failure_scope, Some("localized")),
+            failure_scope_workspace: matches!(failure_scope, Some("workspace")),
+            failure_scope_tooling: matches!(failure_scope, Some("tooling")),
             route_objective_contradiction: false,
             has_plan,
         }
@@ -141,6 +165,10 @@ pub struct LoopContext {
     pub last_context_base_id: Option<u64>,
     pub last_delta_hash: Option<u64>,
     pub last_route_rationale: Option<String>,
+    // decision invariant tracking
+    // --- decision invariant tracking ---
+    pub last_decision_tick: Option<u64>,
+    pub decision_emitted_this_tick: bool,
     pub last_route_confidence: Option<f64>,
     pub last_route_rationale_non_empty: Option<String>,
     pub last_route_confidence_non_empty: Option<f64>,
@@ -239,6 +267,8 @@ impl LoopContext {
             pending_act: None,
             artifact_dir: default_artifact_dir(&workspace),
             artifact_counter: next_tool_artifact_counter(&default_artifact_dir(&workspace)),
+            last_decision_tick: None,
+            decision_emitted_this_tick: false,
             active_batch_llm_request_id: None,
             queued_artifact_index: HashMap::new(),
             act_batch_tracker: HashMap::new(),

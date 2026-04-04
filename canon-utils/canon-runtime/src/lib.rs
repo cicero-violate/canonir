@@ -395,6 +395,10 @@ impl EventRuntime {
         eprintln!("[EMIT TICK TRACE] tick={}", self.runtime_tick);
         // Route Tick through standard emission path so it is appended consistently
         self.emit_event(RuntimeEvent::Tick(Tick { tick: self.runtime_tick, emitted: true }))?;
+        // FAIL-FAST: ensure at least one RuntimeEvent observed this tick
+        if self.observed_events.is_empty() {
+            panic!("[FATAL] No RuntimeEvent emitted for tick {}", self.runtime_tick);
+        }
         Ok(())
     }
 
@@ -412,10 +416,7 @@ impl EventRuntime {
 
     pub fn emit_event(&mut self, event: RuntimeEvent) -> Result<()> {
         eprintln!("[GLOBAL EVENT TRACE] EMIT {:?}", event);
-        let event_clone = event.clone();
         self.handle_runtime_event_located(event, "", 0)?;
-        // CRITICAL FIX: forward live events into emitter pipeline (same as replay path)
-        let _ = self.emitter.emit_located(event_clone, file!(), line!());
         self.drain_emitted_events()?;
         Ok(())
     }
@@ -503,6 +504,11 @@ impl EventRuntime {
     fn handle_runtime_event_located_with_parents(&mut self, event: RuntimeEvent, file: &'static str, line: u32, parent_ids: Vec<canon_event::EventId>) -> Result<()> {
         // DEBUG TRACE: confirm handler entry
         eprintln!("[HANDLE EVENT ENTRY] kind={:?} file={} line={}", canon_event::event_kind_str(&event), file, line);
+        let parent_ids = if parent_ids.is_empty() {
+            self.last_written_event_id.clone().into_iter().collect()
+        } else {
+            parent_ids
+        };
         if self.is_fatal_halt_active() && !is_allowed_during_fatal_halt(&event) {
             // DEBUG TRACE: confirm fatal halt is blocking emission
             eprintln!("[EMISSION BLOCKED - FATAL HALT] kind={:?}", canon_event::event_kind_str(&event));
@@ -553,21 +559,6 @@ impl EventRuntime {
                 return Err(anyhow::anyhow!("dispatch failure: no consumers received event"));
             }
         }
-
-        // Ensure all handled events are appended to the tlog
-        // DEBUG TRACE: confirm append is reached
-        eprintln!("[HANDLE -> APPEND] kind={:?}", canon_event::event_kind_str(&event));
-        // ACTUAL FIX: persist event to tlog
-        eprintln!("[BEFORE append_runtime_event CALL]");
-        // 🔥 CRITICAL: enforce invariants at write-time (fail-fast)
-        if let Err(reason) = self.invariant_engine.validate_before_append(&event, &parent_ids) {
-            eprintln!("[INVARIANT VIOLATION] rejecting event before append: {}", reason);
-            self.mode = RuntimeMode::FatalInvariantHalt { reason };
-            return Ok(());
-        }
-        std::fs::write("/tmp/append_callsite_probe.log", format!("CALLSITE {:?}\n", event)).ok();
-        self.append_runtime_event(&event, file, line, parent_ids.clone(), event_id.clone());
-        eprintln!("[AFTER append_runtime_event CALL]");
         if emit_mode_update {
             let mode_update = RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated { payload: self.runtime_mode_update_payload() });
             let mode_update_id = canon_event::EventId::new(canon_event::new_event_id());
@@ -644,26 +635,13 @@ impl EventRuntime {
 
     pub fn drain_emitted_events(&mut self) -> Result<()> {
         while let Ok(located) = self.emitter_rx.try_recv() {
-            // DEBUG TRACE: confirm events are entering drain path
-            // FIX: route emitted events through EventBus dispatch
-            let event = located.event.clone();
-            let event_id = canon_event::EventId::new(canon_event::new_event_id());
-            let _ = self.bus.dispatch(event, event_id);
             eprintln!("[DRAIN EVENT] kind={:?} file={} line={}", canon_event::event_kind_str(&located.event), located.file, located.line);
             let event = located.event;
             let file = located.file;
             let line = located.line;
             let parent_ids = located.parent_ids.clone();
             eprintln!("[PRE-APPEND CALL] kind={:?}", canon_event::event_kind_str(&event));
-            self.handle_runtime_event_located_with_parents(event.clone(), file, line, parent_ids.clone())?;
-            // CRITICAL: ensure append is also triggered for located path
-            let event_id = canon_event::EventId::new(canon_event::new_event_id());
-            eprintln!("[CALLING APPEND] kind={:?}", canon_event::event_kind_str(&event));
-            std::fs::write("/tmp/append_callsite_probe.log", format!("CALLSITE {:?}\n", event)).ok();
-            self.append_runtime_event(&event, file, line, parent_ids, event_id);
-
-            // FIX: ensure emitted events are dispatched to consumers
-            let _ = self.bus.dispatch(event.clone(), canon_event::EventId::new(canon_event::new_event_id()));
+            self.handle_runtime_event_located_with_parents(event, file, line, parent_ids)?;
         }
         Ok(())
     }

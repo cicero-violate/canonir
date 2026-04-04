@@ -74,10 +74,11 @@ impl RouteExecutor {
         // SAFETY: guard entire executor to prevent runtime crash
         let __route_exec_guard = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if self.dispatch_in_progress {
-            // CRITICAL FIX: prohibit early return; RouteExecutor must not terminate control-flow
-            // Instead, mark reroute and continue so event can propagate downstream
-            eprintln!("[ROUTE FIX] dispatch_in_progress detected — continuing without early return");
+            // Mark reroute, but do not recursively re-enter decision emission on the same stack.
+            // The active dispatch will finish and emit a RouteTick if reroute is still required.
+            eprintln!("[ROUTE FIX] dispatch_in_progress detected — deferring recursive dispatch");
             self.reroute_requested = true;
+            return;
         }
 
         // semantic-only: remove planned_pending dependency
@@ -86,6 +87,11 @@ impl RouteExecutor {
         // correlation id for decision ↔ route tracing
         static TRACE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let trace_id = TRACE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        // HARD INVARIANT: decision_trace must exist before any RouteSelected emission.
+        // Route authority remains semantic-state driven, but the canonical trace marker must
+        // be installed on the route path itself before emit_decision() can emit RouteSelected.
+        self.last_decision_trace_id = Some(trace_id);
 
         // FIX: align has_plan with context semantics (RouteContext does NOT have pending_plan)
         // derive from available signals in RouteContext
@@ -105,10 +111,6 @@ impl RouteExecutor {
 
         // SAFETY: pre-format values to isolate potential panic sources
         // (removed unreachable trace block after fail-fast panic)
-
-        // HARD INVARIANT: decision_trace must exist before any RouteSelected emission
-        // We enforce this by recording the last decision trace id
-        self.last_decision_trace_id = Some(trace_id);
 
         // TEMP FIX: bypass dedup + trace block due to persistent panic
         eprintln!("[WARN] bypassing dedup block to prevent runtime crash");
@@ -440,9 +442,9 @@ impl EventConsumer for RouteExecutor {
             eprintln!("[ROUTE EXEC TRACE] PlanningCompleted has no planned work; falling through to normal route policy");
         }
 
-        // CRITICAL: ensure routing pipeline executes for every event
-        // This triggers decision() → RouteSelected emission
-        self.try_dispatch_route(event);
+        // Routing must be driven only by the canonical RouteTick control event.
+        // Calling try_dispatch_route() for every event duplicates same-tick decisions
+        // (for example LoopObserved + RouteTick) and can recurse RouteSelected emission.
 
         // removed invalid direct invocation of canon_loop (not available in this crate)
 
@@ -485,18 +487,6 @@ impl EventConsumer for RouteExecutor {
 
         if let RuntimeEvent::Tick(t) = event {
             self.ctx.scheduler_tick = t.tick;
-
-            // ENFORCE: ≥1 RuntimeEvent per tick (fail-safe emission)
-            if let Some(emitter) = &self.emitter {
-                emitter.emit_with_parents(
-                    RuntimeEvent::RouteTick(canon_event::RouteTick { tick: self.ctx.scheduler_tick, emitted: true }),
-                    vec![],
-                    file!(),
-                    line!(),
-                );
-            } else {
-                panic!("No EventEmitterHandle available during tick; cannot emit RuntimeEvent");
-            }
         }
 
         match event {
@@ -523,6 +513,9 @@ impl EventConsumer for RouteExecutor {
             }
             RuntimeEvent::RouteTick(_) => {
                 // CRITICAL FIX: RouteTick must drive per-cycle decision execution
+                static TRACE_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+                let trace_id = TRACE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.last_decision_trace_id = Some(trace_id);
                 let prompt = String::new();
                 self.emit_decision("", prompt);
                 EventOutcome::NoOp("route_executor_route_tick")

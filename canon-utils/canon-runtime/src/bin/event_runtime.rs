@@ -456,7 +456,8 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
         }
         processed = bootstrap_events.len();
         let _ = save_cursor(&cursor_path, &tlog_path, processed, start_seq, &session_id, runtime.next_id());
-        eprintln!("[WARN] once-mode shutdown skipped — continuing into main loop");
+        eprintln!("[TRACE] once-mode complete; exiting before main loop");
+        return Ok(());
     }
     eprintln!("[TRACE] after once block (should reach loop next)");
 
@@ -583,26 +584,9 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
 
     // FIX: reintroduce minimal tick driver to ensure LoopObserved emission
     // Canonical invariant requires at least one observe per cycle (state → decision)
-    {
-        let tick_emitter = runtime.emitter_handle();
-        std::thread::spawn(move || {
-            let mut tick: u64 = 0;
-            loop {
-                tick += 1;
-                let event = RuntimeEvent::LoopObserved(canon_event::LoopObserved {
-                    tick,
-                    error_count: 0,
-                    warning_count: 0,
-                    compiler_errors: vec![],
-                    goal_text: None,
-                    semantic_summary: canon_semantic_state::SemanticStateSummary::default(),
-                    observe_diagnostics: vec![],
-                });
-                let _ = tick_emitter.emit_located(event, file!(), line!());
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-        });
-    }
+    // REMOVED: duplicate LoopObserved side-thread.
+    // The authoritative cycle driver is runtime.emit_tick() inside the single-writer main loop.
+    // Emitting LoopObserved directly here bypasses Tick -> RouteTick -> decision -> RouteSelected.
 
     // --- P4: prompt-directory watcher ---
     // Watches canon-agent-prompts/ for .md file changes. On change: re-reads

@@ -114,14 +114,12 @@ impl LoopStageExecutor {
         let emitter = &self.ctx.emitter;
         match result {
             LoopStageResult::Emit(event) => {
-                // CRITICAL FIX: ensure events are emitted with proper lineage (not empty parents)
-                let _ = emitter.emit_located(event.clone(), file!(), line!());
+                // Emit exactly once with causal lineage; bare emit_located creates orphan append attempts.
                 emitter.emit_with_parents(event, vec![_trigger_id.clone()], file!(), line!());
             }
             LoopStageResult::EmitMany(events) => {
                 for event in events {
-                    // CRITICAL FIX: propagate trigger_id as parent to preserve event chain
-                    let _ = emitter.emit_located(event.clone(), file!(), line!());
+                    // Emit exactly once with causal lineage; bare emit_located creates orphan append attempts.
                     emitter.emit_with_parents(event, vec![_trigger_id.clone()], file!(), line!());
                 }
             }
@@ -189,21 +187,6 @@ impl LoopStageExecutor {
             Ok(result) => {
                 println!("[TRACE] OBSERVE RESULT: {:?}", result);
                 self.emit_stage_result(trigger_id, result);
-                // CRITICAL FIX: ensure LoopObserved is ALWAYS emitted after successful observe
-                self.ctx.emitter.emit_with_parents(
-                    RuntimeEvent::LoopObserved(canon_event::LoopObserved {
-                        tick: self.ctx.current_tick,
-                        error_count: self.ctx.error_count,
-                        warning_count: self.ctx.warning_count,
-                        compiler_errors: self.ctx.recent_compiler_errors.clone(),
-                        goal_text: self.ctx.goal_text.clone(),
-                        semantic_summary: Default::default(),
-                        observe_diagnostics: vec!["success_path_emission".to_string()],
-                    }),
-                    vec![trigger_id.clone()],
-                    file!(),
-                    line!(),
-                );
             },
             Err(err) => {
                 let eval = evaluate_recovery_execution(operation, StageExecutionOutcomeClass::Error);
@@ -304,6 +287,9 @@ impl LoopStageExecutor {
     fn handle_planning_completed(&mut self, completed: &canon_event::PlanningCompleted) {
         self.ctx.objective_trend_state.record_planning_completion(&completed.status);
         self.apply_planning_transition_effects(Some(&completed.status), None);
+        if completed.status == "missing_semantic_context" {
+            self.ctx.last_observed_tick = None;
+        }
     }
 
     fn handle_runtime_state_updated(&mut self, updated: &canon_event::RuntimeStateUpdated) {
@@ -683,9 +669,10 @@ impl LoopStageExecutor {
             return None;
         }
 
-        // CANONICAL DECISION → ROUTE CONSUMPTION
-        let mut route_selected_emitted = false;
-        if self.ctx.pending_required_successor.as_deref() == Some("decision") {
+        // Route selection is owned by canon-route via SemanticStateSummary -> decision -> RouteSelected.
+        // Loop executor must not synthesize decision or route events from local successor mirrors.
+        let mut _route_selected_emitted = false;
+        if false && self.ctx.pending_required_successor.as_deref() == Some("decision") {
             // HARD GUARD: prevent duplicate decision consumption within same tick
             if self.ctx.last_observed_tick == Some(self.ctx.current_tick) && self.ctx.last_route_rationale.is_some() {
                 panic!("duplicate decision→RouteSelected emission in same tick; violates exactly-once invariant");
@@ -724,13 +711,13 @@ impl LoopStageExecutor {
                     file!(),
                     line!(),
                 );
-                route_selected_emitted = true;
+                _route_selected_emitted = true;
             }
             self.ctx.pending_required_successor = Some("route_selected".to_string());
         }
 
-        // FAIL-FAST: decision must produce RouteSelected
-        if self.ctx.pending_required_successor.as_deref() == Some("decision") && !route_selected_emitted {
+        // Decision validation is owned by runtime proof surfaces, not by a loop-local hidden route path.
+        if false && self.ctx.pending_required_successor.as_deref() == Some("decision") && !_route_selected_emitted {
             panic!("decision stage failed to emit RouteSelected; violates canonical flow");
         }
 
@@ -860,11 +847,10 @@ impl LoopStageExecutor {
                 file!(),
                 line!(),
             );
+            return EventOutcome::NoOp("loop_observed_traced");
         }
 
         let Ok(stage) = LoopStageEvent::try_from(event.clone()) else {
-            // CRITICAL FIX: ensure observe executes even when event is not a stage event
-            self.execute_observe_mode(&trigger_id, event, ObserveExecutionMode::Forced);
             return EventOutcome::NoOp("loop_stage_not_stage_event");
         };
         let res = stage.execute(&mut self.ctx, trigger_id.clone());
@@ -877,8 +863,6 @@ impl LoopStageExecutor {
                         for ev in events {
                             emitter.emit_with_parents(ev, vec![trigger_id.clone()], file!(), line!());
                         }
-                        // CRITICAL: ensure observe runs even on EmitMany path (no early exit before observe)
-                        self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
                         return EventOutcome::NoOp("emission handled via canonical emitter");
                     }
                     _ => self.emit_stage_result(trigger_id, result),
@@ -886,12 +870,7 @@ impl LoopStageExecutor {
             },
             Err(err) => self.emit_error(trigger_id, "loop_stage_execution", err.to_string(), "error", serde_json::json!({ "event": format!("{:?}", event) })),
         }
-        // CRITICAL: ensure observe stage executes after every stage execution
-        // CRITICAL FIX: return NoOp after observe to avoid masking LoopObserved with Debug event
-        // Previously, executor always returned a Debug Emit, which could override downstream
-        // visibility of observe emissions in the runtime accounting.
-        self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
-        EventOutcome::NoOp("observe_executed")
+        EventOutcome::NoOp("stage_executed")
     }
 }
 
@@ -915,23 +894,13 @@ impl EventConsumer for LoopStageExecutor {
     #[must_emit]
     fn on_event(&mut self, event: &RuntimeEvent, trigger_id: EventId) -> EventOutcome {
         println!("[PROBE] on_event entry: kind={}, tick={}", canon_event::event_kind_str(event), self.ctx.current_tick);
-        // CRITICAL FIX: ensure observe stage executes via canonical emission path
-        // Direct observe::execute bypasses emission; must use executor pipeline
-        // CRITICAL FIX: directly execute observe and emit its result
-        if let Ok(result) = observe::execute_forced(&mut self.ctx) {
-            self.emit_stage_result(&trigger_id, result);
-        }
         let recovery_eval = Self::build_recovery_eval(event, self.ctx.pending_required_successor.as_deref(), self.ctx.last_verified.is_some());
         if let Some(outcome) = self.handle_recovery_event(event, &trigger_id, &recovery_eval) {
-            // CRITICAL FIX: ensure observe executes even on recovery early-return paths
-            if let Ok(result) = observe::execute_forced(&mut self.ctx) {
-                self.emit_stage_result(&trigger_id, result);
-            }
             return outcome;
         }
-        // CRITICAL FIX: enforce observe execution unconditionally for EVERY event
-        // (removes any gating that could suppress observe and break LoopObserved invariant)
-        let mut trigger_observe = true;
+        // Observe must be deliberate, not unconditional. Tick starts the cycle,
+        // and specific handlers may additionally request observe when needed.
+        let mut trigger_observe = matches!(event, RuntimeEvent::Tick(_));
         let force_observe_recovery = Self::recovery_forces_observe(&recovery_eval);
         match event {
             RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {}
@@ -991,6 +960,7 @@ impl EventConsumer for LoopStageExecutor {
             }
             RuntimeEvent::PlanningCompleted(pc) => {
                 self.handle_planning_completed(pc);
+                trigger_observe |= pc.status == "missing_semantic_context";
             }
             RuntimeEvent::GoodnessSnapshot(g) => {
                 self.handle_goodness_snapshot(g);
@@ -1043,8 +1013,9 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::CapabilityRequested(_) => {}
         }
 
-        // HARD ENFORCEMENT: ALWAYS execute observe regardless of event type or gating
-        self.execute_observe_mode(&trigger_id, event, ObserveExecutionMode::Forced);
+        if trigger_observe || force_observe_recovery {
+            self.execute_observe_mode(&trigger_id, event, ObserveExecutionMode::Forced);
+        }
         self.advance_control_state(event, &trigger_id);
 
         if let Some(outcome) = self.apply_runtime_evaluation(&trigger_id, event, force_observe_recovery, trigger_observe) {

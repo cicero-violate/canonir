@@ -3,6 +3,7 @@ use canon_llm::config::LlmEndpoint;
 use canon_tools_patch::apply_patch;
 use serde_json::Value;
 use std::io::Write;
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -36,7 +37,13 @@ fn patch_targets<'a>(patch: &'a str) -> Vec<&'a str> {
 }
 
 fn is_lane_plan(path: &str) -> bool {
-    path.starts_with("PLANS/executor-") && path.ends_with(".md")
+    if !path.starts_with("PLANS/") || !path.ends_with(".md") {
+        return false;
+    }
+    // Allow both legacy and instance-scoped lane plans:
+    // - PLANS/executor-<id>.md
+    // - PLANS/<instance>/executor-<id>.md
+    path.starts_with("PLANS/executor-") || path.contains("/executor-")
 }
 
 fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
@@ -90,7 +97,7 @@ fn patch_scope_error(role: &str, patch: &str) -> Option<String> {
         "planner" | "mini_planner" => {
             if touches_spec || touches_violations || touches_diagnostics || touches_other {
                 Some(
-                    "Planner may only patch `PLAN.md` and lane plans under `PLANS/executor-<id>.md` because planner derives plans from the spec and diagnostics."
+                    "Planner may only patch `PLAN.md` and lane plans under `PLANS/<instance>/executor-<id>.md` (or legacy `PLANS/executor-<id>.md`) because planner derives plans from the spec and diagnostics."
                         .to_string(),
                 )
             } else if touches_master_plan || touches_lane {
@@ -275,7 +282,7 @@ fn exec_read_file(workspace: &Path, relative: &str, start_line: Option<usize>) -
     let lines: Vec<&str> = full.lines().collect();
     let total = lines.len();
     let (from, max_lines) = match start_line {
-        Some(n) => (n.saturating_sub(1).min(total), 250),
+        Some(n) => (n.saturating_sub(1).min(total), 300),
         None => (0, MAX_FULL_READ_LINES),
     };
     let text = lines[from..].iter().take(max_lines).enumerate().map(|(i, l)| format!("{}: {}", from + i + 1, l)).collect::<Vec<_>>().join("\n");
@@ -589,10 +596,87 @@ fn execute_action(
             eprintln!("[{role}] step={} {label} output_bytes={}", step, out.len());
             Ok((false, format!("{label}:\n{}", truncate(&out, MAX_SNIPPET))))
         }
+        "cargo_test" => {
+            let crate_name = action
+                .get("crate")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("cargo_test missing 'crate'"))?;
+            let test_name = action
+                .get("test")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("cargo_test missing 'test'"))?;
+            let cmd = format!(
+                "cargo test -p {} {} -- --exact --nocapture",
+                crate_name, test_name
+            );
+            eprintln!("[{role}] step={} cargo_test cmd={}", step, cmd);
+            let (success, out) = exec_run_command(workspace, &cmd, WORKSPACE)?;
+            let label = if success { "cargo_test ok" } else { "cargo_test failed" };
+            eprintln!("[{role}] step={} {label} output_bytes={}", step, out.len());
+            let mut locations = BTreeSet::new();
+            let mut failing_tests = BTreeSet::new();
+            let mut rerun_hint = None;
+            let mut failure_block = Vec::new();
+            let mut in_failure_block = false;
+            for line in out.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("test ") {
+                    if let Some(name) = rest.strip_suffix(" ... FAILED") {
+                        failing_tests.insert(name.to_string());
+                    }
+                }
+                if let Some(rest) = trimmed.strip_prefix("error: test failed, to rerun pass ") {
+                    rerun_hint = Some(rest.trim().trim_matches('`').to_string());
+                }
+                if trimmed.starts_with("---- ") && trimmed.ends_with(" ----") {
+                    in_failure_block = true;
+                } else if in_failure_block && trimmed == "failures:" {
+                    in_failure_block = false;
+                }
+                if in_failure_block {
+                    failure_block.push(line);
+                }
+                // capture file:line:col (keep only workspace-relative or absolute paths)
+                if let Some(idx) = trimmed.find(".rs:") {
+                    let path = &trimmed[..idx + 3];
+                    let rest = &trimmed[idx + 3..];
+                    let mut it = rest.splitn(3, ':');
+                    let line_no = it.next().unwrap_or("");
+                    let col_no = it.next().unwrap_or("");
+                    if !line_no.is_empty() && !col_no.is_empty() {
+                        locations.insert(format!("{}:{}:{}", path, line_no, col_no));
+                    }
+                }
+            }
+            let mut summary = format!("{label}");
+            if !failing_tests.is_empty() {
+                summary.push_str("\nfailed_tests:");
+                for name in &failing_tests {
+                    summary.push_str(&format!("\n- {}", name));
+                }
+            }
+            if !locations.is_empty() {
+                summary.push_str("\nerror_locations:");
+                for loc in &locations {
+                    summary.push_str(&format!("\n- {}", loc));
+                }
+            }
+            if let Some(hint) = rerun_hint {
+                summary.push_str(&format!("\nrerun_hint: {}", hint));
+            }
+            if !failure_block.is_empty() {
+                summary.push_str("\nfailure_block:");
+                for line in &failure_block {
+                    summary.push_str("\n");
+                    summary.push_str(line);
+                }
+            }
+            Ok((false, format!("{summary}\n\nfull_output:\n{}", truncate(&out, MAX_SNIPPET))))
+        }
         other => Ok((
             false,
             format!(
-                "unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, python, or done"
+                "unsupported action '{other}' — use list_dir, read_file, apply_patch, run_command, python, cargo_test, or done"
             ),
         )),
     })

@@ -166,8 +166,10 @@ impl InvariantEngine {
             return Err("invalid_event_kind".to_string());
         }
 
-        // Invariant 3: Non-root events must have parents
-        if kind != "root" && parent_ids.is_empty() {
+        // Invariant 3: Non-root events must have parents.
+        // Lawful cycle-seed root events originate at runtime and therefore start without parents.
+        let lawful_root_seed = matches!(event, RuntimeEvent::Tick(_));
+        if kind != "root" && !lawful_root_seed && parent_ids.is_empty() {
             return Err("missing_parent_ids".to_string());
         }
 

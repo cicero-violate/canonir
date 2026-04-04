@@ -47,8 +47,8 @@ const WS_PORT_CANDIDATES: &[u16] = &[
     9108,
 ];
 const MAX_STEPS: usize = 2000;
-const MAX_FULL_READ_LINES: usize = 500;
-const MAX_SNIPPET: usize = 3000;
+const MAX_FULL_READ_LINES: usize = 300;
+const MAX_SNIPPET: usize = 20_000;
 
 static DIAGNOSTICS_FILE_PATH: OnceLock<String> = OnceLock::new();
 
@@ -1016,10 +1016,12 @@ async fn submit_executor_turn(
     command_id: &str,
     response_timeout_secs: u64,
 ) -> Result<String> {
+    let lane_plan_text = std::fs::read_to_string(Path::new(WORKSPACE).join(&job.lane_plan_file)).unwrap_or_default();
     let exec_prompt = executor_cycle_prompt(
         job.executor_display.as_str(),
         job.label.as_str(),
         job.lane_plan_file.as_str(),
+        lane_plan_text.as_str(),
         &job.latest_verify_result,
     );
     let executor_system = system_instructions(AgentPromptKind::Executor);
@@ -1279,7 +1281,22 @@ async fn main() -> Result<()> {
                     .map(|lane| lane.plan_file.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
-                let planner_prompt = planner_cycle_prompt(&summary_text, &lane_plan_list);
+                let objectives_text =
+                    std::fs::read_to_string(workspace.join(OBJECTIVES_FILE)).unwrap_or_default();
+                let invariants_text =
+                    std::fs::read_to_string(workspace.join(INVARIANTS_FILE)).unwrap_or_default();
+                let violations_text =
+                    std::fs::read_to_string(&violations_path).unwrap_or_default();
+                let diagnostics_text =
+                    std::fs::read_to_string(&diagnostics_path).unwrap_or_default();
+                let planner_prompt = planner_cycle_prompt(
+                    &summary_text,
+                    &lane_plan_list,
+                    &objectives_text,
+                    &invariants_text,
+                    &violations_text,
+                    &diagnostics_text,
+                );
                 append_orchestration_trace(
                     "llm_message_forwarded",
                     json!({
@@ -1822,25 +1839,26 @@ async fn main() -> Result<()> {
             let invariants = std::fs::read_to_string(workspace.join(INVARIANTS_FILE)).unwrap_or_default();
             let objectives = std::fs::read_to_string(workspace.join(OBJECTIVES_FILE)).unwrap_or_default();
             format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nObjectives (from {OBJECTIVES_FILE}):\n{objectives}\n\nInvariants (from {INVARIANTS_FILE}):\n{invariants}\n\nWrite violations to {VIOLATIONS_FILE} if any are found.\nWhen done, report verified/unverified/false items in `done.reason`.\nEmit exactly one action to begin."
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nObjectives (from {OBJECTIVES_FILE}):\n{objectives}\n\nInvariants (from {INVARIANTS_FILE}):\n{invariants}\n\nVerify that objectives in {OBJECTIVES_FILE} are completed properly.\nWrite violations to {VIOLATIONS_FILE} if any are found.\nWhen done, report verified/unverified/false items in `done.reason`.\nEmit exactly one action to begin."
             )
         } else if is_diagnostics {
             let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
             let objectives = std::fs::read_to_string(workspace.join(OBJECTIVES_FILE)).unwrap_or_default();
             format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nRead files and search the source code for the bugs (use read_file + run_command/ripgrep).\nRun 5+ python analysis actions over event logs and code evidence.\nInfer the root cause from the evidence and cite detailed sources of errors (file paths, functions, and log evidence).\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nObjectives (from {OBJECTIVES_FILE}):\n{objectives}\n\nUse {SPEC_FILE}, {OBJECTIVES_FILE}, and {INVARIANTS_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {diagnostics_rel}. Emit exactly one action to begin."
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nAlways inspect state/event_log/event.tlog.d and the relevant canon system files.\nRead files and search the source code for the bugs (use read_file + run_command/ripgrep).\nRun 5+ python analysis actions over event logs and code evidence.\nInfer the root cause from the evidence and cite detailed sources of errors (file paths, functions, and log evidence).\nPrioritize canon-route, canon-loop, canon-runtime, canon-semantic-state, and canon-mini-agent when control flow or prompt contracts are implicated.\nLatest verifier summary:\n(none yet)\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nObjectives (from {OBJECTIVES_FILE}):\n{objectives}\n\nVerify whether objectives in {OBJECTIVES_FILE} are being met and note gaps.\nUse {SPEC_FILE}, {OBJECTIVES_FILE}, and {INVARIANTS_FILE} as the contract, not lane plans.\nInfer failures from code, logs, runtime state, and verifier findings.\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\nFocus on route/control-flow correctness, event successor discharge, duplicate fanout, state-authority drift, queue-driven routing, synthetic dispatch bypasses, and prompt-shell mismatches.\n\nWrite a ranked diagnostics report to {diagnostics_rel}. Emit exactly one action to begin."
             )
         } else if is_planner {
             let violations = std::fs::read_to_string(&violations_path).unwrap_or_default();
             let diagnostics = std::fs::read_to_string(&diagnostics_path).unwrap_or_default();
             let objectives = std::fs::read_to_string(workspace.join(OBJECTIVES_FILE)).unwrap_or_default();
+            let invariants = std::fs::read_to_string(workspace.join(INVARIANTS_FILE)).unwrap_or_default();
             let lane_plan_list = lanes
                 .iter()
                 .map(|lane| lane.plan_file.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nObjectives (from {OBJECTIVES_FILE}):\n{objectives}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics report (from {diagnostics_rel}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nUse {INVARIANTS_FILE} when deriving plan constraints.\nRead files and search the source code before issuing plan changes.\nWrite imperative, actionable instructions in {MASTER_PLAN_FILE} and derive lane plans: {lane_plan_list}.\nEmit exactly one action to begin."
+                "WORKSPACE: {WORKSPACE}\nAll relative paths resolve against WORKSPACE.\n\nCanonical spec (from {SPEC_FILE}):\n{primary_input}\n\nObjectives (from {OBJECTIVES_FILE}):\n{objectives}\n\nInvariants (from {INVARIANTS_FILE}):\n{invariants}\n\nViolations (from {VIOLATIONS_FILE}):\n{violations}\n\nDiagnostics report (from {diagnostics_rel}):\n{diagnostics}\n\nCanonical law:\n- SemanticStateSummary is the single source of truth for routing.\n- scheduler_len / planned_pending are not routing authority.\n- Prioritize migration to state-authority before edge patches.\n\nUse {INVARIANTS_FILE} when deriving plan constraints.\nRead files and search the source code before issuing plan changes.\nWrite imperative, actionable instructions in {MASTER_PLAN_FILE} and derive lane plans: {lane_plan_list}.\nEmit exactly one action to begin."
             )
         } else {
             let spec = std::fs::read_to_string(&spec_path).with_context(|| format!("failed to read {SPEC_FILE}"))?;

@@ -68,8 +68,8 @@ pub fn bootstrap_config(tlog_path: &Path, registry: &PromptRegistryHandle) {
 
     // ENFORCE: emit initial RuntimeEvent during bootstrap
     // (fail-fast requirement: system must emit at least one RuntimeEvent before first tick)
-    use canon_event::{RuntimeEvent, RouteTick};
-    let _ = RuntimeEvent::RouteTick(RouteTick { tick: 0, emitted: true });
+    // Bootstrap no longer attempts to emit events.
+    // Canonical emission occurs via EventRuntime::emit_event (Tick per cycle).
 }
 
 // ---------------------------------------------------------------------------

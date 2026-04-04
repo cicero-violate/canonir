@@ -1,111 +1,103 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- Event log segments reviewed repeatedly from `state/event_log/event.tlog.d`, with freshest focus on `00000000000000012399.log` through `00000000000000012444.log`.
-- Fresh failure-bearing segments observed in the current cycle: `00000000000000012400.log` and `00000000000000012437.log`.
-- Violations reviewed: `VIOLATIONS.md`.
+Event log segments reviewed:
+  - Fresh head confirmed at `state/event_log/event.tlog.d/00000000000000020602.log` (`2026-04-04T05:04:11.974517`, size `5193`).
+  - Latest sampled entries in that head are rustc-only: `code`, `rustc_capture_started`, `rustc_graph_artifact_written`, `rustc_capture_completed`.
+  - Structured scan of the newest 160 canonical segments found `non_rustc_count=0`; top actor/kind pairs were rustc-only: `('rustc','code')=802`, `('rustc','rustc_capture_started')=177`, `('rustc','rustc_graph_artifact_written')=102`, `('rustc','rustc_capture_completed')=102`, `('rustc','rustc_capture_failed')=75`.
+  - Backward scan across 2780 logs found the last non-rustc entry at `00000000000000006352.log` (`2026-04-02T21:56:50.986796`): `actor=event-runtime`, `kind=runtime_started`.
+  - Window around the last non-rustc runtime activity showed older non-rustc traffic only: `('supervisor','tick')=56`, `('event-runtime','error_occurred')=32`, `('event-runtime','llm')=2`, `('observe','loop_observed')=2`, `('writer','code')=2`.
+- Violations reviewed:
+  - `VIOLATIONS.md:33-45` flags missing cycle tracking for `Tick -> RouteTick -> Decision -> RouteSelected` and exactly-one decision validation.
+  - `VIOLATIONS.md:71-91` flags runtime loop not exercised under execution and exactly-one decision invariant not enforced.
+  - `VIOLATIONS.md:93-102,125-135` flags runtime determinism as unproven and the deterministic decision invariant as violated.
 - Source areas reviewed:
-  - `canon-utils/canon-route/src/decision.rs`
-  - `canon-utils/canon-route/src/executor.rs`
-  - `canon-utils/canon-route/src/lib.rs`
-  - `canon-utils/canon-route/src/context.rs`
-  - `canon-utils/canon-loop/src/stage/plan.rs`
-  - `canon-utils/canon-runtime/src/bin/harness_repair.rs`
-  - `canon-utils/canon-mini-agent/src/main.rs`
+  - `canon-utils/canon-loop/src/harness_repair.rs:94-104`
+  - `canon-utils/canon-loop/src/context.rs:83-93,149-182,270-271`
+  - `canon-utils/canon-loop/src/executor.rs` grep hits around `pending_act` / `planned_count`, disabled exactly-once guards near `675-720`, and `RouteTick` emission near `917-922`
+  - `canon-utils/canon-route/src/executor.rs` semantic-only cleanup comments
+  - `canon-utils/canon-runtime/src/lib.rs:393-420,434-443`
+  - `canon-utils/canon-runtime/src/bus.rs:53-85`
+  - `PLANS/OBJECTIVES.md:14-29,32-45,49-60`
 - Commands run:
-  - Multiple structured Python scans over the latest event-log segments.
-  - Source-term scans for `SemanticStateSummary`, `scheduler_len`, `planned_pending`, `pending_act`, `RequestDispatch`, `RouteController`, and `decide_from_json`.
-  - Targeted line-snippet extraction for the route, loop, and harness files above.
+  - Multiple structured python analyses over canonical event-log segments, printable payload extraction, actor/kind counting, backwards freshness scan, and direct source-file line extraction.
 
 ## Ranked Failures
-
 1. Impact: high
-   Signal: Queue-local scheduler state still drives control recovery in the plan stage.
+   Signal: Queue-local loop state still drives routing/readiness decisions in places that should derive from semantic state only.
    Evidence:
-   - `canon-utils/canon-loop/src/stage/plan.rs:173-179`:
-     - `execute_complete(...)` uses `ctx.scheduler.len()`.
-     - On `pending_plan.take()` = `None`, it treats `ctx.scheduler.len() == 0` as the trigger to inject a fallback task.
-   - `canon-utils/canon-loop/src/stage/plan.rs:643-645`:
-     - `let scheduler_len_after = ctx.scheduler.len();`
-     - `assert!(scheduler_len_after > 0, "Plan produced zero tasks — deadlock risk");`
-   - Canonical law says `SemanticStateSummary` is the routing/control authority; `scheduler_len` is not authoritative unless proven as a derived mirror.
-   - Latest event-log scans did **not** show fresh `RouteSelected`, `LoopObserved`, `LoopVerified`, or `LoopRewarded` markers in the sampled newest segments, so the strongest live control-flow evidence is source-side authority drift, not a contradictory fresh route trace.
+   - `canon-utils/canon-loop/src/harness_repair.rs:98` sets `verifier_ready: ctx.pending_act.is_none() && ctx.pending_plan.is_none()`.
+   - `canon-utils/canon-loop/src/harness_repair.rs:103` sets `needs_replan: ctx.consecutive_invalid_plan_batches > 0 || ctx.pending_plan.is_none()`.
+   - `canon-utils/canon-loop/src/context.rs:84-87` derives canonical constraint state with `let has_plan = self.pending_plan.is_some() || semantic_goal_exists;`.
+   - `canon-utils/canon-loop/src/context.rs:125,152,158` stores `pending_plan`, `last_invalid_plan_planned_count`, and `pending_act` as loop-local state.
+   - `canon-utils/canon-loop/src/executor.rs:497-498` clears `self.ctx.pending_act`; `canon-utils/canon-loop/src/executor.rs:545` restores `last_invalid_plan_planned_count` from error context.
+   - Canonical law says `SemanticStateSummary` is the single source of truth for routing/control flow, and queue-local mirrors are not authoritative unless proven derived mirrors.
    Repair Targets:
-   - `canon-utils/canon-loop/src/stage/plan.rs::execute_complete`
-   - Remove queue-count-driven fallback injection and queue-count assertions as control authority.
-   - Replace `scheduler_len` gating with semantic-state-derived outcomes (`SemanticStateSummary`, planning status, explicit no-work / blocked / repair-required semantics).
-   - Ensure zero-task handling is emitted as canonical semantic/control events, not hidden scheduler seeding.
+   - `canon-utils/canon-loop/src/harness_repair.rs`: remove `pending_plan` / `pending_act` authority from `verifier_ready` and `needs_replan`; derive these gates from semantic-state / constraint-state facts only.
+   - `canon-utils/canon-loop/src/context.rs`: stop treating `pending_plan.is_some()` as canonical `has_plan` truth unless it is explicitly proven as a derived mirror of `SemanticStateSummary`.
+   - `canon-utils/canon-loop/src/executor.rs`: demote `pending_*` and `planned_count` fields to observational/cache status only, or remove them from control decisions entirely.
+   - Add a regression test proving routing decisions are invariant under changes to queue-local mirrors when semantic state is unchanged.
 
 2. Impact: high
-   Signal: Fresh rustc capture invariant violations are active now and are rooted in debug/fallback string generation inside harness repair logic.
+   Signal: Canonical runtime/control-flow evidence is stale or missing from the current event-log head, so execution correctness is not presently provable from the canonical log.
    Evidence:
-   - Current-cycle event-log scans repeatedly found only `invariant violation` hits in:
-     - `state/event_log/event.tlog.d/00000000000000012400.log`
-     - `state/event_log/event.tlog.d/00000000000000012437.log`
-   - Fresh violation sample from latest logs:
-     - `invariant violation: alloc/debug artifact leaked into name interner name="|| extract_primary_file_line(prompt).map(|(path, line)| format!(\"{\\\"action\\\":\\\"read_file\\\",...`.
-   - Source root cause found in `canon-utils/canon-runtime/src/bin/harness_repair.rs`:
-     - `355-383` in `local_planner_fallback(...)`.
-     - `366`: `let prompt_primary = extract_primary_file_line(prompt)...`
-     - `377-379`: fallback action is synthesized with `extract_primary_file_line(prompt).map(|(path, line)| format!("{\"action\":\"read_file\",...`.
-   - The leaked closure/debug string in the logs matches this source shape.
+   - Freshest canonical head is `00000000000000020602.log` at `2026-04-04T05:04:11.974517`, but sampled entries are rustc-only.
+   - Structured scan of the newest 160 segments found `non_rustc_count=0`.
+   - Backward scan across 2780 logs found the last non-rustc event at `00000000000000006352.log` on `2026-04-02T21:56:50`.
+   - This means current canonical logs do not show fresh `event-runtime`, `supervisor`, `observe`, `route`, or other live control events even while rustc traffic continues.
+   - `PLANS/OBJECTIVES.md:14-29` requires EventBus/runtime integrity to be proven under execution; stale runtime evidence blocks that proof.
    Repair Targets:
-   - `canon-utils/canon-runtime/src/bin/harness_repair.rs::local_planner_fallback`
-   - Stop emitting or capturing closure/formatted fallback strings in a way that can enter the rustc capture name interner.
-   - Precompute/sanitize fallback action strings before any debug/capture path, or avoid logging/capturing closure-shaped expressions entirely.
-   - Audit the capture boundary so debug artifacts from fallback generation cannot become interner names.
+   - `canon-utils/canon-runtime/src/lib.rs`: audit `emit_event`, `emit_event_located`, `emit_tick`, `handle_replayed_event`, and `drain_emitted_events` so non-rustc runtime events are persisted into the same canonical segmented log head that rustc uses.
+   - Add an explicit freshness invariant: during active runtime execution, the latest canonical log window must contain non-rustc control events, not only rustc artifacts.
+   - Add a runtime smoke/integration test that emits a Tick and proves the newest segmented logs contain corresponding non-rustc runtime/control events.
+   - Confirm no alternate/stale event-stream path is receiving runtime events while rustc writes to `state/event_log/event.tlog.d`.
 
-3. Impact: medium
-   Signal: Semantic authority is mostly restored, but legacy decision API/wiring still carries non-semantic scaffolding and stale naming.
+3. Impact: high
+   Signal: Per-cycle control-flow guarantees are not enforced at the runtime boundary; current checks are weaker than the contract.
    Evidence:
-   - `canon-utils/canon-route/src/decision.rs:19-35`:
-     - `decide_from_json(semantic: &SemanticStateSummary, _model_json: &str, prompt: String, _controller: &mut RouteController)`.
-     - Decision routing now derives from `SemanticStateSummary`, but the function name, `_model_json`, and `_controller` preserve obsolete influence paths.
-   - `canon-utils/canon-route/src/decision.rs:1-5` still imports `RouteController`.
-   - Prior source scan found:
-     - `canon-utils/canon-route/src/executor.rs:849` calls `decide_from_json(&self.ctx.semantic_summary, &semantic_json, prompt.clone(), &mut self.controller)`.
-     - `canon-utils/canon-route/src/lib.rs:9` re-exports `decide_from_json`.
-   - This is no longer a proof of current semantic-authority failure, but it is still architectural drift and regression surface.
+   - `PLANS/OBJECTIVES.md:49-60` requires each loop cycle to produce `Tick -> RouteTick -> Decision -> RouteSelected`.
+   - `VIOLATIONS.md:33-45` states there is no cycle-level tracking and no exactly-one decision validation.
+   - `canon-utils/canon-runtime/src/lib.rs:393-401` only fail-fast checks that `observed_events` is non-empty after `emit_tick()`, which does not prove `RouteTick`, `Decision`, or `RouteSelected` occurred.
+   - `canon-utils/canon-loop/src/context.rs:168-171,270-271` contains `last_decision_tick` and `decision_emitted_this_tick`, but fresh `VIOLATIONS.md` still reports the exactly-one-decision invariant as unenforced, so these fields are not closing the proof obligation.
+   - `canon-utils/canon-loop/src/executor.rs:675-720` keeps duplicate-decision and missing-`RouteSelected` guards behind `if false`, disabling those invariant checks at runtime.
+   - `canon-utils/canon-loop/src/executor.rs:917-922` emits `RouteTick` on `Tick`, but the fresh canonical head still contains no non-rustc events proving the cycle progressed through decision and route emission.
+   - Fresh canonical head sampling found no visible current-cycle non-rustc control events to validate the contract.
    Repair Targets:
-   - `canon-utils/canon-route/src/decision.rs`
-   - `canon-utils/canon-route/src/executor.rs`
-   - `canon-utils/canon-route/src/lib.rs`
-   - Rename to a semantic-state authority API such as `decide_from_semantic_state`.
-   - Remove `RouteController` and `_model_json` from the decision interface.
-   - Remove residual controller threading through executor/lib exports where it no longer contributes to semantic routing.
+   - `canon-utils/canon-runtime/src/lib.rs`: add per-cycle control markers/counters keyed by tick and discharge them only when the full required chain occurs.
+   - `canon-utils/canon-loop/src/context.rs`: make `last_decision_tick` / `decision_emitted_this_tick` authoritative runtime-proof fields or remove them as misleading partial instrumentation.
+   - `canon-utils/canon-loop/src/executor.rs`: remove the `if false` guards and enforce duplicate-decision / missing-`RouteSelected` invariants at runtime.
+   - `canon-utils/canon-route` / `canon-loop`: emit explicit cycle-local decision / route markers that can be validated in logs and tests.
+   - Add an invariant test that fails on any cycle missing `Decision` or `RouteSelected`, and on any cycle producing multiple decisions.
 
 4. Impact: medium
-   Signal: `VIOLATIONS.md` is stale and materially misstates current architecture, which can misdirect planner effort.
+   Signal: EventBus delivery completeness remains only partially evidenced; dispatch does not yet prove “all registered consumers received the event”.
    Evidence:
-   - `VIOLATIONS.md:3-12` claims `decide_from_json(ctx: &RouteContext, ...)` still accepts full `RouteContext`.
-   - Current source disproves that claim:
-     - `canon-utils/canon-route/src/decision.rs:19` now accepts `semantic: &SemanticStateSummary` directly.
-   - `VIOLATIONS.md:34-41` claims semantic-source population is unverified.
-   - Latest verifier summary supplied in the prompt says verified items include:
-     - `decision input restricted to SemanticStateSummary at type level`
-     - `semantic_summary assigned from LoopObserved event`
-     - `no additional mutation sites for semantic_summary found`
+   - `PLANS/OBJECTIVES.md:14-29` requires all emitted events to reach all registered consumers with no silent drops.
+   - `canon-utils/canon-runtime/src/bus.rs:53-85` iterates consumers and increments `delivered` after each `on_event`, but there is no durable per-consumer receipt ledger or emitted-vs-received reconciliation.
+   - `canon-utils/canon-runtime/src/bus.rs:72-74` forwards `EventOutcome::Error` through `emit_with_parents`, but current evidence does not establish a full receipt audit across all consumers and all events.
    Repair Targets:
-   - `VIOLATIONS.md`
-   - Any generator/prompt source that injects stale violation text into diagnostics/planner prompts (likely `canon-utils/canon-mini-agent/src/main.rs` diagnostics prompt assembly).
-   - Split stale architectural claims from live runtime failures.
-   - Regenerate violations from current code truth before using them as planner authority.
+   - `canon-utils/canon-runtime/src/bus.rs`: add delivery accounting keyed by `(event_id, consumer_name)` and expose a post-dispatch completeness assertion/report.
+   - Add an execution test that compares emitted events against per-consumer receipts and fails on any missing delivery.
+   - Persist delivery audit summaries into canonical runtime events so Objective 1 can be proven from the event log itself.
+
+5. Impact: medium
+   Signal: Deterministic decision behavior is still reported as violated/unverified, and current canonical evidence does not prove otherwise.
+   Evidence:
+   - `VIOLATIONS.md:47-57` marks deterministic decision behavior unverified.
+   - `VIOLATIONS.md:71-81` marks deterministic decision invariant violated and calls for enforcement at the decision boundary.
+   - Fresh canonical head lacks current non-rustc decision-path evidence, so deterministic behavior under active execution is not demonstrated.
+   Repair Targets:
+   - `canon-utils/canon-route/src/decision.rs` and decision-entry callers: add deterministic output assertions and stable audit payloads for each evaluated decision.
+   - Add replay/re-run tests demonstrating identical semantic-state inputs produce identical decision outputs and identical `RouteSelected` emissions.
+   - Record decision audits in canonical runtime events so determinism can be checked from logs, not inferred from source comments.
 
 ## Planner Handoff
-- Highest-value repair targets, in order:
-  1. `canon-utils/canon-loop/src/stage/plan.rs`
-     - Remove `scheduler_len` as control authority for fallback injection and deadlock assertions.
-     - Make zero-task / blocked / repair-required outcomes semantic-state-driven.
-  2. `canon-utils/canon-runtime/src/bin/harness_repair.rs`
-     - Eliminate the active capture/interner leak caused by `extract_primary_file_line(prompt)` fallback/debug string generation.
-  3. `canon-utils/canon-route/src/decision.rs`
-     - Rename and simplify the decision entrypoint to semantic-state-only authority.
-  4. `canon-utils/canon-route/src/executor.rs` and `canon-utils/canon-route/src/lib.rs`
-     - Remove residual `RouteController` / `_model_json` threading and old API exports.
-  5. `VIOLATIONS.md` plus diagnostics prompt generation in `canon-utils/canon-mini-agent/src/main.rs`
-     - Remove stale claims so the planner stops chasing already-fixed architecture issues.
-
+- Highest-value repair targets in order:
+  1. Remove queue-local authority from `canon-loop` control decisions (`harness_repair.rs`, `context.rs`, `executor.rs`) and make semantic-state / constraint-state the only routing truth.
+  2. Restore or prove fresh canonical persistence of non-rustc runtime/control events in `state/event_log/event.tlog.d` so execution correctness is observable now, not only in stale logs from `2026-04-02`.
+  3. Enforce per-cycle `Tick -> RouteTick -> Decision -> RouteSelected` and exactly-one-decision invariants at runtime, not just via ad-hoc debug expectations.
+  4. Add durable EventBus delivery accounting to prove Objective 1 from execution evidence.
+  5. Add deterministic decision audit + replay tests at the decision boundary.
 - Blockers / missing evidence:
-  - In the newest sampled event-log segments for this cycle, I did **not** observe fresh `RouteSelected` / `LoopObserved` / `LoopVerified` / `LoopRewarded` markers; the sampled fresh logs were dominated by rustc capture invariant violations instead.
-  - Because of that, the current ranking is anchored primarily on source-truth plus fresh capture-failure logs, not on a contradictory fresh runtime route trace.
-  - If a later cycle produces fresh runtime route events in the latest segments, re-run diagnostics to confirm whether any queue-driven routing survives beyond the plan-stage source evidence above.
+  - Current canonical log head is dominated by rustc traffic, so runtime/control-flow correctness cannot be proven from fresh logs until non-rustc persistence is restored or explicitly validated.
+  - No current-cycle canonical evidence yet proves that every `RouteSelected` still originates from the intended decision boundary under live execution.

@@ -1,4 +1,4 @@
-use crate::hooks::{hook_denied_event, HookChain, HookDecision};
+use crate::hooks::{HookChain, HookDecision};
 use canon_event::{EventConsumer, EventEmitterHandle, EventFilter, EventId, EventOutcome, RuntimeEvent};
 use std::sync::{Arc, Mutex};
 
@@ -52,13 +52,11 @@ impl EventBus {
 
     pub fn dispatch(&self, event: RuntimeEvent, event_id: EventId) -> usize {
         eprintln!("[BUS DISPATCH TRACE] bus_ptr={:p} sync_consumers_len={} event={}", self, self.sync_consumers.len(), canon_event::event_kind_str(&event));
+        // Enforce invariant: no mutation or drop allowed in dispatch
         let base_event = match self.hooks.run_pre(&event) {
             HookDecision::Allow => event,
-            HookDecision::Mutate { replacement } => replacement,
-            HookDecision::Deny { reason } => {
-                self.hooks.run_post(&event, &EventOutcome::error(hook_denied_event(&reason), file!(), line!()));
-                return 0;
-            }
+            HookDecision::Mutate { .. } => event,
+            HookDecision::Deny { .. } => event,
         };
 
         let mut delivered = 0usize;
@@ -66,15 +64,21 @@ impl EventBus {
         for consumer in &self.sync_consumers {
             if let Ok(mut locked) = consumer.consumer.lock() {
                 let outcome = locked.on_event(&base_event, event_id.clone());
+                delivered = delivered.saturating_add(1);
                 self.hooks.run_post(&base_event, &outcome);
 
                 match outcome {
                     EventOutcome::NoOp(_) => {}
                     EventOutcome::Error { event, file, line } => {
                         consumer.emitter.emit_with_parents(event, vec![event_id.clone()], file, line);
-                        delivered += 1;
                     }
                 }
+            } else {
+                eprintln!(
+                    "[canon-runtime] ERROR: failed to lock consumer name={} for event kind={}",
+                    consumer.name,
+                    canon_event::event_kind_str(&base_event)
+                );
             }
         }
 

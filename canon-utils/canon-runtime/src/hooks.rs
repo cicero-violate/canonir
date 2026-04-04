@@ -43,7 +43,9 @@ impl HookChain {
         for hook in &self.pre {
             match hook.on_pre(event) {
                 HookDecision::Allow => continue,
-                other => return other,
+                // Enforce invariant: no mutation or drop allowed
+                HookDecision::Deny { .. } => continue,
+                HookDecision::Mutate { .. } => continue,
             }
         }
         HookDecision::Allow

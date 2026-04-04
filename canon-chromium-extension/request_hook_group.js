@@ -53,24 +53,29 @@
 
         const payload = JSON.parse(text);
 
-        // Calpico group chat only
-        if (payload?.content?.text === "<PROMPT>") {
-          payload.content.text =
-            window.__pendingPromptInjection ||
-            window.__promptInjectionQueue.join("\n\n") ||
-            "";
+        // Calpico group chat only: replace first <PROMPT>, clear any extras.
+        if (payload?.content?.text && typeof payload.content.text === "string") {
+          const text = payload.content.text;
+          if (text.includes("<PROMPT>")) {
+            const combined =
+              window.__pendingPromptInjection ||
+              window.__promptInjectionQueue.join("\n\n") ||
+              "";
+            // Replace the first placeholder with the combined prompt and remove any others.
+            payload.content.text = text.replace("<PROMPT>", combined).replace(/<PROMPT>/g, "");
 
-          const newReq = new Request(input, {
-            body: JSON.stringify(payload)
-          });
+            const newReq = new Request(input, {
+              body: JSON.stringify(payload)
+            });
 
-          if (window.__promptInjectionMode === "auto") {
-            window.__pendingPromptInjection = null;
-            window.__promptInjectionQueue = [];
+            if (window.__promptInjectionMode === "auto") {
+              window.__pendingPromptInjection = null;
+              window.__promptInjectionQueue = [];
+            }
+
+            console.log("✅ INJECTED (Request)");
+            return originalFetch(newReq);
           }
-
-          console.log("✅ INJECTED (Request)");
-          return originalFetch(newReq);
         }
 
       } catch (e) {
@@ -93,20 +98,24 @@
       try {
         const payload = JSON.parse(init.body);
 
-        if (payload?.content?.text === "<PROMPT>") {
-          payload.content.text =
-            window.__pendingPromptInjection ||
-            window.__promptInjectionQueue.join("\n\n") ||
-            "";
+        if (payload?.content?.text && typeof payload.content.text === "string") {
+          const text = payload.content.text;
+          if (text.includes("<PROMPT>")) {
+            const combined =
+              window.__pendingPromptInjection ||
+              window.__promptInjectionQueue.join("\n\n") ||
+              "";
+            payload.content.text = text.replace("<PROMPT>", combined).replace(/<PROMPT>/g, "");
 
-          init.body = JSON.stringify(payload);
+            init.body = JSON.stringify(payload);
 
-          if (window.__promptInjectionMode === "auto") {
-            window.__pendingPromptInjection = null;
-            window.__promptInjectionQueue = [];
+            if (window.__promptInjectionMode === "auto") {
+              window.__pendingPromptInjection = null;
+              window.__promptInjectionQueue = [];
+            }
+
+            console.log("✅ INJECTED (init.body)");
           }
-
-          console.log("✅ INJECTED (init.body)");
         }
 
       } catch (e) {
