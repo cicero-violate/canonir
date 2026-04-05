@@ -11,7 +11,7 @@ pub const MAX_STEPS: usize = 2000;
 pub const MAX_FULL_READ_LINES: usize = 300;
 pub const MAX_SNIPPET: usize = 20_000;
 pub const DEFAULT_RESPONSE_TIMEOUT_SECS: u64 = 150;
-pub const ROLE_TIMEOUT_SECS: &[(&str, u64)] = &[("planner", 120), ("mini_planner", 120), ("verifier", 120), ("diagnostics", 120), ("executor", 30)];
+pub const ROLE_TIMEOUT_SECS: &[(&str, u64)] = &[("planner", 600), ("mini_planner", 600), ("verifier", 120), ("diagnostics", 120), ("executor", 30)];
 
 #[derive(Clone, Copy)]
 pub struct EndpointSpec {
@@ -55,7 +55,7 @@ pub const ENDPOINT_SPECS: &[EndpointSpec] = &[
         role: "diagnostics",
         role_markdown: "builtin:planner",
         urls: &[
-            "https://chatgpt.com/gg/69d1266e0a288198bb7b2f150a669dd7",
+            // "https://chatgpt.com/gg/69d1266e0a288198bb7b2f150a669dd7",
             "https://chatgpt.com/",
             "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118",
             "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
