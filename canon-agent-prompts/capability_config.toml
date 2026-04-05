@@ -70,7 +70,7 @@ max_tabs = 1
 id = "mini_planner_chatgpt"
 url = [
   "https://chatgpt.com/gg/69d1275c4ed88191988d28f341f48d42",
-  "https://chatgpt.com/",
+  # "https://chatgpt.com/",
   # "https://chatgpt.com/c/69d072f7-75b0-8330-9c1e-a62354dfab54",
   # "https://chatgpt.com/c/69d001ed-5e6c-8325-b7fb-7e589202677d",
   # "https://chatgpt.com/c/69cf340f-f16c-8327-b945-8e58aba1b66f",
@@ -137,9 +137,8 @@ max_tabs = 1
 [[llm.endpoints]]
 id = "diagnostics_chatgpt"
 url = [
-  "https://chatgpt.com/gg/69d1ce97d6508194b65fa7bd6ebbd759", 
   "https://chatgpt.com/gg/69d1266e0a288198bb7b2f150a669dd7",
-  "https://chatgpt.com/",
+  # "https://chatgpt.com/",
   # "https://chatgpt.com/c/69cf6641-725c-8329-9a2f-e1f035ea2466",
   "https://chatgpt.com/gg/69caa6e708108198b02c2d2eaea30118",
   "https://chatgpt.com/gg/69c265cd2274819690fc291ef716524e",
@@ -170,7 +169,7 @@ max_tabs = 1
 id = "executor_pool"
 url = [
   "https://chatgpt.com/gg/69d126d34dc4819d8de9cba1b209d14c",
-  "https://chatgpt.com/",
+  # "https://chatgpt.com/",
   "https://chatgpt.com/gg/69ab7b06a5a88196bf33966df6feee02",
   "https://chatgpt.com/gg/69ca500acd888199a32b90339c82fa31",
 ]
@@ -183,8 +182,7 @@ max_tabs = 2
 [[llm.endpoints]]
 id = "exec_pool"
 url = [
-  "https://chatgpt.com/gg/69d1cee3c2648194bb2196d0832d28e1", 
-  "https://chatgpt.com/",
+  # "https://chatgpt.com/",
   "https://chatgpt.com/gg/699c50e06bc881a3aa5ac1866bf15679",
   "https://chatgpt.com/gg/69bb69adfe54819f9b4100d97cbd3912",
   "https://chatgpt.com/gg/69bca5997968819c90b2dbe13d4290b6",
@@ -255,8 +253,8 @@ executor_pool = 100
 
 [llm.roles.executor]
 burst = 2
-# response_timeout_secs = 600
-response_timeout_secs = 30
+response_timeout_secs = 120
+
 [llm.roles.executor.weights]
 executor_pool = 100
 
