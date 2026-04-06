@@ -250,6 +250,46 @@ impl EventRecord {
     }
 
     fn from_any_event(event: &AnyEvent) -> Self {
+        if let AnyEvent::Canon(canon) = event {
+            let kind = match canon.kind {
+                canon_event::EventKind::Tick => "tick",
+                canon_event::EventKind::RouteTick => "route_tick",
+                canon_event::EventKind::RouteSelected => "route_selected",
+                canon_event::EventKind::PlanningCompleted => "planning_completed",
+                canon_event::EventKind::ErrorOccurred => "error_occurred",
+                _ => "unknown",
+            }
+            .to_string();
+
+            let actor = canon.actor.clone();
+
+            let data = &canon.payload.data;
+            let message = data.get("message").and_then(Value::as_str).map(ToString::to_string);
+            let status = data.get("status").and_then(Value::as_str).map(ToString::to_string);
+            let debug_kind = data.get("kind").and_then(Value::as_str).map(ToString::to_string);
+            let approved_route = data.get("approved_route").and_then(Value::as_str).map(ToString::to_string);
+            let gate_rules_fired = data
+                .get("gate_rules_fired")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().filter_map(Value::as_str).map(ToString::to_string).collect())
+                .unwrap_or_default();
+
+            let meta_file = canon.payload.meta.file.clone().into();
+            let meta_line = Some(canon.payload.meta.line as u64);
+
+            return Self {
+                kind,
+                actor,
+                message,
+                status,
+                debug_kind,
+                approved_route,
+                gate_rules_fired,
+                meta_file,
+                meta_line,
+            };
+        }
+
         let text = format!("{event:?}");
         let lowered = text.to_lowercase();
 
@@ -304,6 +344,52 @@ impl EventRecord {
         }
 
         Self { kind, actor, message, status, debug_kind, approved_route, gate_rules_fired, meta_file: extract_meta_string(&text, "file: \""), meta_line: extract_meta_u64(&text, "line: ") }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canon_event::{CanonEvent, CanonPayload, CanonPayloadMeta, EventId, EventKind};
+    use canon_event_store::AnyEvent;
+
+    fn make_payload() -> CanonPayload {
+        CanonPayload {
+            input: serde_json::Value::Null,
+            output: serde_json::Value::Null,
+            delta: serde_json::Value::Null,
+            meta: CanonPayloadMeta { file: "test.rs".to_string(), line: 42 },
+            data: serde_json::json!({}),
+        }
+    }
+
+    fn make_event(kind: EventKind) -> CanonEvent {
+        CanonEvent {
+            id: EventId::new("test-id".to_string()),
+            kind,
+            actor: "test-actor".to_string(),
+            parent_ids: vec![],
+            payload: make_payload(),
+            ts: 0,
+            prev_event_id: None,
+        }
+    }
+
+    #[test]
+    fn event_record_from_any_event_classifies_tick_from_canon_event_kind() {
+        let event = AnyEvent::Canon(make_event(EventKind::Tick));
+        let record = EventRecord::from_any_event(&event);
+        assert_eq!(record.kind, "tick");
+    }
+
+    #[test]
+    fn event_record_from_any_event_classifies_routetick_with_parent_lineage() {
+        let mut ev = make_event(EventKind::RouteTick);
+        ev.parent_ids.push(EventId::new("parent".to_string()));
+        let event = AnyEvent::Canon(ev);
+
+        let record = EventRecord::from_any_event(&event);
+        assert_eq!(record.kind, "route_tick");
     }
 }
 
@@ -492,7 +578,7 @@ Repair requirements:\n\
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_existing {
     use super::*;
 
     fn record(

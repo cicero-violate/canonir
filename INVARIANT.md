@@ -14,10 +14,6 @@ every result must change future behavior
 
 ## Math
 
-[
-\text{Coverage} = \prod (S \times R \times A \times E)
-]
-
 ### Variables
 
 * (S): system state (semantic + runtime)
@@ -27,19 +23,15 @@ every result must change future behavior
 
 ### Equations
 
-* ((S_i, R_j, A_k) \Rightarrow E_l)
-* (\forall S: \neg \text{illegal transitions})
-* (\forall E: \text{state update must be consistent})
+* (S_i, R_j, A_k) implies E_l
+* For all S: no illegal transitions
+* For all E: state update must be consistent
 
 ---
 
 ## Additional Exhaustive State-Space Tests
 
 ### 1. Control-Chain Completeness
-
-[
-\forall c_i \Rightarrow c_{i+1} \in \text{allowed}
-]
 
 Test:
 
@@ -50,10 +42,6 @@ Test:
 
 ### 2. Parent-Causality Integrity
 
-[
-\forall e: |parent_ids| > 0 \ (\text{unless root})
-]
-
 Test:
 
 * no orphan events
@@ -62,10 +50,6 @@ Test:
 ---
 
 ### 3. Route × Objective Alignment
-
-[
-R = f(\text{objective})
-]
 
 Cases:
 
@@ -80,10 +64,6 @@ Assertion:
 
 ### 4. Action ↔ Intent Consistency
 
-[
-\text{intent}(A) = \text{semantic_intent}
-]
-
 Test:
 
 * “bootstrap” cannot emit “verify”
@@ -92,10 +72,6 @@ Test:
 ---
 
 ### 5. Execution Result Classification
-
-[
-E \Rightarrow \text{typed classification}
-]
 
 Cases:
 
@@ -111,10 +87,6 @@ Assertion:
 
 ### 6. State Drift Detection
 
-[
-S_{semantic} \neq S_{real} \Rightarrow \text{force refresh}
-]
-
 Test:
 
 * inject mismatch (filesystem vs semantic)
@@ -123,10 +95,6 @@ Test:
 ---
 
 ### 7. Loop Progress Guarantee
-
-[
-\exists k: S_k \neq S_{k-1}
-]
 
 Test:
 
@@ -137,10 +105,6 @@ Test:
 
 ### 8. Tool Idempotency / Safety
 
-[
-A_i = A_{i+1} \Rightarrow \text{forbidden if } S \text{ unchanged}
-]
-
 Test:
 
 * repeated same command
@@ -149,10 +113,6 @@ Test:
 ---
 
 ### 9. Failure Scope Exhaustiveness
-
-[
-\text{failure} \in {local, workspace, tool, none}
-]
 
 Test:
 
@@ -163,10 +123,6 @@ Test:
 
 ### 10. Planning Minimality
 
-[
-|batch| = 1 \ (\text{when simplify_plan_batch})
-]
-
 Test:
 
 * no multi-action plans in constrained mode
@@ -174,10 +130,6 @@ Test:
 ---
 
 ### 11. Invariant Closure
-
-[
-\forall S: \exists \text{valid next state}
-]
 
 Test:
 
@@ -187,10 +139,6 @@ Test:
 ---
 
 ### 12. Reward Consistency
-
-[
-\text{goodness}(S_{t+1}) \ge f(\Delta S)
-]
 
 Test:
 
@@ -202,10 +150,6 @@ Test:
 ## Meta-Level Test (Highest Value)
 
 ### State Enumeration Engine
-
-[
-\text{Generate all } S \Rightarrow \text{simulate all } (R, A)
-]
 
 * fuzz states:
 
@@ -219,11 +163,7 @@ Test:
 
 ## Insight
 
-You are moving toward:
-
-[
-\text{System} = \text{Closed under all reachable states}
-]
+You are moving toward a system closed under all reachable states.
 
 No undefined behavior.
 
@@ -234,6 +174,4 @@ No undefined behavior.
 * You already test **paths**
 * Next level = test **state-space closure**
 
-[
-\max(\text{coverage, determinism, robustness}) = \text{good}
-]
+Maximize coverage, determinism, and robustness.

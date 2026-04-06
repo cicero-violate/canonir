@@ -345,6 +345,8 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
         if msg.get("role").and_then(|r| r.as_str()) != Some("assistant") {
             continue;
         }
+        let mut saw_assistant = false;
+        let mut saw_empty = false;
         let raw_messages = match msg.get("raw_messages").and_then(|v| v.as_array()) {
             Some(a) => a,
             None => continue,
@@ -354,6 +356,7 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
             if author_role != "assistant" {
                 continue;
             }
+            saw_assistant = true;
             let channel = raw_msg.get("channel").and_then(|c| c.as_str()).unwrap_or("");
             if channel != "final" {
                 continue;
@@ -362,6 +365,10 @@ fn classify_calpico_array(arr: &[Value]) -> FrameResult {
             if !text.is_empty() {
                 return FrameResult::Snapshot(text.to_string());
             }
+            saw_empty = true;
+        }
+        if saw_assistant && saw_empty {
+            return FrameResult::Snapshot("LLM error: empty assistant response body".to_string());
         }
     }
     FrameResult::Ignore

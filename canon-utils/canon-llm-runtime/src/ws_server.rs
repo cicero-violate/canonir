@@ -103,6 +103,8 @@ struct ServerState {
     live_tabs: std::collections::HashSet<u32>,
     /// tabId -> last known URL.
     tab_urls: HashMap<u32, String>,
+    /// tabId -> owning endpoint_id (planner/executor/verifier/etc).
+    tab_endpoint_id: HashMap<u32, String>,
     /// URL -> queue of pre-opened tab IDs (TAB_READY without reqId).
     preopened_tabs_by_url: HashMap<String, std::collections::VecDeque<u32>>,
 
@@ -141,6 +143,7 @@ impl ServerState {
             pending_temp_chat: HashMap::new(),
             live_tabs: std::collections::HashSet::new(),
             tab_urls: HashMap::new(),
+            tab_endpoint_id: HashMap::new(),
             preopened_tabs_by_url: HashMap::new(),
             turn_replay_queue: Vec::new(),
             completed_turns: Vec::new(),
@@ -195,6 +198,13 @@ impl WsBridge {
             }
         }
         None
+    }
+
+    /// Associate a tab with an endpoint_id (planner/executor/verifier).
+    pub async fn set_tab_endpoint_id(&self, tab_id: u32, endpoint_id: &str) {
+        let mut st = self.state.lock().await;
+        st.tab_endpoint_id
+            .insert(tab_id, endpoint_id.to_string());
     }
 
     /// Send a TURN to `tab_id` and wait for the assembled response.
@@ -522,6 +532,7 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
                     queue.retain(|id| *id != tab_id);
                 }
             }
+            st.tab_endpoint_id.remove(&tab_id);
             st.tab_assemblers.remove(&tab_id);
             st.pending.retain(|(tid, _), _| *tid != tab_id);
             st.pending_turn_id.remove(&tab_id);
@@ -682,9 +693,11 @@ async fn handle_inbound(raw: &str, state: &Arc<Mutex<ServerState>>) {
 
             if let Some(text) = assembled {
                 // Dump assembled message for debugging (Gemini/ChatGPT).
+                let endpoint_id = st.tab_endpoint_id.get(&tab_id).cloned();
                 let assembled_record = json!({
                     "tab_id": tab_id,
                     "turn_id": effective_turn_id,
+                    "endpoint_id": endpoint_id,
                     "text": text,
                 });
                 append_jsonl("./frames/assembled.jsonl", &assembled_record);

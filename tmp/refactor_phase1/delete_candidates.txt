@@ -1,2 +1,0 @@
-canon-utils/canon-runtime/src/consumers/harness_repair_consumer.rs.bak
-canon-utils/canon-runtime/src/consumers/harness_repair_mode.rs.bak

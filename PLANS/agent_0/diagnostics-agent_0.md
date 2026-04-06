@@ -1,147 +1,123 @@
 # Diagnostics Report
 
 ## Inputs Scanned
-- Event log segments (full history + latest samples)
+- Event log segments under state/event_log/event.tlog.d (20 recent files)
 - VIOLATIONS.md
-- runtime_output.txt traces
-- canon-runtime source (append + emitter + wire conversion)
-
-Key observation: ZERO control events exist in tlog despite confirmed runtime emission activity; events are emitted but dropped before persistence
-
----
+- canon-runtime emit + loop driver
+- canon-route executor + decision
+- loop_e2e failing tests
 
 ## Ranked Failures
 
-### 1. Impact: CRITICAL
-Signal: Events are emitted but never persisted to tlog
+### 1. Impact: CRITICAL (ROOT FAILURE)
+**Signal:** No control events exist in canonical event log
 
-Evidence:
-- Event log contains ZERO control events (Tick, RouteSelected, etc.)
-- Runtime traces show append attempts (APPEND ENTRY / TLOG ATTEMPT)
-- '[INIT GUARD HIT] tlog_path=None dropping kind=...'
-- '[NO WRITER] tlog_writer is None at append time'
-- emit_with_parents(..., vec![]) observed in multiple call sites
-- Concrete offending call sites:
-  - canon-utils/canon-loop/src/context.rs:349
-    - emitter.emit_with_parents(event, vec![], ...)
-  - canon-utils/canon-runtime/src/bin/event_runtime.rs:628
-    - emit_with_parents(PromptLoaded, vec![], ...)
+**Evidence:**
+- 20 log segments scanned
+- Tick=0, RouteTick=0, RouteSelected=0, decision_trace=0 for all files
+- Logs contain only rustc/code events despite non-zero sizes
+- loop_e2e tests fail asserting these events must exist
 
-Root Cause (COMPOUND FAILURE):
-1) Writer Initialization Failure
-- tlog_path is None during early emissions
-- tlog_writer is not constructed before append_runtime_event
-- INIT GUARD and NO WRITER paths drop events
+**Root Cause:**
+- Control loop not executing or not reaching persistence layer
+- Serialization layer supports events → not dropped downstream
+- Therefore failure is upstream:
+  - emit_tick not being called continuously OR
+  - runtime loop not progressing OR
+  - event bus failing to append control events
 
-2) Causal Chain Violation
-- emit_with_parents(..., vec![]) used in:
-  - canon-loop/src/context.rs
-  - event_runtime.rs (PromptLoaded)
-- runtime_event_to_wire rejects non-root events with empty parent_ids
-
-These combine to ensure ALL control events are dropped.
-
-Repair Targets:
-- canon-runtime:
-  - initialize tlog_path BEFORE any emission
-  - construct tlog_writer before runtime loop starts
-  - remove silent INIT GUARD / NO WRITER drops → fail fast instead
-- emission sites (GLOBAL):
-  - eliminate emit_with_parents(..., vec![])
-  - enforce parent_ids propagation from trigger event
-- invariants:
-  - fail-fast if non-root event has empty parent_ids
-
-Concrete Violations (confirmed):
-- canon-utils/canon-loop/src/context.rs:349
-  - emit_with_parents(..., vec![])
-- canon-utils/canon-runtime/src/bin/event_runtime.rs:628
-  - emit_with_parents(..., vec![])
-
-These sites directly violate causal chain requirements and must be fixed first.
+**Repair Targets:**
+- canon-runtime/src/lib.rs::emit_tick
+  - MUST run every cycle
+  - MUST emit Tick → RouteTick
+  - MUST guarantee append success
+- canon-runtime/src/bin/event_runtime.rs
+  - Ensure infinite loop execution (no early exit)
+  - Ensure emit_tick invoked repeatedly
+- Event bus / writer
+  - Guarantee emit_event → append always executes
+  - Add read-after-write invariant
 
 ---
 
 ### 2. Impact: CRITICAL
-Signal: Runtime loop executes but produces no persisted events
+**Signal:** RouteTick does not deterministically trigger dispatch
 
-Evidence:
-- runtime_output.txt shows dispatch + emission traces
-- BUT tlog contains zero control events
+**Evidence:**
+- executor.rs uses dispatch_in_progress gating
+- try_dispatch_route can early-return
 
-Root Cause:
-- Events rejected during wire conversion due to missing parent_ids
+**Root Cause:**
+- Executor-local state suppresses dispatch
 
-Repair Targets:
-- canon-loop:
-  - derive decision from SemanticStateSummary
-  - emit decision event per tick
+**Repair Targets:**
+- canon-route/src/executor.rs
+  - Remove dispatch_in_progress gating
+  - Enforce exactly-one dispatch per RouteTick
 
 ---
 
-### 3. Impact: CRITICAL
-Signal: State → Decision → Routing pipeline absent
+### 3. Impact: HIGH
+**Signal:** Control authority not derived from semantic state
 
-Evidence:
-- decision = 0
-- route_selected = 0
+**Evidence:**
+- reroute_requested / dispatch flags influence flow
 
-Root Cause:
-- upstream persistence failure blocks all pipeline stages
-
-Repair Targets:
-- canon-route:
-  - ensure decision produces RouteSelected
-  - enforce decision → transition invariant
+**Repair Targets:**
+- Remove executor-local control flags entirely
+- Move control authority into invariant/policy layer
 
 ---
 
 ### 4. Impact: HIGH
-Signal: Violations.md not grounded in current tlog
+**Signal:** decision_trace missing
 
-Evidence:
-- violations reference RouteSelected duplication but none exist in log
+**Evidence:**
+- decision_trace count = 0 across all logs
 
-Root Cause:
-- diagnostics based on stale or non-persisted traces
-
-Repair Targets:
-- require tlog-backed evidence for all violations
+**Repair Targets:**
+- Emit decision_trace exactly once per RouteTick
+- Include SemanticStateSummary and selected route
 
 ---
 
 ### 5. Impact: HIGH
-Signal: System appears non-event-sourced
+**Signal:** Routing not fully semantic
 
-Evidence:
-- only rustc/tooling events present
+**Evidence:**
+- decision.rs incomplete mapping coverage
 
-Root Cause:
-- persistence failure hides actual runtime behavior
+**Repair Targets:**
+- Expand SemanticStateSummary → route mapping
+- Ensure executor passes full semantic state
 
-Repair Targets:
-- restore full event pipeline visibility
+---
+
+### 6. Impact: HIGH
+**Signal:** Policy/invariant layer not enforced before emission
+
+**Evidence:**
+- RouteSelected not gated by invariant/policy
+
+**Repair Targets:**
+- Enforce invariant + policy BEFORE RouteSelected emission
 
 ---
 
 ## Planner Handoff
 
-### Priority Order
-1. Fix parent_ids propagation (ROOT BLOCKER)
-2. Eliminate emit_located usage
-3. Enforce emit_with_parents everywhere
-4. Verify events pass wire conversion
-5. Then restore decision → routing → loop stages
+### Highest Priority Repairs
+1. Restore emit_tick loop execution
+2. Ensure Tick and RouteTick are persisted every cycle
+3. Remove executor-local dispatch gating
+4. Enforce exactly-once RouteTick → dispatch
+5. Emit decision_trace per tick
+6. Enforce SemanticStateSummary-driven routing
+7. Integrate invariant + policy gating before emission
 
-### Key Insight
+### Outcome Target
+state → decision → RouteSelected → event log
 
-System DOES execute runtime loop and emits events.
-But events are dropped before persistence due to:
-- missing writer initialization
-- missing parent_ids
+### Status
+CRITICAL FAILURE — CONTROL LOOP NOT PRODUCING CANONICAL EVENTS
 
-This is a combined persistence + causal chain failure.
-
-Fix must begin with:
-1) writer initialization
-2) parent_ids propagation

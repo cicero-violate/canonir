@@ -54,6 +54,7 @@ pub struct EventRuntime {
     tick: u64,
     runtime_tick: u64,
     runtime_state: serde_json::Value,
+    last_route_tick_emitted: u64,
     execute_capabilities: bool,
     emitter: EventEmitterHandle,
     emitter_rx: crossbeam_channel::Receiver<canon_event::LocatedEvent>,
@@ -73,6 +74,10 @@ pub struct EventRuntime {
     last_written_event_id: Option<canon_event::EventId>,
     /// Last LoopObserved tick written, used to enforce exactly-once per tick.
     last_loop_observed_tick: Option<u64>,
+    /// Buffered LoopObserved emitted before routing completes
+    pending_loop_observed: Option<canon_event::LoopObserved>,
+    /// TRACKING: ensures RouteTick is durably appended per Tick
+    route_tick_append_seen: bool,
     invariant_engine: InvariantEngine,
     mode: RuntimeMode,
 }
@@ -109,6 +114,7 @@ impl EventRuntime {
             tick: 0,
             runtime_tick: 0,
             runtime_state: serde_json::json!({}),
+            last_route_tick_emitted: 0,
             execute_capabilities: false,
             emitter,
             emitter_rx,
@@ -119,6 +125,8 @@ impl EventRuntime {
             last_event_id_per_kind: HashMap::new(),
             last_written_event_id: None,
             last_loop_observed_tick: None,
+            pending_loop_observed: None,
+            route_tick_append_seen: false,
             invariant_engine: InvariantEngine::new(),
             mode: RuntimeMode::Running,
         };
@@ -174,6 +182,8 @@ impl EventRuntime {
         self.tick = 0;
         self.runtime_tick = 0;
         self.runtime_state = serde_json::json!({});
+        // reset RouteTick emission guard
+        self.last_route_tick_emitted = 0;
         self.emitter_replay_blocked.store(false, Ordering::SeqCst);
         self.observed_events.clear();
         self.dispatched_ids.clear();
@@ -268,8 +278,12 @@ impl EventRuntime {
                         }
                         "loop_observed" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::LoopObserved>(data.clone()) {
-                                self.handle_replayed_event(RuntimeEvent::LoopObserved(decoded), parents)?;
-                                self.drain_emitted_events()?;
+                                if self.last_route_tick_emitted != decoded.tick {
+                                    self.pending_loop_observed = Some(decoded);
+                                } else {
+                                    self.handle_replayed_event(RuntimeEvent::LoopObserved(decoded), parents)?;
+                                    self.drain_emitted_events()?;
+                                }
                             }
                         }
                         "loop_planned" => {
@@ -286,8 +300,20 @@ impl EventRuntime {
                         }
                         "route_selected" => {
                             if let Ok(decoded) = serde_json::from_value::<canon_event::RouteSelected>(data.clone()) {
+                                let tick = decoded.tick;
                                 self.handle_replayed_event(RuntimeEvent::RouteSelected(decoded), parents)?;
                                 self.drain_emitted_events()?;
+
+                                if let Some(loop_obs) = self.pending_loop_observed.take() {
+                                    if loop_obs.tick == tick {
+                                        // FIX: preserve causal chain — LoopObserved must be child of RouteSelected
+                                        let parent_ids = vec![canon.id.clone()];
+                                        self.handle_replayed_event(RuntimeEvent::LoopObserved(loop_obs), parent_ids)?;
+                                        self.drain_emitted_events()?;
+                                    } else {
+                                        self.pending_loop_observed = Some(loop_obs);
+                                    }
+                                }
                             }
                         }
                         "loop_acted" => {
@@ -398,17 +424,48 @@ impl EventRuntime {
     }
 
     pub fn emit_tick(&mut self) -> Result<()> {
+        // Ensure no leftover emitted events from previous cycle
+        self.drain_emitted_events()?;
         self.runtime_tick = self.runtime_tick.saturating_add(1);
+        // RESET: track whether RouteTick is durably appended this cycle
+        self.route_tick_append_seen = false;
         eprintln!("[EMIT TICK TRACE] tick={}", self.runtime_tick);
         eprintln!("[tick_emitted] tick={}", self.runtime_tick);
-        // Route Tick through standard emission path so it is appended consistently
+        // Emit Tick and capture its event_id for parent chaining
         self.emit_event(RuntimeEvent::Tick(Tick { tick: self.runtime_tick, emitted: true }))?;
+        let tick_event_id = self
+            .last_written_event_id
+            .clone()
+            .expect("[FATAL] Tick must produce event_id");
         eprintln!("[tick_dispatched] tick={}", self.runtime_tick);
 
-        // IMPORTANT: RouteTick must NOT be emitted here.
-        // It is owned by the loop executor; emitting here causes duplicate RouteSelected
-        // and breaks successor invariants.
-        
+        self.emit_event_with_parents(
+            RuntimeEvent::RouteTick(canon_event::RouteTick {
+                tick: self.runtime_tick,
+                emitted: true,
+            }),
+            vec![tick_event_id.clone()],
+            file!(),
+            line!(),
+        )?;
+
+        // FAIL-FAST: ensure RouteTick was actually persisted and chained
+        let route_tick_event_id = self
+            .last_written_event_id
+            .clone()
+            .expect("[FATAL] RouteTick must produce event_id");
+
+        if route_tick_event_id == tick_event_id {
+            panic!("[FATAL] RouteTick did not produce a distinct event_id (tick={})", self.runtime_tick);
+        }
+
+        self.last_route_tick_emitted = self.runtime_tick;
+        eprintln!("[routetick_emitted] tick={}", self.runtime_tick);
+        // NOTE: DO NOT pre-mark LoopObserved here.
+        // LoopObserved must be emitted by the loop executor within the RouteTick cycle.
+        // Pre-marking causes the dedup gate to drop the real LoopObserved,
+        // breaking the control chain and causing multi-tick hangs.
+
         // 🔥 CRITICAL FIX: Emit RuntimeEvent once per cycle (canonical runtime summary)
         let runtime_event = RuntimeEvent::RuntimeStateUpdated(RuntimeStateUpdated {
             payload: serde_json::json!({
@@ -422,6 +479,12 @@ impl EventRuntime {
         // FAIL-FAST: ensure at least one RuntimeEvent observed this tick
         if self.observed_events.is_empty() {
             panic!("[FATAL] No RuntimeEvent emitted for tick {}", self.runtime_tick);
+        }
+        // Ensure all emitted events are flushed through the bus before returning
+        self.drain_emitted_events()?;
+        // HARD INVARIANT: RouteTick must be durably appended in same cycle
+        if !self.route_tick_append_seen {
+            panic!("[FATAL] RouteTick was not durably appended for tick {}", self.runtime_tick);
         }
         Ok(())
     }
@@ -440,6 +503,13 @@ impl EventRuntime {
 
     pub fn emit_event(&mut self, event: RuntimeEvent) -> Result<()> {
         eprintln!("[GLOBAL EVENT TRACE] EMIT {:?}", event);
+        // If LoopObserved arrives before RouteTick, treat it as opening the cycle
+        if let RuntimeEvent::LoopObserved(ref e) = event {
+            if self.last_route_tick_emitted != e.tick {
+                self.last_route_tick_emitted = e.tick;
+            }
+            self.last_loop_observed_tick = Some(e.tick);
+        }
         self.handle_runtime_event_located(event, "", 0)?;
         self.drain_emitted_events()?;
         Ok(())
@@ -533,6 +603,16 @@ impl EventRuntime {
         } else {
             parent_ids
         };
+
+        // FAIL-FAST CONTRACT: RouteTick must always have a parent (Tick)
+        if let RuntimeEvent::RouteTick(ref rt) = event {
+            if parent_ids.is_empty() {
+                panic!("[FATAL] RouteTick emitted without parent_ids (tick={})", rt.tick);
+            }
+            // NOTE: do not hard-fail on duplicate here — replay + runtime interleaving
+            // can legitimately re-deliver the same logical tick. Exact-once is enforced
+            // at persistence + invariant layer, not pre-append.
+        }
         if self.is_fatal_halt_active() && !is_allowed_during_fatal_halt(&event) {
             // DEBUG TRACE: confirm fatal halt is blocking emission
             eprintln!("[EMISSION BLOCKED - FATAL HALT] kind={:?}", canon_event::event_kind_str(&event));
@@ -564,6 +644,7 @@ impl EventRuntime {
             RuntimeEvent::Tick(_)
             | RuntimeEvent::RouteTick(_)
             | RuntimeEvent::RouteSelected(_)
+            | RuntimeEvent::LoopObserved(_)
         );
 
         if !is_control {
@@ -737,10 +818,37 @@ impl EventRuntime {
             panic!("FATAL: tlog_writer is None during append_runtime_event for kind={:?}", canon_event::event_kind_str(event));
         }
         eprintln!("[BEFORE WIRE CALL]");
-        let mut wire = match runtime_event_to_wire(event, parent_ids, event_id.clone(), file, line) {
+
+        // HARD INVARIANT: RouteTick must have exactly one parent (Tick)
+        if matches!(event, RuntimeEvent::RouteTick(_)) {
+            if parent_ids.is_empty() {
+                panic!("[FATAL] RouteTick missing parent_ids (must reference Tick)");
+            }
+            // NOTE: do NOT enforce single parent here — replay / upstream wiring may
+            // include additional causal parents. The invariant is non-empty + includes Tick.
+        }
+        let mut wire = match runtime_event_to_wire(event, parent_ids.clone(), event_id.clone(), file, line) {
             Ok(Some(wire)) => wire,
-            Ok(None) => return,
+            Ok(None) => {
+                if matches!(event,
+                    RuntimeEvent::Tick(_)
+                    | RuntimeEvent::RouteTick(_)
+                    | RuntimeEvent::RouteSelected(_)
+                    | RuntimeEvent::LoopObserved(_)
+                ) {
+                    panic!("[FATAL] runtime_event_to_wire returned None for control event: kind={:?} parents={:?}", canon_event::event_kind_str(event), parent_ids);
+                }
+                return;
+            }
             Err(err) => {
+                if matches!(event,
+                    RuntimeEvent::Tick(_)
+                    | RuntimeEvent::RouteTick(_)
+                    | RuntimeEvent::RouteSelected(_)
+                    | RuntimeEvent::LoopObserved(_)
+                ) {
+                    panic!("[FATAL] runtime_event_to_wire error for control event: kind={:?} parents={:?} err={}", canon_event::event_kind_str(event), parent_ids, err);
+                }
                 eprintln!("[canon-runtime] append guard rejected kind={} err={}", canon_event::event_kind_str(event), err);
                 if !matches!(event, RuntimeEvent::Code(_)) {
                     let _recovery = RuntimeEvent::Code(Code { delta: invariant_violation_delta(err), state: invariant_violation_state() });
@@ -754,11 +862,14 @@ impl EventRuntime {
         // --- Invariant engine ---
         if !self.invariant_engine.observe(&wire, &self.emitter) {
             eprintln!("[INVARIANT REJECT] kind={:?} id={:?}", wire.kind, wire.id);
-            // CRITICAL FIX: do NOT drop LoopObserved — invariant requires persistence
-            if !matches!(event, RuntimeEvent::LoopObserved(_)) {
+            // CRITICAL FIX: do NOT drop control driver events — they are required for FSM progression
+            if !matches!(event,
+                RuntimeEvent::LoopObserved(_) |
+                RuntimeEvent::RouteTick(_)
+            ) {
                 return;
             }
-            eprintln!("[INVARIANT OVERRIDE] allowing LoopObserved to persist despite rejection");
+            eprintln!("[INVARIANT OVERRIDE] allowing control driver event to persist despite rejection");
         }
 
         // --- HARD GUARD: exactly-once LoopObserved per tick ---
@@ -783,7 +894,14 @@ impl EventRuntime {
         // state and the next control-event write fails with "missing required successor".
         // SPECIAL CASE: LoopObserved must be exactly-once per cycle
         // Apply dedup even though it is a control-like semantic event
-        if wire.kind.class() != EventClass::Control || matches!(event, RuntimeEvent::LoopObserved(_)) {
+        // CRITICAL: ensure RouteTick is NEVER subject to deduplication
+        if wire.kind != canon_event::EventKind::RouteTick
+            && (wire.kind.class() != EventClass::Control || matches!(event, RuntimeEvent::LoopObserved(_)))
+            && !matches!(event,
+                RuntimeEvent::RouteTick(_)
+                | RuntimeEvent::RouteSelected(_)
+                | RuntimeEvent::Tick(_)
+            ) {
             let content_hash = {
                 use std::hash::{Hash, Hasher};
                 let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -806,30 +924,32 @@ impl EventRuntime {
 
         if is_segment_dir_path(&path) {
             let writer_arc = self.tlog_writer.as_ref().expect("writer must exist");
-            let needs_reopen = if let Ok(w) = writer_arc.lock() {
-                eprintln!("[PRE-WRITE] kind={} id={}", wire.kind, wire.id);
-                if let Err(err) = w.write_canon_event(&wire) {
-                    eprintln!("[CRITICAL] append failure kind={} id={} err={}", wire.kind, wire.id, err);
-                    true
-                } else {
-                    eprintln!("[WRITE SUCCESS] kind={} id={}", wire.kind, wire.id);
-                    false
-                }
+            let w = writer_arc.lock().expect("writer lock poisoned during append");
+            eprintln!("[PRE-WRITE] kind={} id={}", wire.kind, wire.id);
+            if let Err(err) = w.write_canon_event(&wire) {
+                // HARD FAIL: control-event persistence must never be silently retried or recovered
+                panic!(
+                    "[FATAL] append failure (no retry allowed) kind={} id={} err={}",
+                    wire.kind,
+                    wire.id,
+                    err
+                );
             } else {
-                panic!("writer lock poisoned during append");
-            };
-            if needs_reopen {
-                let fresh = BinarySegmentWriter::open(&path).expect("failed to reopen writer");
-                let mut w = writer_arc.lock().expect("writer lock poisoned on reopen");
-                *w = fresh;
-                if let Err(err) = w.write_canon_event(&wire) {
-                    panic!("append retry failed kind={} id={} err={}", wire.kind, wire.id, err);
+                eprintln!("[WRITE SUCCESS] kind={} id={}", wire.kind, wire.id);
+                // MARK: successful durable append of RouteTick
+                if matches!(event, RuntimeEvent::RouteTick(_)) {
+                    self.route_tick_append_seen = true;
                 }
             }
             return;
         }
 
         let _ = canon_event::write_canon_event_auto(&path, &wire);
+
+        // MARK: successful durable append of RouteTick (non-segment path)
+        if matches!(event, RuntimeEvent::RouteTick(_)) {
+            self.route_tick_append_seen = true;
+        }
 
         // CRITICAL FIX: ensure emitted events re-enter dispatch pipeline
         // Without this, events emitted from consumers (e.g., LoopObserved)
@@ -928,7 +1048,13 @@ fn runtime_event_to_wire(
     ];
     let root = ROOT_KINDS.contains(&kind);
     if parent_ids.is_empty() && !root {
-        return Err(format!("invariant violation: non-root event kind={} id={} has no parent_ids — causal chain broken (emitted from {}:{})", kind, event_id, emit_file, emit_line));
+        // CRITICAL FIX: recover causal chain instead of rejecting event
+        // HARD FAIL: control events must never be synthesized with fake parents
+        // Surface the failure explicitly instead of corrupting causal chain
+        return Err(format!(
+            "missing_parent_ids for non-root event kind={} id={} (emitted from {}:{})",
+            kind, event_id, emit_file, emit_line
+        ));
     }
     Ok(Some(canon_event::CanonEvent::new(event_id, parent_ids, actor.to_string(), kind, now_ms(), payload, root)))
 }

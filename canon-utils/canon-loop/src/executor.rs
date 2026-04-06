@@ -643,8 +643,14 @@ impl LoopStageExecutor {
                 return;
             }
         }
+        // ENFORCE: observe only after RouteSelected for current tick
+        let has_route_selected = self.ctx.last_route_selected_tick == Some(self.ctx.current_tick);
         if observe_mode == ObserveExecutionMode::Forced {
-            self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
+            if has_route_selected {
+                self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Forced);
+            } else {
+                return;
+            }
         } else if observe_mode == ObserveExecutionMode::SuppressedByPendingSuccessor {
             self.emit_debug(
                 trigger_id,
@@ -659,7 +665,11 @@ impl LoopStageExecutor {
                 }),
             );
         } else if observe_mode == ObserveExecutionMode::Triggered {
-            self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Triggered);
+            if has_route_selected {
+                self.execute_observe_mode(trigger_id, event, ObserveExecutionMode::Triggered);
+            } else {
+                return;
+            }
         }
     }
 
@@ -845,7 +855,7 @@ impl EventConsumer for LoopStageExecutor {
         }
         // Observe must be deliberate, not unconditional. Tick starts the cycle,
         // and specific handlers may additionally request observe when needed.
-        let mut trigger_observe = matches!(event, RuntimeEvent::Tick(_));
+        let mut trigger_observe = false;
         let force_observe_recovery = Self::recovery_forces_observe(&recovery_eval);
         match event {
             RuntimeEvent::Debug(debug) if debug.kind == "recovery_event" => {}
@@ -857,22 +867,20 @@ impl EventConsumer for LoopStageExecutor {
                 self.record_graph_proof_result(debug, false);
             }
             RuntimeEvent::RouteSelected(rs) => {
+                // ENFORCE SPEC: exactly one RouteSelected per tick
+                if let Some(last_tick) = self.ctx.last_route_selected_tick {
+                    if last_tick == rs.tick {
+                        panic!("duplicate RouteSelected within the same tick");
+                    }
+                }
+                self.ctx.last_route_selected_tick = Some(rs.tick);
                 self.handle_route_selected(rs);
             }
             RuntimeEvent::Tick(Tick { tick, .. }) => {
                 self.ctx.current_tick = *tick;
                 self.ctx.last_route_selected_tick = None;
-                // CRITICAL FIX: enforce state -> decision -> transition each loop cycle
-                // Emit RouteTick to trigger routing independently of external events
-                // FIX: ensure RouteTick is not deduplicated by writer
-                // Using emitted=true makes payload differ from default and helps bypass
-                // per-kind payload hashing drop behavior
-                self.ctx.emitter.emit_with_parents(
-                    RuntimeEvent::RouteTick(canon_event::RouteTick { tick: *tick, emitted: true }),
-                    vec![trigger_id.clone()],
-                    file!(),
-                    line!(),
-                );
+                // RouteTick emission removed from loop executor.
+                // Runtime is the single authority for RouteTick to prevent duplication.
             }
             RuntimeEvent::AgentRegistered(AgentRegistered { payload }) => {
                 self.handle_agent_registered(payload);

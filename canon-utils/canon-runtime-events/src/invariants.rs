@@ -50,6 +50,7 @@ pub fn required_successor_kind(kind: EventKind, approved_route: Option<&str>) ->
         return None;
     }
     match kind {
+        EventKind::RouteTick => Some(EventKind::RouteSelected),
         EventKind::RouteSelected => match approved_route? {
             "observe" => Some(EventKind::LoopObserved),
             "plan" => Some(EventKind::PlanningCompleted),
@@ -103,6 +104,12 @@ pub fn required_successor(event: &CanonEvent) -> Option<PendingTransition> {
         return None;
     }
     match event.kind {
+        EventKind::RouteTick => Some(PendingTransition {
+            expected: required_successor_kind(event.kind, None)?,
+            parent: event.id.clone(),
+            source_kind: event.kind,
+            note: "route tick must select exactly one route".to_string(),
+        }),
         EventKind::RouteSelected => {
             let approved = route_selected_target(event)?;
             let expected = required_successor_kind(event.kind, Some(approved))?;
@@ -151,6 +158,7 @@ mod tests {
             assert_eq!(required_successor_kind(EventKind::RouteSelected, Some(approved)), Some(expected));
         }
         let control_cases = [
+            (EventKind::RouteTick, EventKind::RouteSelected),
             (EventKind::LoopObserved, EventKind::RouteSelected),
             (EventKind::PlanningCompleted, EventKind::RouteSelected),
             (EventKind::LoopActed, EventKind::RouteSelected),
@@ -289,6 +297,15 @@ mod tests {
         assert!(required_successor(&cap).is_none());
         let tick = root("tick", EventKind::Tick);
         assert!(required_successor(&tick).is_none());
+    }
+
+    #[test]
+    fn integration_required_successor_for_route_tick_is_route_selected() {
+        use super::required_successor;
+        let tick = root("route-tick", EventKind::RouteTick);
+        let pending = required_successor(&tick).expect("route tick should require route_selected");
+        assert_eq!(pending.expected, EventKind::RouteSelected);
+        assert_eq!(pending.parent.as_str(), "route-tick");
     }
 
     #[test]

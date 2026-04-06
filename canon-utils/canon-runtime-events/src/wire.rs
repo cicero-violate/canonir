@@ -156,7 +156,9 @@ impl EventKind {
 
     pub fn class(self) -> EventClass {
         match self {
-            EventKind::RouteSelected
+            EventKind::Tick
+            | EventKind::RouteTick
+            | EventKind::RouteSelected
             | EventKind::LoopObserved
             | EventKind::PlanningCompleted
             | EventKind::LoopActed
@@ -170,6 +172,8 @@ impl EventKind {
     pub fn allowed_next(self) -> &'static [EventKind] {
         use EventKind::*;
         match self {
+            Tick => &[RouteTick],
+            RouteTick => &[RouteSelected],
             RouteSelected => &[LoopObserved, PlanningCompleted, LoopActed, LoopVerified, VerifierPolicyUpdated, LoopRewarded],
             LoopObserved => &[RouteSelected],
             PlanningCompleted => &[RouteSelected],

@@ -430,9 +430,9 @@ Canonical structure:
   "plan_id": "<uuid>",
   "version": 1,
   "derived_from": {
-    "spec": "PLANS/SPEC.md",
+    "spec": "SPEC.md",
     "objectives": "PLANS/OBJECTIVES.md",
-    "invariants": "PLANS/INVARIANTS.md",
+    "invariants": "INVARIANT.md",
     "violations": "VIOLATIONS.md",
     "diagnostics": "PLANS/<instance>/diagnostics-<instance>.md"
   },

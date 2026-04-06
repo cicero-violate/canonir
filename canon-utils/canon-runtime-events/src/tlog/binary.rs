@@ -646,6 +646,10 @@ mod tests {
         CanonEvent::new(EventId::new(id.to_string()), Vec::new(), "test", kind, ts, payload(data, delta), true)
     }
 
+    fn child_event(parent: &CanonEvent, id: &str, kind: EventKind, ts: u64, data: serde_json::Value, delta: serde_json::Value) -> CanonEvent {
+        CanonEvent::new(EventId::new(id.to_string()), vec![parent.id.clone()], "test", kind, ts, payload(data, delta), false)
+    }
+
     #[test]
     fn effect_events_do_not_discharge_pending_control_obligation() {
         let dir = temp_dir("effect_neutral");
@@ -689,5 +693,40 @@ mod tests {
 
         let loop_planned = event("planned-1", EventKind::LoopPlanned, 3, json!({"action_kind":"noop"}), json!({"signals": {}}));
         writer.write_canon_event(&loop_planned).unwrap();
+    }
+
+    #[test]
+    fn tick_parented_route_tick_persists_and_leads_to_route_selected() {
+        let dir = temp_dir("route_tick_persistence");
+        let writer = BinarySegmentWriter::open(&dir).unwrap();
+
+        let tick = event("tick-1", EventKind::Tick, 1, json!({"tick": 1, "emitted": true}), json!({}));
+        writer.write_canon_event(&tick).unwrap();
+
+        let route_tick = child_event(&tick, "route-tick-1", EventKind::RouteTick, 2, json!({"tick": 1, "emitted": true}), json!({}));
+        writer.write_canon_event(&route_tick).unwrap();
+
+        let route_selected = child_event(
+            &route_tick,
+            "route-selected-1",
+            EventKind::RouteSelected,
+            3,
+            json!({"approved_route":"observe","suggested_route":"observe"}),
+            json!({}),
+        );
+        writer.write_canon_event(&route_selected).unwrap();
+
+        let log_path = dir.join("00000000000000000000.log");
+        let log = fs::read_to_string(&log_path).unwrap();
+        let events: Vec<CanonEvent> = log.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].kind, EventKind::Tick);
+        assert_eq!(events[1].kind, EventKind::RouteTick);
+        assert_eq!(events[1].parent_ids.len(), 1);
+        assert_eq!(events[1].parent_ids[0].as_str(), tick.id.as_str());
+        assert_eq!(events[2].kind, EventKind::RouteSelected);
+        assert_eq!(events[2].parent_ids.len(), 1);
+        assert_eq!(events[2].parent_ids[0].as_str(), route_tick.id.as_str());
     }
 }

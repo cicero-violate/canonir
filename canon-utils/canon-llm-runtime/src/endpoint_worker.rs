@@ -1,8 +1,8 @@
 use super::config::CapabilityConfig;
 use super::response_router;
 use super::tab_management::{
-    tab_manager_apply_rate_limit_penalty, tab_manager_get_or_open_tab, tab_manager_mark_tab_in_flight, tab_manager_mark_tab_response, tab_manager_mark_tab_sent,
-    tab_manager_note_success,
+    tab_manager_apply_rate_limit_penalty, tab_manager_drop_tab, tab_manager_get_or_open_tab, tab_manager_mark_tab_in_flight,
+    tab_manager_mark_tab_response, tab_manager_mark_tab_sent, tab_manager_note_success,
 };
 
 pub use super::tab_management::{tab_manager_log_llm, tab_manager_now_ms, TabManagerHandle};
@@ -128,6 +128,7 @@ impl LlmWorker {
         let response_timeout_secs = response_timeout_secs.unwrap_or_else(|| self.bridge.response_timeout_secs());
         for attempt in 0..MAX_SEND_ATTEMPTS {
             let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, selected_url, &self.tabs, self.max_tabs).await?;
+            self.bridge.set_tab_endpoint_id(tab_id, &self.endpoint_id).await;
 
             // For stateful endpoints, send the role/system prompt only on the first
             // turn to this tab; all subsequent turns carry only the user prompt.
@@ -166,6 +167,9 @@ impl LlmWorker {
                     tab_manager_log_llm(format!("phase={} endpoint={} tab={} retained_after_error", phase, self.endpoint_id, tab_id));
                     tab_manager_log_llm(format!("phase={} endpoint={} adaptive_penalty_ms={}", phase, self.endpoint_id, penalty_ms));
                     if should_retry_send_turn(&e) && attempt + 1 < MAX_SEND_ATTEMPTS {
+                        tab_manager_log_llm(format!("phase={} endpoint={} tab={} dropping_tab_after_error={}", phase, self.endpoint_id, tab_id, e));
+                        tab_manager_drop_tab(&self.tabs, &self.endpoint_id, tab_id).await;
+                        let _ = self.bridge.close_tab(tab_id).await;
                         tab_manager_log_llm(format!("phase={} endpoint={} retrying_same_pool_after_error={}", phase, self.endpoint_id, e));
                         continue;
                     }
@@ -175,6 +179,13 @@ impl LlmWorker {
             tab_manager_mark_tab_response(&self.tabs, tab_id).await;
             tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
             tab_manager_log_llm(format!("phase={} endpoint={} tab={} response_ok bytes={}", phase, self.endpoint_id, tab_id, raw.len()));
+            if raw.trim().is_empty() || raw.contains("LLM error: empty assistant response body") {
+                tab_manager_log_llm(format!("phase={} endpoint={} tab={} empty_response_detected attempt={}", phase, self.endpoint_id, tab_id, attempt + 1));
+                if attempt + 1 < MAX_SEND_ATTEMPTS {
+                    continue;
+                }
+                return Err(anyhow::anyhow!("llm send_turn error: empty assistant response body"));
+            }
             if !llm_worker_response_matches_req_id(&raw, req_id) {
                 tab_manager_log_llm(format!("phase={} endpoint={} tab={} req_id_mismatch expected={}", phase, self.endpoint_id, tab_id, req_id));
                 if !allow_req_id_mismatch {
@@ -231,6 +242,7 @@ impl LlmWorker {
     ) -> Result<LlmResponse> {
         let selected_url = self.pick_url(req_id as usize);
         let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, selected_url, &self.tabs, self.max_tabs).await?;
+        self.bridge.set_tab_endpoint_id(tab_id, &self.endpoint_id).await;
         let include_role = if role_schema.trim().is_empty() {
             false
         } else if !self.stateful {

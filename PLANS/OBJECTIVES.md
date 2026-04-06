@@ -4,7 +4,7 @@
 # OBJECTIVES
 
 ## 🎯 Goal
-Validate that the runtime system **faithfully executes the semantic-state-driven architecture** defined in `PLANS/SPEC.md`.
+Validate that the runtime system **faithfully executes the semantic-state-driven architecture** defined in `SPEC.md`.
 
 This phase does **NOT** change architecture.  
 It **proves correctness under execution**.
