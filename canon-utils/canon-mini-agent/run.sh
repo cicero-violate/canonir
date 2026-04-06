@@ -1,3 +1,8 @@
+cargo run -p canon-mini-agent --bin canon-mini-supervisor -- \
+  --orchestrate --instance agent_0 --port 9103
+
+
+
 while true; do
   /workspace/ai_sandbox/canon/target/debug/canon-mini-agent --orchestrate --instance agent_0 --port 9103
   echo "restarting..."
