@@ -1,5 +1,7 @@
 # SPEC: Canon Is an Event-Sourced Judgment System
 
+event-sourced shell + pure state reducer core
+
 ## Principle
 
 \[
