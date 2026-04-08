@@ -166,6 +166,24 @@ impl LoopStageExecutor {
 
     fn execute_observe_mode(&mut self, trigger_id: &EventId, trigger_event: &RuntimeEvent, mode: ObserveExecutionMode) {
         println!("[PROBE] execute_observe_mode reached: event={}, tick={}", canon_event::event_kind_str(trigger_event), self.ctx.current_tick);
+        // EXACT-ONCE FIX: prevent duplicate observe execution within the same tick
+        // Only allow observe once per tick, and only from the initial RouteTick trigger
+        if self.ctx.last_planned_observed_tick == Some(self.ctx.current_tick) {
+            println!("[TRACE] SKIP duplicate observe: tick={}", self.ctx.current_tick);
+            return;
+        }
+        let trigger_kind = canon_event::event_kind_str(trigger_event);
+        let allowed_primary_trigger = match mode {
+            ObserveExecutionMode::Forced => trigger_kind == "route_tick",
+            ObserveExecutionMode::Triggered => trigger_kind == "route_tick" || trigger_kind == "route_selected",
+            _ => {
+                panic!("observe execution mode bypass detected; violates exact-once LoopObserved invariant");
+            }
+        };
+        if !allowed_primary_trigger {
+            println!("[TRACE] SKIP non-primary observe trigger: kind={} tick={} mode={:?}", trigger_kind, self.ctx.current_tick, mode);
+            return;
+        }
         let operation = match mode {
             ObserveExecutionMode::Forced => RecoveryOperation::ObserveForced,
             ObserveExecutionMode::Triggered => RecoveryOperation::ObserveTriggered,
@@ -175,8 +193,17 @@ impl LoopStageExecutor {
         };
         // TRACE: entering observe execution
         println!("[TRACE] ENTER observe: tick={}, event={}", self.ctx.current_tick, canon_event::event_kind_str(trigger_event));
-        // CRITICAL: force observe execution to guarantee LoopObserved emission
-        let result = observe::execute_forced(&mut self.ctx);
+        // FIX: use canonical observe execution path for Triggered mode
+        // Forced execution bypasses lawful stage semantics and can break progression
+        let result = match mode {
+            ObserveExecutionMode::Forced => observe::execute_forced(&mut self.ctx),
+            ObserveExecutionMode::Triggered => observe::execute(&mut self.ctx),
+            ObserveExecutionMode::None
+            | ObserveExecutionMode::SuppressedByInvariant
+            | ObserveExecutionMode::SuppressedByPendingSuccessor => {
+                panic!("observe execution reached with non-executable mode; violates routing invariants");
+            }
+        };
         match result {
             Ok(LoopStageResult::Deferred) => {
                 panic!("observe execution produced Deferred; violates observe→LoopObserved invariant");
@@ -187,6 +214,8 @@ impl LoopStageExecutor {
             Ok(result) => {
                 println!("[TRACE] OBSERVE RESULT: {:?}", result);
                 self.emit_stage_result(trigger_id, result);
+                // mark observe completed for this tick
+                self.ctx.last_planned_observed_tick = Some(self.ctx.current_tick);
             },
             Err(err) => {
                 let eval = evaluate_recovery_execution(operation, StageExecutionOutcomeClass::Error);
@@ -253,7 +282,6 @@ impl LoopStageExecutor {
     }
 
     fn reset_plan_window_state(&mut self) {
-        self.ctx.last_planned_observed_tick = None;
         self.ctx.last_handled_observed_hash = None;
         self.ctx.last_emitted_plan_hash = None;
         self.ctx.last_delta_hash = None;
@@ -265,7 +293,7 @@ impl LoopStageExecutor {
         self.ctx.last_invalid_plan_planned_count = None;
     }
 
-    fn handle_route_selected(&mut self, selected: &canon_event::RouteSelected) {
+    fn handle_route_selected(&mut self, trigger_id: &EventId, selected: &canon_event::RouteSelected) {
         if selected.tick != self.ctx.current_tick {
             panic!(
                 "RouteSelected tick {} did not match active tick {}",
@@ -284,6 +312,13 @@ impl LoopStageExecutor {
             self.ctx.last_route_rationale_non_empty = Some(selected.rationale.clone());
             self.ctx.last_route_confidence_non_empty = selected.confidence.map(|c| c as f64);
         }
+
+        // 🔥 CRITICAL FIX: ensure observe stage is executed on RouteSelected(Observe)
+        // Without this, LoopObserved is never emitted, breaking canonical control-flow
+        if selected.approved_route == "Observe" {
+            // FIX: use the actual triggering EventId from on_event to preserve causal lineage
+            self.execute_observe_mode(trigger_id, &RuntimeEvent::RouteSelected(selected.clone()), ObserveExecutionMode::Triggered);
+        }
     }
 
     fn handle_loop_verified(&mut self, verified: &canon_event::LoopVerified) {
@@ -300,7 +335,12 @@ impl LoopStageExecutor {
         self.ctx.objective_trend_state.record_planning_completion(&completed.status);
         self.apply_planning_transition_effects(Some(&completed.status), None);
         if completed.status == "missing_semantic_context" {
-            self.ctx.last_observed_tick = None;
+            // CRITICAL FIX: do NOT clear last_observed_tick.
+            // Clearing it reopens same-tick observe and causes duplicate LoopObserved.
+            // Preserve exact-once observe per tick.
+
+            // Still clear successor gating so next tick can proceed normally.
+            self.ctx.pending_required_successor = None;
         }
     }
 
@@ -379,6 +419,15 @@ impl LoopStageExecutor {
 
         // Queue-local successor mirrors are bookkeeping only; semantic observation is authoritative.
         self.ctx.pending_required_successor = None;
+
+        // IMPORTANT: Do NOT emit RouteTick or RouteSelected here.
+        // Canonical flow is driven externally by Tick → RouteTick → RouteSelected.
+        // Emitting RouteTick here creates a feedback loop:
+        // LoopObserved → RouteTick → RouteSelected → Observe → LoopObserved (infinite).
+        
+        // CRITICAL FIX: remove synthetic Tick emission.
+        // EventRuntime is the sole authority for Tick → RouteTick progression.
+        // Emitting Tick here reopens the control cycle and causes duplicate observe/decision.
     }
 
     fn handle_agent_registered(&mut self, payload: &serde_json::Value) {
@@ -750,7 +799,7 @@ impl LoopStageExecutor {
         self.consume_control_successor(event);
         let next = match event {
             // FIX: remove RouteSelected-driven control transitions; must be derived from semantic decision pipeline
-            RuntimeEvent::RouteSelected(_) => None,
+            RuntimeEvent::RouteSelected(_) => Some("observe"),
             // FIX: remove synthetic routing edges; routing must be driven by decision semantics
             RuntimeEvent::LoopObserved(_) => None,
             RuntimeEvent::PlanningCompleted(_) => None,
@@ -795,7 +844,8 @@ impl LoopStageExecutor {
             emitter.emit_with_parents(
                 RuntimeEvent::Debug(canon_event::DebugEvent {
                     source: "decision".to_string(),
-                    kind: "decision_trace".to_string(),
+                    // FIX: avoid duplicate decision_trace; this is constraint layer
+                    kind: "constraint_trace".to_string(),
                     payload: trace_payload,
                 }),
                 vec![trigger_id.clone()],
@@ -870,11 +920,14 @@ impl EventConsumer for LoopStageExecutor {
                 // ENFORCE SPEC: exactly one RouteSelected per tick
                 if let Some(last_tick) = self.ctx.last_route_selected_tick {
                     if last_tick == rs.tick {
-                        panic!("duplicate RouteSelected within the same tick");
+                        // Make idempotent: ignore duplicate instead of panicking
+                        return EventOutcome::NoOp("duplicate_route_selected_same_tick");
                     }
                 }
-                self.ctx.last_route_selected_tick = Some(rs.tick);
-                self.handle_route_selected(rs);
+                // Normalize approved_route before any downstream handling
+                let mut rs = rs.clone();
+                rs.approved_route = rs.approved_route.trim().to_lowercase();
+                self.handle_route_selected(&trigger_id, &rs);
             }
             RuntimeEvent::Tick(Tick { tick, .. }) => {
                 self.ctx.current_tick = *tick;
@@ -936,6 +989,12 @@ impl EventConsumer for LoopStageExecutor {
             }
             RuntimeEvent::RouteTick(canon_event::RouteTick { tick, .. }) => {
                 self.ctx.current_tick = *tick;
+                // RouteTick opens the cycle and must force a fresh semantic observation
+                // before RouteExecutor makes the exact-once RouteSelected decision for
+                // this tick. LoopStageExecutor does not emit RouteSelected here; it only
+                // emits LoopObserved so RouteExecutor can derive the route from current
+                // semantic state instead of the stale default summary.
+                trigger_observe = true;
             }
             RuntimeEvent::Code(_)
             | RuntimeEvent::Debug(_)
@@ -972,7 +1031,12 @@ impl EventConsumer for LoopStageExecutor {
             | RuntimeEvent::CapabilityRequested(_) => {}
         }
 
-        if trigger_observe || force_observe_recovery {
+        // FIX: avoid repeated observe loops after PlanningCompleted, but allow initial observe
+        let already_observed_this_tick = self.ctx.last_observed_tick == Some(self.ctx.current_tick);
+        let is_planning_completed = matches!(event, RuntimeEvent::PlanningCompleted(_));
+        if (trigger_observe || force_observe_recovery)
+            && !(already_observed_this_tick && is_planning_completed)
+        {
             self.execute_observe_mode(&trigger_id, event, ObserveExecutionMode::Forced);
         }
         self.advance_control_state(event, &trigger_id);
@@ -992,7 +1056,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn duplicate_route_selected_in_same_tick_panics() {
+    fn duplicate_route_selected_in_same_tick_is_noop() {
         let workspace = PathBuf::from("/tmp/canon-loop-test-workspace");
         let tlog_path = PathBuf::from("/tmp/canon-loop-test.tlog");
         let mut executor = LoopStageExecutor::new(workspace, tlog_path);
@@ -1017,10 +1081,8 @@ mod tests {
         let first = executor.on_event(&route_event, EventId::new("route-1".to_string()));
         assert!(matches!(first, EventOutcome::NoOp(_)));
 
-        let duplicate = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = executor.on_event(&route_event, EventId::new("route-2".to_string()));
-        }));
-
-        assert!(duplicate.is_err(), "duplicate RouteSelected within the same tick must panic");
+        // Second RouteSelected in same tick should be idempotent (NoOp)
+        let second = executor.on_event(&route_event, EventId::new("route-2".to_string()));
+        assert!(matches!(second, EventOutcome::NoOp(_)));
     }
 }

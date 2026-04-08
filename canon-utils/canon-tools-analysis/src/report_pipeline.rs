@@ -7,6 +7,7 @@ use crate::analysis::dependency_cycles::build_dependency_cycles_gpu;
 use crate::analysis::panic_report::build_panic_report;
 use crate::analysis::runtime_reachability::build_runtime_reachability_report;
 use crate::analysis::structural_hotspots::{build_branch_complexity, build_branch_pressure, build_merge_candidates, build_path_redundancy, build_reachability_report_gpu, build_structural_hotspots};
+use crate::graph_artifacts::ir_to_projection;
 use crate::infer_schema_event::write_event_schema_report;
 use crate::invariants::kernel_invariants::write_kernel_invariants;
 use crate::llm_report::write_llm_reports_from_tlog;
@@ -15,6 +16,7 @@ use crate::semantics::semantic_features::extract_node_features;
 use crate::semantics::semantic_signature::compute_signatures;
 use anyhow::{anyhow, Result};
 use canon_event_store::{apply_rustc_event_to_graph, extract_rustc_event, read_any_events_from_path, replay_graph_for_crate, AnyEvent, CodeGraphProjection};
+use canon_ir::CanonIR;
 use canon_event_store::{save_graph_snapshot, write_snapshot_metadata, SnapshotMeta};
 use canon_graph::artifacts::artifact_writer::{
     build_modulegraph, build_modulegraph_from_cache, build_typegraph_edges, build_typegraph_from_cache, emit_callgraph_csv, emit_callgraph_full_csv, emit_cfg_csv, emit_cfg_full_csv, emit_edges_csv,
@@ -163,6 +165,44 @@ pub fn generate_reports_from_tlog(tlog_path: &Path, out_dir: &Path) -> Result<()
         eprintln!("canon_reports: panic report failed: {err:?}");
         write_error_json(&panic_summary, "panic_report", &err)?;
     }
+    cleanup_legacy_dirs(layout.root())?;
+    Ok(())
+}
+
+/// Generate reports for a single crate from a CanonIR graph artifact (no tlog required).
+pub fn generate_reports_for_crate_artifact(out_dir: &Path, crate_name: &str, ir: &CanonIR) -> Result<()> {
+    let layout = ReportLayout::from_crate_root(out_dir.to_path_buf());
+    layout.ensure_dirs()?;
+    let graph_dir = layout.graph_dir();
+    let analysis_dir = layout.analysis_dir();
+    let metrics_dir = layout.metrics_dir();
+    let invariants_dir = layout.invariants_dir();
+    let meta_dir = layout.meta_dir();
+    let graph_bin_path = graph_dir.join("graph.bin");
+
+    let minimal = std::env::var("CANON_REPORTS_MINIMAL").ok().as_deref() == Some("1");
+
+    let (nodes, edges, files) = ir_to_projection(ir);
+    let (nodes, edges, files) = normalize_graph(nodes, edges, files);
+    if nodes.is_empty() {
+        return Ok(());
+    }
+
+    // Ensure graph_dir exists — emit_graph_bin uses fs::write which needs the parent.
+    let _ = fs::create_dir_all(&graph_dir);
+    if let Err(err) = emit_graph_bin(&graph_bin_path, &nodes, &edges, &files) {
+        eprintln!("canon_reports[{crate_name}]: graph.bin write failed: {err}");
+    }
+
+    let _parts = generate_reports_from_parts(nodes, edges, files, &layout, &graph_dir)?;
+
+    if !minimal {
+        if let Err(err) = crate::invariants::invariant_validator::run_invariant_pipeline(&graph_dir, &invariants_dir, &meta_dir, &analysis_dir, &metrics_dir) {
+            eprintln!("canon_reports[{crate_name}]: invariant pipeline failed: {err:?}");
+            write_error_json(&invariants_dir.join("error.json"), "invariant_pipeline", &err)?;
+        }
+    }
+
     cleanup_legacy_dirs(layout.root())?;
     Ok(())
 }

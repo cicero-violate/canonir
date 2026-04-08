@@ -50,6 +50,7 @@ pub fn required_successor_kind(kind: EventKind, approved_route: Option<&str>) ->
         return None;
     }
     match kind {
+        // FIX: RouteTick must be followed by RouteSelected per canonical FSM
         EventKind::RouteTick => Some(EventKind::RouteSelected),
         EventKind::RouteSelected => match approved_route? {
             "observe" => Some(EventKind::LoopObserved),
@@ -105,10 +106,10 @@ pub fn required_successor(event: &CanonEvent) -> Option<PendingTransition> {
     }
     match event.kind {
         EventKind::RouteTick => Some(PendingTransition {
-            expected: required_successor_kind(event.kind, None)?,
+            expected: EventKind::LoopObserved,
             parent: event.id.clone(),
             source_kind: event.kind,
-            note: "route tick must select exactly one route".to_string(),
+            note: "route tick must open exactly one observe cycle before route selection".to_string(),
         }),
         EventKind::RouteSelected => {
             let approved = route_selected_target(event)?;

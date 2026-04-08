@@ -34,32 +34,7 @@ impl LoopStageEvent {
             LoopStageEvent::CapabilityFail(f) => dispatch_capability_fail(f, ctx, trigger_id.clone()),
             LoopStageEvent::RewardPolicy(v) => reward::execute_from_policy(v, ctx),
         }?;
-
-        // CRITICAL FIX: enforce observe AFTER every stage execution (actual runtime path)
-        let observe_result = observe::execute_forced(ctx)?;
-
-        // Merge results to preserve both stage output and LoopObserved emission
-        match (result, observe_result) {
-            (LoopStageResult::EmitMany(mut a), LoopStageResult::EmitMany(mut b)) => {
-                a.append(&mut b);
-                Ok(LoopStageResult::EmitMany(a))
-            }
-            (LoopStageResult::EmitMany(mut a), LoopStageResult::Emit(b)) => {
-                a.push(b);
-                Ok(LoopStageResult::EmitMany(a))
-            }
-            (LoopStageResult::Emit(a), LoopStageResult::EmitMany(mut b)) => {
-                let mut out = vec![a];
-                out.append(&mut b);
-                Ok(LoopStageResult::EmitMany(out))
-            }
-            (LoopStageResult::Emit(a), LoopStageResult::Emit(b)) => {
-                Ok(LoopStageResult::EmitMany(vec![a, b]))
-            }
-            (_, LoopStageResult::EmitMany(b)) => Ok(LoopStageResult::EmitMany(b)),
-            (_, LoopStageResult::Emit(b)) => Ok(LoopStageResult::Emit(b)),
-            (a, _) => Ok(a),
-        }
+        Ok(result)
     }
 }
 
@@ -139,12 +114,20 @@ impl TryFrom<RuntimeEvent> for LoopStageEvent {
     type Error = RuntimeEvent;
     fn try_from(e: RuntimeEvent) -> Result<Self, RuntimeEvent> {
         match e {
-            // FIX: RouteSelected must originate from canonical decision() pipeline
-            // Reject direct routing based on event payload to enforce semantic-state authority
             RuntimeEvent::RouteSelected(rs) => {
-                // NOTE: was crashing runtime; downgrade to warning and ignore
-                eprintln!("[WARN][route] non-canonical RouteSelected received: {}", rs.approved_route);
-                return Err(RuntimeEvent::RouteSelected(rs));
+                let route = rs.approved_route.trim().to_lowercase();
+                match route.as_str() {
+                    "scan" | "observe" => Ok(LoopStageEvent::Scan(rs)),
+                    "plan" => Ok(LoopStageEvent::PlanTrigger(rs)),
+                    "act" => Ok(LoopStageEvent::ActDispatch(rs)),
+                    "verify" => Ok(LoopStageEvent::VerifyTrigger(rs)),
+                    "decompose" => Ok(LoopStageEvent::Decompose(rs)),
+                    "conclude" | "reward" => Ok(LoopStageEvent::Conclude(rs)),
+                    _ => {
+                        eprintln!("[WARN][route] unknown approved_route: {}", rs.approved_route);
+                        Err(RuntimeEvent::RouteSelected(rs))
+                    }
+                }
             },
             RuntimeEvent::CapabilityCompleted(c) => Ok(LoopStageEvent::CapabilityDone(c)),
             RuntimeEvent::CapabilityFailed(f) => Ok(LoopStageEvent::CapabilityFail(f)),

@@ -1,5 +1,6 @@
 use anyhow::Result;
-use canon_analysis::report_pipeline::{generate_reports_for_crate, generate_reports_from_tlog};
+use canon_analysis::graph_artifacts::load_crate_graph_artifact;
+use canon_analysis::report_pipeline::{generate_reports_for_crate, generate_reports_for_crate_artifact, generate_reports_from_tlog};
 use canon_types::ReportLayout;
 use serde::Serialize;
 use std::fs;
@@ -27,10 +28,19 @@ fn main() -> Result<()> {
     let out_dir = arg_value(&args, "--out")
         .map(PathBuf::from)
         .unwrap_or_else(|| default_out_dir(Path::new(&workspace), crate_name.as_deref()));
+    let artifact_mode = has_flag(&args, "--artifact") || has_flag(&args, "--from-artifact");
 
     if let Some(name) = crate_name.as_deref() {
-        generate_reports_for_crate(&tlog, &out_dir, name)?;
+        if artifact_mode {
+            let (_summary, ir) = load_crate_graph_artifact(Path::new(&workspace), name)?;
+            generate_reports_for_crate_artifact(&out_dir, name, &ir)?;
+        } else {
+            generate_reports_for_crate(&tlog, &out_dir, name)?;
+        }
     } else {
+        if artifact_mode {
+            return Err(anyhow::anyhow!("graph_reports: --artifact requires --crate <name>"));
+        }
         generate_reports_from_tlog(&tlog, &out_dir)?;
     }
 
@@ -65,6 +75,10 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
     args.windows(2)
         .find(|w| w[0] == name)
         .map(|w| w[1].to_string())
+}
+
+fn has_flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| a == name)
 }
 
 fn default_out_dir(workspace: &Path, crate_name: Option<&str>) -> PathBuf {

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use canon_graph::graph::graph_types::{CodeGraphEdge, CodeGraphNode};
 use canon_ir::{CanonIR, CanonNodeKind, NodeId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -99,6 +100,49 @@ pub fn load_latest_workspace_graph_artifact(workspace_root: &Path) -> Result<(Gr
     let index = serde_json::from_slice::<GraphArtifactIndex>(&fs::read(index_path)?)?;
     let ir = load_graph_artifact(&index.latest_workspace.artifact_path)?;
     Ok((index.latest_workspace, ir))
+}
+
+pub fn load_crate_graph_artifact(workspace_root: &Path, crate_name: &str) -> Result<(GraphArtifactSummary, CanonIR)> {
+    let index_path = workspace_root
+        .join("state")
+        .join("graph")
+        .join("index")
+        .join("by_crate")
+        .join(format!("{crate_name}.json"));
+    let summary = serde_json::from_slice::<GraphArtifactSummary>(&fs::read(index_path)?)?;
+    let ir = load_graph_artifact(&summary.artifact_path)?;
+    Ok((summary, ir))
+}
+
+pub fn ir_to_projection(ir: &CanonIR) -> (Vec<CodeGraphNode>, Vec<CodeGraphEdge>, Vec<String>) {
+    let files: Vec<String> = Vec::new();
+    let nodes: Vec<CodeGraphNode> = ir
+        .nodes
+        .iter()
+        .map(|n| {
+            let (kind, symbol) = node_kind_symbol(ir, &n.kind, n.id.0);
+            CodeGraphNode { id: n.id.0, kind, symbol, file_id: None, line: None }
+        })
+        .collect();
+
+    let mut edges: Vec<CodeGraphEdge> = Vec::new();
+    for (src, dst) in csr_edges(&ir.call_graph) {
+        edges.push(CodeGraphEdge { src, dst, kind: "CALL".to_string() });
+    }
+    for (src, dst) in csr_edges(&ir.cfg_graph) {
+        edges.push(CodeGraphEdge { src, dst, kind: "CFG_EDGE".to_string() });
+    }
+    for (src, dst) in csr_edges(&ir.module_graph) {
+        edges.push(CodeGraphEdge { src, dst, kind: "MODULE".to_string() });
+    }
+    for (src, dst) in csr_edges(&ir.type_graph) {
+        edges.push(CodeGraphEdge { src, dst, kind: "TYPE".to_string() });
+    }
+    for (src, dst) in csr_edges(&ir.name_graph) {
+        edges.push(CodeGraphEdge { src, dst, kind: "NAME".to_string() });
+    }
+
+    (nodes, edges, files)
 }
 
 pub fn verify_graph_expectations(workspace_root: &Path, expectations: &[GraphProofExpectation]) -> Result<GraphProofReport> {
@@ -422,6 +466,79 @@ fn qualify_symbol_path(module_path: Option<&str>, name: &str) -> String {
         Some(module_path) if !module_path.is_empty() => format!("{module_path}::{name}"),
         _ => format!("crate::{name}"),
     }
+}
+
+fn node_kind_symbol(ir: &CanonIR, kind: &CanonNodeKind, id: u32) -> (String, String) {
+    match kind {
+        CanonNodeKind::Crate { name_id, .. } => {
+            ("CRATE".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::Module { path_id, .. } => {
+            ("MODULE".into(), ir.lookup_path(*path_id).to_string())
+        }
+        CanonNodeKind::Struct { name_id, .. } => {
+            ("STRUCT".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::Enum { name_id, .. } => {
+            ("ENUM".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::Trait { name_id, .. } => {
+            ("TRAIT".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::AssocType { name_id, .. } => {
+            ("ASSOC_TYPE".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::AssocConst { name_id, .. } => {
+            ("ASSOC_CONST".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::Fn { name_id, .. } => {
+            ("FN".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::Impl { .. } => ("IMPL".into(), format!("impl_{id}")),
+        CanonNodeKind::FnSig { .. } => ("FN_SIG".into(), format!("sig_{id}")),
+        CanonNodeKind::Type { .. } => ("TYPE".into(), format!("type_{id}")),
+        CanonNodeKind::Field { name_id, .. } => {
+            let sym = name_id
+                .map(|n| ir.lookup_name(n).to_string())
+                .unwrap_or_else(|| format!("field_{id}"));
+            ("FIELD".into(), sym)
+        }
+        CanonNodeKind::Param { name_id, .. } => {
+            ("PARAM".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::GenericParam { name_id, .. } => {
+            ("GENERIC_PARAM".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::Variant { name_id, .. } => {
+            ("VARIANT".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::Const { name_id, .. } => {
+            ("CONST".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::Static { name_id, .. } => {
+            ("STATIC".into(), ir.lookup_name(*name_id).to_string())
+        }
+        CanonNodeKind::TypeAlias { name_id, .. } => {
+            ("TYPE_ALIAS".into(), ir.lookup_name(*name_id).to_string())
+        }
+        _ => ("OTHER".into(), format!("node_{id}")),
+    }
+}
+
+fn csr_edges<ED>(graph: &canon_ir::csr_graph::CsrGraph<canon_ir::CanonId, ED>) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    let nd = &graph.node_data;
+    let rp = &graph.row_ptr;
+    let ci = &graph.col_idx;
+    for src_row in 0..nd.len() {
+        let start = rp[src_row] as usize;
+        let end = rp[src_row + 1] as usize;
+        for e in start..end {
+            let dst_row = ci[e] as usize;
+            out.push((nd[src_row].0, nd[dst_row].0));
+        }
+    }
+    out
 }
 
 fn collect_use_bindings(workspace_root: &Path, current_module_path: &str, file_path: &str, visibility: syn::Visibility, tree: &syn::UseTree, out: &mut Vec<GraphImportBinding>) {

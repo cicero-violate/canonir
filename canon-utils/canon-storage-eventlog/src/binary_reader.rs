@@ -16,23 +16,30 @@ fn read_u64(buf: &[u8]) -> u64 {
 
 pub fn read_binary_events(path: &Path) -> Result<Vec<CanonEvent>> {
     let bytes = fs::read(path)?;
-    // Legacy binary segment — skip silently.
-    if is_binary_magic(&bytes) {
-        return Ok(Vec::new());
-    }
+    // Respect canonical binary MAGIC header: skip it before decoding payload
+    let content_bytes = if is_binary_magic(&bytes) && bytes.len() > 4 {
+        &bytes[4..]
+    } else {
+        &bytes[..]
+    };
     let mut events = Vec::new();
-    let content = std::str::from_utf8(&bytes).unwrap_or("");
-    for raw_line in content.split('\n') {
-        let trimmed = raw_line.trim();
-        if trimmed.is_empty() {
-            continue;
+    let mut cursor = 0usize;
+    while cursor + 4 <= content_bytes.len() {
+        let len = read_u32(&content_bytes[cursor..cursor + 4]) as usize;
+        cursor += 4;
+        if cursor + len > content_bytes.len() {
+            break;
         }
-        if let Ok(e) = serde_json::from_str::<CanonEvent>(trimmed) {
-            events.push(e);
-            continue;
-        }
-        if let Ok(legacy) = serde_json::from_str::<LegacyCanonEvent>(trimmed) {
-            events.push(upgrade_legacy_event(legacy));
+        let record = &content_bytes[cursor..cursor + len];
+        cursor += len;
+        if let Ok(s) = std::str::from_utf8(record) {
+            if let Ok(e) = serde_json::from_str::<CanonEvent>(s) {
+                events.push(e);
+                continue;
+            }
+            if let Ok(legacy) = serde_json::from_str::<LegacyCanonEvent>(s) {
+                events.push(upgrade_legacy_event(legacy));
+            }
         }
     }
     Ok(events)
@@ -61,24 +68,31 @@ pub fn read_binary_events_from_segment_with_start_seq(log_path: &Path, start_seq
     }
 
     let bytes = fs::read(log_path)?;
-    if is_binary_magic(&bytes) {
-        return Ok(Vec::new());
-    }
-
-    let relevant = bytes.get(start_pos as usize..).unwrap_or(&bytes);
-    let content = std::str::from_utf8(relevant).unwrap_or("");
+    // Respect canonical binary MAGIC header when slicing relevant region
+    let base = if is_binary_magic(&bytes) && bytes.len() > 4 {
+        &bytes[4..]
+    } else {
+        &bytes[..]
+    };
+    let relevant = base.get(start_pos as usize..).unwrap_or(base);
     let mut events = Vec::new();
-    for raw_line in content.split('\n') {
-        let trimmed = raw_line.trim();
-        if trimmed.is_empty() {
-            continue;
+    let mut cursor = 0usize;
+    while cursor + 4 <= relevant.len() {
+        let len = read_u32(&relevant[cursor..cursor + 4]) as usize;
+        cursor += 4;
+        if cursor + len > relevant.len() {
+            break;
         }
-        if let Ok(e) = serde_json::from_str::<CanonEvent>(trimmed) {
-            events.push(e);
-            continue;
-        }
-        if let Ok(legacy) = serde_json::from_str::<LegacyCanonEvent>(trimmed) {
-            events.push(upgrade_legacy_event(legacy));
+        let record = &relevant[cursor..cursor + len];
+        cursor += len;
+        if let Ok(s) = std::str::from_utf8(record) {
+            if let Ok(e) = serde_json::from_str::<CanonEvent>(s) {
+                events.push(e);
+                continue;
+            }
+            if let Ok(legacy) = serde_json::from_str::<LegacyCanonEvent>(s) {
+                events.push(upgrade_legacy_event(legacy));
+            }
         }
     }
     Ok(events)

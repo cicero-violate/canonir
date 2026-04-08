@@ -25,6 +25,7 @@ once_cell = { workspace = true }
 canon-ir = { path = "../../canon-ir" }
 syn = { workspace = true, features = ["full"] }
 canon-invariant = { path = "../canon-invariant" }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

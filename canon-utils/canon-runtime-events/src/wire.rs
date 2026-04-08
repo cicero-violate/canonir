@@ -173,7 +173,10 @@ impl EventKind {
         use EventKind::*;
         match self {
             Tick => &[RouteTick],
-            RouteTick => &[RouteSelected],
+            RouteTick => &[
+                RouteSelected,
+                LoopObserved, // allow observe cycle immediately after RouteTick
+            ],
             RouteSelected => &[LoopObserved, PlanningCompleted, LoopActed, LoopVerified, VerifierPolicyUpdated, LoopRewarded],
             LoopObserved => &[RouteSelected],
             PlanningCompleted => &[RouteSelected],

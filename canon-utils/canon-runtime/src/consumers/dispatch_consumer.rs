@@ -268,10 +268,8 @@ impl EventConsumer for DispatchConsumer {
         // 🔥 CRITICAL: prove DispatchConsumer actually sees RouteSelected
         if let RuntimeEvent::RouteSelected(route) = event {
             eprintln!("[DISPATCH TRACE] DispatchConsumer RECEIVED RouteSelected tick={}", route.tick);
-            // INVARIANT: DISPATCH MUST FLOW ONLY THROUGH ROUTE EXECUTOR
-            // No synthetic RequestDispatch is allowed here — this consumer must remain passive
-            // and only react to canonical RequestDispatch events emitted downstream.
-            return EventOutcome::NoOp("route_selected_no_synthetic_dispatch");
+            // FIX: DispatchConsumer must remain strictly passive (no control-flow side effects)
+            return EventOutcome::NoOp("route_selected_no_dispatch_side_effects");
         }
         // REMOVED: RequestDispatch handling entirely
         EventOutcome::NoOp("dispatch_consumer_non_dispatch")

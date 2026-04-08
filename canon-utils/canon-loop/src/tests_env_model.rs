@@ -6,8 +6,10 @@ mod tests {
 
     #[test]
     fn inspect_missing_workspace_reports_bootstrap_precondition() {
-        let goal = "# Goal\n- Project path: `/tmp/definitely_missing_canon_goal_test`\n";
-        let model = WorkspaceModel::inspect(goal, PathBuf::from("/tmp").as_path()).unwrap();
+        let temp = std::env::temp_dir().join(format!("canon-missing-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = fs::remove_dir_all(&temp);
+        let goal = format!("# Goal\n- Project path: `{}`\n", temp.display());
+        let model = WorkspaceModel::inspect(&goal, PathBuf::from("/tmp").as_path()).unwrap();
         assert!(!model.path_exists);
         assert_eq!(model.entrypoint_kind, EntrypointKind::None);
         assert!(model.planner_lines().iter().any(|line| line.contains("first action must create/init")));

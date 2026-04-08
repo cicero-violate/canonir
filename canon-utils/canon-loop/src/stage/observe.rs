@@ -126,11 +126,10 @@ fn scan_tlog_for_goal(tlog_path: &Path) -> Option<String> {
 }
 
 fn build_observation_payload(goal_text: &Option<String>, workspace: &Path, compiler_errors: &[serde_json::Value]) -> (SemanticStateSummary, Vec<String>, Vec<RuntimeEvent>) {
-    let Some(goal) = goal_text else {
-        return (SemanticStateSummary::default(), Vec::new(), Vec::new());
-    };
     let mut search_hits = Vec::new();
-    let Some(model) = WorkspaceModel::inspect(goal, workspace) else {
+    // FIX: even without goal_text, we must still inspect the workspace to produce a real semantic state
+    let goal_str = goal_text.as_deref().unwrap_or("");
+    let Some(model) = WorkspaceModel::inspect(goal_str, workspace) else {
         return (SemanticStateSummary::default(), Vec::new(), Vec::new());
     };
     let planning_preconditions = planning_preconditions::derive_preconditions(Some(&model), compiler_errors);
@@ -153,11 +152,16 @@ fn build_observation_payload(goal_text: &Option<String>, workspace: &Path, compi
     let target_root = model.target_root.clone();
     let summary = SemanticStateSummary {
         version: SemanticStateSummary::VERSION,
-        complete: true,
+        // Only mark complete when workspace is truly in a finished/valid state
+        complete: model.path_exists
+            && model.cargo_toml_exists
+            && model.module_gaps.is_empty()
+            && planning_preconditions.is_empty(),
         target_root: Some(target_root.display().to_string()),
         path_exists: model.path_exists,
         repo_initialized: model.repo_initialized,
-        cargo_project: model.cargo_toml_exists,
+        // Ensure cargo_project is only true when workspace exists AND Cargo.toml is present
+        cargo_project: model.path_exists && model.cargo_toml_exists,
         crate_name: model.crate_name.clone(),
         entrypoint_kind: Some(model.entrypoint_kind.as_str().to_string()),
         rust_file_count: Some(model.rust_file_count),
@@ -177,7 +181,7 @@ fn build_observation_payload(goal_text: &Option<String>, workspace: &Path, compi
 
     let listing = list_dir_entries(&target_root, 32);
 
-    let spec = parse_agent_goal_markdown(goal);
+    let spec = parse_agent_goal_markdown(goal_str);
     let keywords = extract_goal_keywords(&spec);
     for kw in keywords.into_iter().take(3) {
         if let Ok(results) = search_files(&kw, &target_root, 3) {

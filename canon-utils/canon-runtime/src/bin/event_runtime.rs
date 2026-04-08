@@ -379,13 +379,6 @@ fn main() -> Result<()> {
     consumers.push(Box::new(canon_goodness::GoodnessConsumer::new(goodness_root)));
     if event_execution_enabled {
     consumers.push(Box::new(CapabilityExecutor::new(workspace.clone())));
-
-    // 🔥 CRITICAL FIX: register DispatchConsumer so it can receive RouteSelected
-    let dc = DispatchConsumer::new();
-    let is_sync = dc.is_synchronous();
-    let filter = dc.filter();
-    eprintln!("[BOOT TRACE] DispatchConsumer is_synchronous={} filter={:?}", is_sync, filter);
-    consumers.push(Box::new(dc));
     }
     // FIX: Only start LLM worker if port is free (supports both standalone + supervisor modes)
 canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
@@ -438,7 +431,14 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
     eprintln!("[TRACE] skipping AgentRegistered bootstrap emits");
 
     // Authoritative prompt loading happens through the runtime bus.
-    eprintln!("[TRACE] skipping PromptLoaded bootstrap emit");
+    // FIX: emit PromptLoaded-equivalent signal via runtime-safe path
+    runtime.emit_debug_event(
+        "event-runtime".to_string(),
+        "prompt_loaded".to_string(),
+        serde_json::json!({
+            "source": "startup"
+        }),
+    )?;
     // Read events that already exist in L at startup (in-memory after this point).
     let bootstrap_events: Vec<AnyEvent> = if tlog_path.exists() { read_any_events_from_path_with_start_seq(&tlog_path, start_seq).unwrap_or_default() } else { vec![] };
 
@@ -625,7 +625,11 @@ canon_exec::init_llm_worker(); eprintln!("[LLM INIT] forced pre-init");
                         }
                         last_reload.insert(path.clone(), now);
                         if let Some(_prompt) = reload_prompt_file(path, &registry_for_prompts) {
-                            panic!("FATAL: PromptLoaded emitted with empty parent_ids; causal lineage required");
+                            // TEMP: remove invalid emitter usage; log instead
+                            eprintln!(
+                                "[prompt_watcher] prompt reloaded (no runtime emission yet): {}",
+                                path.display()
+                            );
                         }
                     }
                 }

@@ -157,9 +157,11 @@ pub fn read_any_events_from_path(path: &Path) -> anyhow::Result<Vec<AnyEvent>> {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
             let p = entry.path();
-            if p.extension().and_then(|s| s.to_str()) != Some("log") {
-                continue;
-            }
+            // FIX: do NOT restrict to ".log" extension.
+            // Canonical segment directories (*.tlog.d) may contain files without ".log"
+            // extension depending on writer implementation. Filtering here causes
+            // control-plane events (tick, route_tick, etc.) to be completely missed
+            // by readers while rustc JSONL files may still appear elsewhere.
             if !p.is_file() {
                 continue;
             }
@@ -187,9 +189,7 @@ pub fn read_any_events_from_path_with_start_seq(path: &Path, start_seq: u64) -> 
         for entry in fs::read_dir(path)? {
             let entry = entry?;
             let p = entry.path();
-            if p.extension().and_then(|s| s.to_str()) != Some("log") {
-                continue;
-            }
+            // FIX: same as above — do not filter by ".log" extension
             if !p.is_file() {
                 continue;
             }

@@ -74,15 +74,11 @@ pub fn execute_trigger(rs: RouteSelected, ctx: &mut LoopContext, trigger_id: Eve
         eprintln!("[PLAN] no observed state → zero-task PlanningCompleted (observe recovery)");
         eprintln!("[PLAN RESULT] no_tasks_produced");
 
-        // CRITICAL FIX: ensure bootstrap path ALSO returns PlanningCompleted synchronously
-        return Ok(LoopStageResult::Emit(
-            RuntimeEvent::PlanningCompleted(PlanningCompleted {
-                tick: rs.tick,
-                llm_request_id: None,
-                planned_count: 0,
-                status: "missing_semantic_context".to_string(),
-            })
-        ));
+        // FIX: suppress PlanningCompleted when no planning actually occurred.
+        // Emitting PlanningCompleted here violates control ordering:
+        // RouteSelected -> PlanningCompleted -> RouteSelected
+        // Instead, allow routing to proceed without introducing a control event.
+        return Ok(LoopStageResult::Noop);
     };
     if let Some(result) = deterministic_bootstrap_plan(&rs, ctx, &observed)? {
         return Ok(result);
@@ -122,7 +118,7 @@ fn deterministic_bootstrap_plan(rs: &RouteSelected, ctx: &mut LoopContext, obser
     let target_name = target_root.file_name().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).unwrap_or("app");
     let parent_cwd = target_root.parent().unwrap_or_else(|| Path::new("/")).display().to_string();
 
-    let (cmd, cwd, reason, status) = match bootstrap_choice {
+    let (cmd, cwd, reason, _status) = match bootstrap_choice {
         BootstrapCommandChoice::CargoNew => (format!("cargo new --bin {target_name}"), parent_cwd, "deterministic_bootstrap_workspace", "deterministic_bootstrap_workspace"),
         BootstrapCommandChoice::CargoInit => ("cargo init --bin .".to_string(), target_root_display.clone(), "deterministic_init_cargo_project", "deterministic_init_cargo_project"),
         BootstrapCommandChoice::NoBootstrapNeeded => {
@@ -159,7 +155,6 @@ fn deterministic_bootstrap_plan(rs: &RouteSelected, ctx: &mut LoopContext, obser
 
     Ok(Some(LoopStageResult::EmitMany(vec![
         RuntimeEvent::LoopPlanned(planned),
-        RuntimeEvent::PlanningCompleted(PlanningCompleted { tick: rs.tick, llm_request_id: None, planned_count: 1, status: status.to_string() }),
     ])))
 }
 

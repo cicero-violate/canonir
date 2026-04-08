@@ -8,6 +8,7 @@ use crate::runtime::flags::{
 use crate::runtime::crate_runtime::should_capture_crate;
 use crate::log::{append_rustc_log, emit_ir_tlog, install_panic_hook, set_panic_log_root, TlogWriter};
 use crate::capture::{collect_spans_and_symbols, collect_symbol_spans, SymbolSpanBundle};
+use canon_ir::{csr_graph::CsrGraph, ir::CanonCsr, CanonIR};
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::Compiler;
 use rustc_middle::ty::TyCtxt;
@@ -76,7 +77,10 @@ impl Callbacks for RustcCaptureCallbacks {
                 );
             }
             match crate::capture::capture(tcx) {
-                Ok(ir) => {
+                Ok(mut ir) => {
+                    if self.capture_mode == CaptureMode::Sparse {
+                        prune_ir_for_sparse(&mut ir);
+                    }
                     let bundle = collect_spans_and_symbols(
                         tcx,
                         &self.output_dir,
@@ -134,6 +138,18 @@ impl Callbacks for RustcCaptureCallbacks {
 
         Compilation::Continue
     }
+}
+
+fn prune_ir_for_sparse(ir: &mut CanonIR) {
+    // Keep module/call/cfg graphs to populate callgraph/cfg outputs,
+    // but drop other structural graphs to keep sparse captures lean.
+    ir.name_graph = CsrGraph::empty();
+    ir.type_graph = CsrGraph::empty();
+    ir.region_graph = CsrGraph::empty();
+    ir.value_graph = CsrGraph::empty();
+    ir.macro_graph = CsrGraph::empty();
+    ir.graph_csr = CanonCsr::default();
+    ir.graph_csr_rev = CanonCsr::default();
 }
 
 fn is_workspace_crate(tcx: TyCtxt<'_>, workspace_root: &PathBuf) -> bool {

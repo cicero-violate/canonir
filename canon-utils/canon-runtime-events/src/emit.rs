@@ -52,23 +52,14 @@ pub fn emit_edit_event(payload: Value, project_root: &Path) -> Result<()> {
 pub fn write_canon_event_auto(path: &Path, event: &CanonEvent) -> Result<()> {
     let path_str = path.to_string_lossy();
     let is_segment_dir = path.is_dir() || path_str.ends_with(".tlog.d");
-    let force_jsonl = matches!(std::env::var("CANON_TLOG_FORMAT").as_deref(), Ok("jsonl") | Ok("JSONL"));
-
-    if is_segment_dir || !force_jsonl {
-        let dir = if is_segment_dir { path.to_path_buf() } else { path.with_extension("tlog.d") };
-        WRITER_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            if !cache.contains_key(&dir) {
-                cache.insert(dir.clone(), BinarySegmentWriter::open(dir.as_path())?);
-            }
-            cache.get_mut(&dir).unwrap().write_canon_event(event)
-        })
-    } else {
-        // Switch to binary tlog writer instead of JSON writer
-        use crate::tlog::binary::BinarySegmentWriter;
-        let writer = BinarySegmentWriter::open(path)?;
-        writer.write_canon_event(event)
-    }
+    let dir = if is_segment_dir { path.to_path_buf() } else { path.with_extension("tlog.d") };
+    WRITER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.contains_key(&dir) {
+            cache.insert(dir.clone(), BinarySegmentWriter::open(dir.as_path())?);
+        }
+        cache.get_mut(&dir).unwrap().write_canon_event(event)
+    })
 }
 
 pub fn write_shaped_event_auto<T: CanonPayloadShape>(path: &Path, actor: &str, kind: EventKind, shape: &T, parent_ids: Vec<EventId>, root: bool, meta: CanonPayloadMeta) -> Result<EventId> {

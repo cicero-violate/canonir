@@ -1,5 +1,0 @@
-   Compiling canon-runtime v0.1.0 (/workspace/ai_sandbox/canon/canon-utils/canon-runtime)
-   Compiling canon-route v0.1.0 (/workspace/ai_sandbox/canon/canon-utils/canon-route)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.26s
-     Running `target/debug/canon-harness-suite --workspace /workspace/ai_sandbox/canon --max-rounds 10 --max-steps-per-test 3`
-harness suite complete: cargo test --workspace passed after 0 round(s)

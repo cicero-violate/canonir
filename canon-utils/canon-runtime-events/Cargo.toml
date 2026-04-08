@@ -19,6 +19,8 @@ crc32fast = "1"
 fs2 = "0.4"
 uuid = { workspace = true }
 
+[dev-dependencies]
+canon_storage_eventlog = { package = "canon-storage-eventlog", path = "../canon-storage-eventlog" }
 [[bin]]
 name = "emit_capability_event"
 path = "src/bin/emit_capability_event.rs"

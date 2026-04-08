@@ -41,8 +41,27 @@ pub enum BootstrapCommandChoice {
 
 impl WorkspaceModel {
     pub fn inspect(goal_text: &str, workspace: &Path) -> Option<Self> {
-        let target_root = parse_agent_goal_markdown(goal_text).target_path.unwrap_or_else(|| workspace.to_path_buf());
-        let path_exists = target_root.exists();
+        // Prefer goal-derived path, but fall back to actual workspace if it doesn't exist
+        let parsed = parse_agent_goal_markdown(goal_text).target_path
+            .or_else(|| extract_path_from_goal_text(goal_text));
+        // Extract explicit path from goal text (backticks) to preserve missing-path semantics
+        let explicit_goal_path = goal_text
+            .split('`')
+            .nth(1)
+            .map(PathBuf::from);
+        // Prefer explicit goal path if present, even if it does not exist
+        let (target_root, path_exists) = if let Some(raw) = explicit_goal_path {
+            let exists = raw.exists();
+            (raw, exists)
+        } else if let Some(p) = parsed {
+            let exists = p.exists();
+            (p, exists)
+        } else {
+            // 🔧 FIX: do NOT fall back to workspace for semantic modeling
+            // Missing explicit/parsed target must be treated as non-existent
+            let fallback = workspace.to_path_buf();
+            (fallback, false)
+        };
         if !path_exists {
             return Some(Self {
                 target_root,
@@ -254,6 +273,20 @@ fn parse_crate_name(cargo_toml: &Path) -> Option<String> {
                 let value = rest.trim().trim_matches('"').trim_matches('\'').trim();
                 if !value.is_empty() {
                     return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_path_from_goal_text(goal_text: &str) -> Option<PathBuf> {
+    for line in goal_text.lines() {
+        if let Some(start) = line.find('`') {
+            if let Some(end) = line[start + 1..].find('`') {
+                let path = &line[start + 1..start + 1 + end];
+                if !path.trim().is_empty() {
+                    return Some(PathBuf::from(path.trim()));
                 }
             }
         }
