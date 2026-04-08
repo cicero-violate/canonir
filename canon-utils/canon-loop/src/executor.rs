@@ -315,7 +315,7 @@ impl LoopStageExecutor {
 
         // 🔥 CRITICAL FIX: ensure observe stage is executed on RouteSelected(Observe)
         // Without this, LoopObserved is never emitted, breaking canonical control-flow
-        if selected.approved_route == "Observe" {
+        if selected.approved_route == "observe" {
             // FIX: use the actual triggering EventId from on_event to preserve causal lineage
             self.execute_observe_mode(trigger_id, &RuntimeEvent::RouteSelected(selected.clone()), ObserveExecutionMode::Triggered);
         }
@@ -1084,5 +1084,33 @@ mod tests {
         // Second RouteSelected in same tick should be idempotent (NoOp)
         let second = executor.on_event(&route_event, EventId::new("route-2".to_string()));
         assert!(matches!(second, EventOutcome::NoOp(_)));
+    }
+
+    #[test]
+    fn route_selected_observe_marks_tick_as_observed() {
+        let workspace = PathBuf::from("/tmp/canon-loop-test-workspace-observe");
+        let tlog_path = PathBuf::from("/tmp/canon-loop-test-observe.tlog");
+        let mut executor = LoopStageExecutor::new(workspace, tlog_path);
+
+        let tick_event = RuntimeEvent::Tick(Tick { tick: 1, emitted: true });
+        let _ = executor.on_event(&tick_event, EventId::new("tick-1".to_string()));
+
+        let route_event = RuntimeEvent::RouteSelected(RouteSelected {
+            tick: 1,
+            suggested_route: "Observe".to_string(),
+            prompt: String::new(),
+            approved_route: "Observe".to_string(),
+            rationale: "semantic_state_routing".to_string(),
+            confidence: Some(0.9),
+            gate_note: "semantic_state_routing".to_string(),
+            gate_rules_fired: Vec::new(),
+            gate_changed: false,
+            gate_should_stop: false,
+            model_json: String::new(),
+        });
+
+        let outcome = executor.on_event(&route_event, EventId::new("route-observe-1".to_string()));
+        assert!(matches!(outcome, EventOutcome::NoOp(_)));
+        assert_eq!(executor.ctx.last_planned_observed_tick, Some(1));
     }
 }
