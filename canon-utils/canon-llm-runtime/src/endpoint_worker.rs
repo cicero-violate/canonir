@@ -125,9 +125,10 @@ impl LlmWorker {
     ) -> Result<LlmResponse> {
         const MAX_SEND_ATTEMPTS: usize = 2;
         let selected_url = self.pick_url(req_id as usize);
+        let mut current_url = selected_url.to_string();
         let response_timeout_secs = response_timeout_secs.unwrap_or_else(|| self.bridge.response_timeout_secs());
         for attempt in 0..MAX_SEND_ATTEMPTS {
-            let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, selected_url, &self.tabs, self.max_tabs).await?;
+            let tab_id = tab_manager_get_or_open_tab(&self.bridge, &self.endpoint_id, &current_url, &self.tabs, self.max_tabs).await?;
             self.bridge.set_tab_endpoint_id(tab_id, &self.endpoint_id).await;
 
             // For stateful endpoints, send the role/system prompt only on the first
@@ -158,7 +159,7 @@ impl LlmWorker {
 
             tab_manager_mark_tab_sent(&self.tabs, tab_id).await;
             tab_manager_log_llm(format!("phase={} endpoint={} tab={} send attempt={}", phase, self.endpoint_id, tab_id, attempt + 1));
-            let (raw, turn_id) = match self.bridge.send_turn_with_meta_with_timeout(tab_id, selected_url, full_prompt, response_timeout_secs).await {
+            let (raw, turn_id) = match self.bridge.send_turn_with_meta_with_timeout(tab_id, &current_url, full_prompt, response_timeout_secs).await {
                 Ok(v) => v,
                 Err(e) => {
                     tab_manager_mark_tab_in_flight(&self.tabs, tab_id, false).await;
@@ -167,6 +168,10 @@ impl LlmWorker {
                     tab_manager_log_llm(format!("phase={} endpoint={} tab={} retained_after_error", phase, self.endpoint_id, tab_id));
                     tab_manager_log_llm(format!("phase={} endpoint={} adaptive_penalty_ms={}", phase, self.endpoint_id, penalty_ms));
                     if should_retry_send_turn(&e) && attempt + 1 < MAX_SEND_ATTEMPTS {
+                        if let Some(url) = self.bridge.get_tab_url(tab_id).await {
+                            current_url = url;
+                            tab_manager_log_llm(format!("phase={} endpoint={} tab={} saved_url_for_retry={}", phase, self.endpoint_id, tab_id, current_url));
+                        }
                         tab_manager_log_llm(format!("phase={} endpoint={} tab={} dropping_tab_after_error={}", phase, self.endpoint_id, tab_id, e));
                         tab_manager_drop_tab(&self.tabs, &self.endpoint_id, tab_id).await;
                         let _ = self.bridge.close_tab(tab_id).await;

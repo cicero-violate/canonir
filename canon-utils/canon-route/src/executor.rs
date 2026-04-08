@@ -88,28 +88,6 @@ impl RouteExecutor {
                 }
             };
 
-            // HOTFIX: ensure routing differentiates based on semantic state
-            // Current decision layer is collapsing to identical outputs → violates test
-            // HOTFIX: enforce semantic differentiation by mutating decision fields
-            let mut decision = decision;
-            use canon_decision::RouteKind;
-
-            if !semantic.validation_blocked_by_preconditions {
-                if semantic.compiler_repair_required {
-                    decision.suggested_route = RouteKind::Act;
-                    decision.lane = RouteKind::Act;
-                    decision.rationale = "semantic_state_routing::Act".to_string();
-                } else if semantic.complete {
-                    decision.suggested_route = RouteKind::Observe;
-                    decision.lane = RouteKind::Observe;
-                    decision.rationale = "semantic_state_routing::Observe".to_string();
-                } else {
-                    decision.suggested_route = RouteKind::Plan;
-                    decision.lane = RouteKind::Plan;
-                    decision.rationale = "semantic_state_routing::Plan".to_string();
-                }
-            }
-
             // REMOVED: duplicate decision_trace emission
             // decision_trace must be emitted exactly once by the canonical decision layer
 

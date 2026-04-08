@@ -354,6 +354,12 @@ impl WsBridge {
         st.send(json!({ "type": "CLOSE_TAB", "tabId": tab_id }))
     }
 
+    /// Return the last known URL for a tab, if available.
+    pub async fn get_tab_url(&self, tab_id: u32) -> Option<String> {
+        let st = self.state.lock().await;
+        st.tab_urls.get(&tab_id).cloned()
+    }
+
     /// Trigger a new chat in the tab.
     pub async fn new_chat(&self, tab_id: u32) -> Result<(), WsBridgeError> {
         let st = self.state.lock().await;
